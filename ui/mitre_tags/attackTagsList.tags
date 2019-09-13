@@ -1,0 +1,969 @@
+Collection::Adversary-in-the-Middle T1557
+Collection::Adversary-in-the-Middle::ARP Cache Poisoning T1557.002
+Collection::Adversary-in-the-Middle::DHCP Spoofing T1557.003
+Collection::Adversary-in-the-Middle::LLMNR/NBT-NS Poisoning and SMB Relay T1557.001
+Collection::Archive Collected Data T1560
+Collection::Archive Collected Data::Archive via Custom Method T1560.003
+Collection::Archive Collected Data::Archive via Library T1560.002
+Collection::Archive Collected Data::Archive via Utility T1560.001
+Collection::Audio Capture T1123
+Collection::Automated Collection T1119
+Collection::Browser Session Hijacking T1185
+Collection::Clipboard Data T1115
+Collection::Data Staged T1074
+Collection::Data Staged::Local Data Staging T1074.001
+Collection::Data Staged::Remote Data Staging T1074.002
+Collection::Data from Cloud Storage T1530
+Collection::Data from Configuration Repository T1602
+Collection::Data from Configuration Repository::Network Device Configuration Dump T1602.002
+Collection::Data from Configuration Repository::SNMP (MIB Dump) T1602.001
+Collection::Data from Information Repositories T1213
+Collection::Data from Information Repositories::Code Repositories T1213.003
+Collection::Data from Information Repositories::Confluence T1213.001
+Collection::Data from Information Repositories::Sharepoint T1213.002
+Collection::Data from Local System T1005
+Collection::Data from Network Shared Drive T1039
+Collection::Data from Removable Media T1025
+Collection::Email Collection T1114
+Collection::Email Collection::Email Forwarding Rule T1114.003
+Collection::Email Collection::Local Email Collection T1114.001
+Collection::Email Collection::Remote Email Collection T1114.002
+Collection::Input Capture T1056
+Collection::Input Capture::Credential API Hooking T1056.004
+Collection::Input Capture::GUI Input Capture T1056.002
+Collection::Input Capture::Keylogging T1056.001
+Collection::Input Capture::Web Portal Capture T1056.003
+Collection::Screen Capture T1113
+Collection::Video Capture T1125
+Command and Control::Application Layer Protocol T1071
+Command and Control::Application Layer Protocol::DNS T1071.004
+Command and Control::Application Layer Protocol::File Transfer Protocols T1071.002
+Command and Control::Application Layer Protocol::Mail Protocols T1071.003
+Command and Control::Application Layer Protocol::Web Protocols T1071.001
+Command and Control::Commonly Used Port T1043
+Command and Control::Communication Through Removable Media T1092
+Command and Control::Custom Command and Control Protocol T1094
+Command and Control::Custom Cryptographic Protocol T1024
+Command and Control::Data Encoding T1132
+Command and Control::Data Encoding::Non-Standard Encoding T1132.002
+Command and Control::Data Encoding::Standard Encoding T1132.001
+Command and Control::Data Obfuscation T1001
+Command and Control::Data Obfuscation::Junk Data T1001.001
+Command and Control::Data Obfuscation::Protocol Impersonation T1001.003
+Command and Control::Data Obfuscation::Steganography T1001.002
+Command and Control::Domain Fronting T1172
+Command and Control::Domain Generation Algorithms T1483
+Command and Control::Dynamic Resolution T1568
+Command and Control::Dynamic Resolution::DNS Calculation T1568.003
+Command and Control::Dynamic Resolution::Domain Generation Algorithms T1568.002
+Command and Control::Dynamic Resolution::Fast Flux DNS T1568.001
+Command and Control::Encrypted Channel T1573
+Command and Control::Encrypted Channel::Asymmetric Cryptography T1573.002
+Command and Control::Encrypted Channel::Symmetric Cryptography T1573.001
+Command and Control::Fallback Channels T1008
+Command and Control::Ingress Tool Transfer T1105
+Command and Control::Multi-Stage Channels T1104
+Command and Control::Multi-hop Proxy T1188
+Command and Control::Multiband Communication T1026
+Command and Control::Multilayer Encryption T1079
+Command and Control::Non-Application Layer Protocol T1095
+Command and Control::Non-Standard Port T1571
+Command and Control::Protocol Tunneling T1572
+Command and Control::Proxy T1090
+Command and Control::Proxy::Domain Fronting T1090.004
+Command and Control::Proxy::External Proxy T1090.002
+Command and Control::Proxy::Internal Proxy T1090.001
+Command and Control::Proxy::Multi-hop Proxy T1090.003
+Command and Control::Remote Access Software T1219
+Command and Control::Standard Cryptographic Protocol T1032
+Command and Control::Traffic Signaling T1205
+Command and Control::Traffic Signaling::Port Knocking T1205.001
+Command and Control::Traffic Signaling::Socket Filters T1205.002
+Command and Control::Uncommonly Used Port T1065
+Command and Control::Web Service T1102
+Command and Control::Web Service::Bidirectional Communication T1102.002
+Command and Control::Web Service::Dead Drop Resolver T1102.001
+Command and Control::Web Service::One-Way Communication T1102.003
+Credential Access::Adversary-in-the-Middle T1557
+Credential Access::Adversary-in-the-Middle::ARP Cache Poisoning T1557.002
+Credential Access::Adversary-in-the-Middle::DHCP Spoofing T1557.003
+Credential Access::Adversary-in-the-Middle::LLMNR/NBT-NS Poisoning and SMB Relay T1557.001
+Credential Access::Bash History T1139
+Credential Access::Brute Force T1110
+Credential Access::Brute Force::Credential Stuffing T1110.004
+Credential Access::Brute Force::Password Cracking T1110.002
+Credential Access::Brute Force::Password Guessing T1110.001
+Credential Access::Brute Force::Password Spraying T1110.003
+Credential Access::Cloud Instance Metadata API T1522
+Credential Access::Credentials from Password Stores T1555
+Credential Access::Credentials from Password Stores::Credentials from Web Browsers T1555.003
+Credential Access::Credentials from Password Stores::Keychain T1555.001
+Credential Access::Credentials from Password Stores::Password Managers T1555.005
+Credential Access::Credentials from Password Stores::Securityd Memory T1555.002
+Credential Access::Credentials from Password Stores::Windows Credential Manager T1555.004
+Credential Access::Credentials from Web Browsers T1503
+Credential Access::Credentials in Files T1081
+Credential Access::Credentials in Registry T1214
+Credential Access::Exploitation for Credential Access T1212
+Credential Access::Forced Authentication T1187
+Credential Access::Forge Web Credentials T1606
+Credential Access::Forge Web Credentials::SAML Tokens T1606.002
+Credential Access::Forge Web Credentials::Web Cookies T1606.001
+Credential Access::Hooking T1179
+Credential Access::Input Capture T1056
+Credential Access::Input Capture::Credential API Hooking T1056.004
+Credential Access::Input Capture::GUI Input Capture T1056.002
+Credential Access::Input Capture::Keylogging T1056.001
+Credential Access::Input Capture::Web Portal Capture T1056.003
+Credential Access::Input Prompt T1141
+Credential Access::Kerberoasting T1208
+Credential Access::Keychain T1142
+Credential Access::LLMNR/NBT-NS Poisoning and Relay T1171
+Credential Access::Modify Authentication Process T1556
+Credential Access::Modify Authentication Process::Domain Controller Authentication T1556.001
+Credential Access::Modify Authentication Process::Hybrid Identity T1556.007
+Credential Access::Modify Authentication Process::Multi-Factor Authentication T1556.006
+Credential Access::Modify Authentication Process::Network Device Authentication T1556.004
+Credential Access::Modify Authentication Process::Password Filter DLL T1556.002
+Credential Access::Modify Authentication Process::Pluggable Authentication Modules T1556.003
+Credential Access::Modify Authentication Process::Reversible Encryption T1556.005
+Credential Access::Multi-Factor Authentication Interception T1111
+Credential Access::Multi-Factor Authentication Request Generation T1621
+Credential Access::Network Sniffing T1040
+Credential Access::OS Credential Dumping T1003
+Credential Access::OS Credential Dumping::/etc/passwd and /etc/shadow T1003.008
+Credential Access::OS Credential Dumping::Cached Domain Credentials T1003.005
+Credential Access::OS Credential Dumping::DCSync T1003.006
+Credential Access::OS Credential Dumping::LSA Secrets T1003.004
+Credential Access::OS Credential Dumping::LSASS Memory T1003.001
+Credential Access::OS Credential Dumping::NTDS T1003.003
+Credential Access::OS Credential Dumping::Proc Filesystem T1003.007
+Credential Access::OS Credential Dumping::Security Account Manager T1003.002
+Credential Access::Password Filter DLL T1174
+Credential Access::Private Keys T1145
+Credential Access::Securityd Memory T1167
+Credential Access::Steal Application Access Token T1528
+Credential Access::Steal Web Session Cookie T1539
+Credential Access::Steal or Forge Authentication Certificates T1649
+Credential Access::Steal or Forge Kerberos Tickets T1558
+Credential Access::Steal or Forge Kerberos Tickets::AS-REP Roasting T1558.004
+Credential Access::Steal or Forge Kerberos Tickets::Golden Ticket T1558.001
+Credential Access::Steal or Forge Kerberos Tickets::Kerberoasting T1558.003
+Credential Access::Steal or Forge Kerberos Tickets::Silver Ticket T1558.002
+Credential Access::Unsecured Credentials T1552
+Credential Access::Unsecured Credentials::Bash History T1552.003
+Credential Access::Unsecured Credentials::Cloud Instance Metadata API T1552.005
+Credential Access::Unsecured Credentials::Container API T1552.007
+Credential Access::Unsecured Credentials::Credentials In Files T1552.001
+Credential Access::Unsecured Credentials::Credentials in Registry T1552.002
+Credential Access::Unsecured Credentials::Group Policy Preferences T1552.006
+Credential Access::Unsecured Credentials::Private Keys T1552.004
+Defense Evasion::Abuse Elevation Control Mechanism T1548
+Defense Evasion::Abuse Elevation Control Mechanism::Bypass User Account Control T1548.002
+Defense Evasion::Abuse Elevation Control Mechanism::Elevated Execution with Prompt T1548.004
+Defense Evasion::Abuse Elevation Control Mechanism::Setuid and Setgid T1548.001
+Defense Evasion::Abuse Elevation Control Mechanism::Sudo and Sudo Caching T1548.003
+Defense Evasion::Access Token Manipulation T1134
+Defense Evasion::Access Token Manipulation::Create Process with Token T1134.002
+Defense Evasion::Access Token Manipulation::Make and Impersonate Token T1134.003
+Defense Evasion::Access Token Manipulation::Parent PID Spoofing T1134.004
+Defense Evasion::Access Token Manipulation::SID-History Injection T1134.005
+Defense Evasion::Access Token Manipulation::Token Impersonation/Theft T1134.001
+Defense Evasion::Application Access Token T1527
+Defense Evasion::BITS Jobs T1197
+Defense Evasion::Binary Padding T1009
+Defense Evasion::Build Image on Host T1612
+Defense Evasion::Bypass User Account Control T1088
+Defense Evasion::CMSTP T1191
+Defense Evasion::Clear Command History T1146
+Defense Evasion::Code Signing T1116
+Defense Evasion::Compile After Delivery T1500
+Defense Evasion::Compiled HTML File T1223
+Defense Evasion::Component Firmware T1109
+Defense Evasion::Component Object Model Hijacking T1122
+Defense Evasion::Control Panel Items T1196
+Defense Evasion::DLL Search Order Hijacking T1038
+Defense Evasion::DLL Side-Loading T1073
+Defense Evasion::Debugger Evasion T1622
+Defense Evasion::Deobfuscate/Decode Files or Information T1140
+Defense Evasion::Deploy Container T1610
+Defense Evasion::Direct Volume Access T1006
+Defense Evasion::Disabling Security Tools T1089
+Defense Evasion::Domain Policy Modification T1484
+Defense Evasion::Domain Policy Modification::Domain Trust Modification T1484.002
+Defense Evasion::Domain Policy Modification::Group Policy Modification T1484.001
+Defense Evasion::Execution Guardrails T1480
+Defense Evasion::Execution Guardrails::Environmental Keying T1480.001
+Defense Evasion::Exploitation for Defense Evasion T1211
+Defense Evasion::Extra Window Memory Injection T1181
+Defense Evasion::File Deletion T1107
+Defense Evasion::File and Directory Permissions Modification T1222
+Defense Evasion::File and Directory Permissions Modification::Linux and Mac File and Directory Permissions Modification T1222.002
+Defense Evasion::File and Directory Permissions Modification::Windows File and Directory Permissions Modification T1222.001
+Defense Evasion::Gatekeeper Bypass T1144
+Defense Evasion::HISTCONTROL T1148
+Defense Evasion::Hidden Files and Directories T1158
+Defense Evasion::Hidden Users T1147
+Defense Evasion::Hidden Window T1143
+Defense Evasion::Hide Artifacts T1564
+Defense Evasion::Hide Artifacts::Email Hiding Rules T1564.008
+Defense Evasion::Hide Artifacts::Hidden File System T1564.005
+Defense Evasion::Hide Artifacts::Hidden Files and Directories T1564.001
+Defense Evasion::Hide Artifacts::Hidden Users T1564.002
+Defense Evasion::Hide Artifacts::Hidden Window T1564.003
+Defense Evasion::Hide Artifacts::NTFS File Attributes T1564.004
+Defense Evasion::Hide Artifacts::Process Argument Spoofing T1564.010
+Defense Evasion::Hide Artifacts::Resource Forking T1564.009
+Defense Evasion::Hide Artifacts::Run Virtual Instance T1564.006
+Defense Evasion::Hide Artifacts::VBA Stomping T1564.007
+Defense Evasion::Hijack Execution Flow T1574
+Defense Evasion::Hijack Execution Flow::COR_PROFILER T1574.012
+Defense Evasion::Hijack Execution Flow::DLL Search Order Hijacking T1574.001
+Defense Evasion::Hijack Execution Flow::DLL Side-Loading T1574.002
+Defense Evasion::Hijack Execution Flow::Dylib Hijacking T1574.004
+Defense Evasion::Hijack Execution Flow::Dynamic Linker Hijacking T1574.006
+Defense Evasion::Hijack Execution Flow::Executable Installer File Permissions Weakness T1574.005
+Defense Evasion::Hijack Execution Flow::KernelCallbackTable T1574.013
+Defense Evasion::Hijack Execution Flow::Path Interception by PATH Environment Variable T1574.007
+Defense Evasion::Hijack Execution Flow::Path Interception by Search Order Hijacking T1574.008
+Defense Evasion::Hijack Execution Flow::Path Interception by Unquoted Path T1574.009
+Defense Evasion::Hijack Execution Flow::Services File Permissions Weakness T1574.010
+Defense Evasion::Hijack Execution Flow::Services Registry Permissions Weakness T1574.011
+Defense Evasion::Image File Execution Options Injection T1183
+Defense Evasion::Impair Defenses T1562
+Defense Evasion::Impair Defenses::Disable Cloud Logs T1562.008
+Defense Evasion::Impair Defenses::Disable Windows Event Logging T1562.002
+Defense Evasion::Impair Defenses::Disable or Modify Cloud Firewall T1562.007
+Defense Evasion::Impair Defenses::Disable or Modify System Firewall T1562.004
+Defense Evasion::Impair Defenses::Disable or Modify Tools T1562.001
+Defense Evasion::Impair Defenses::Downgrade Attack T1562.010
+Defense Evasion::Impair Defenses::Impair Command History Logging T1562.003
+Defense Evasion::Impair Defenses::Indicator Blocking T1562.006
+Defense Evasion::Impair Defenses::Safe Mode Boot T1562.009
+Defense Evasion::Indicator Blocking T1054
+Defense Evasion::Indicator Removal T1070
+Defense Evasion::Indicator Removal from Tools T1066
+Defense Evasion::Indicator Removal::Clear Command History T1070.003
+Defense Evasion::Indicator Removal::Clear Linux or Mac System Logs T1070.002
+Defense Evasion::Indicator Removal::Clear Mailbox Data T1070.008
+Defense Evasion::Indicator Removal::Clear Network Connection History and Configurations T1070.007
+Defense Evasion::Indicator Removal::Clear Persistence T1070.009
+Defense Evasion::Indicator Removal::Clear Windows Event Logs T1070.001
+Defense Evasion::Indicator Removal::File Deletion T1070.004
+Defense Evasion::Indicator Removal::Network Share Connection Removal T1070.005
+Defense Evasion::Indicator Removal::Timestomp T1070.006
+Defense Evasion::Indirect Command Execution T1202
+Defense Evasion::Install Root Certificate T1130
+Defense Evasion::InstallUtil T1118
+Defense Evasion::LC_MAIN Hijacking T1149
+Defense Evasion::Launchctl T1152
+Defense Evasion::Masquerading T1036
+Defense Evasion::Masquerading::Double File Extension T1036.007
+Defense Evasion::Masquerading::Invalid Code Signature T1036.001
+Defense Evasion::Masquerading::Masquerade Task or Service T1036.004
+Defense Evasion::Masquerading::Match Legitimate Name or Location T1036.005
+Defense Evasion::Masquerading::Rename System Utilities T1036.003
+Defense Evasion::Masquerading::Right-to-Left Override T1036.002
+Defense Evasion::Masquerading::Space after Filename T1036.006
+Defense Evasion::Modify Authentication Process T1556
+Defense Evasion::Modify Authentication Process::Domain Controller Authentication T1556.001
+Defense Evasion::Modify Authentication Process::Hybrid Identity T1556.007
+Defense Evasion::Modify Authentication Process::Multi-Factor Authentication T1556.006
+Defense Evasion::Modify Authentication Process::Network Device Authentication T1556.004
+Defense Evasion::Modify Authentication Process::Password Filter DLL T1556.002
+Defense Evasion::Modify Authentication Process::Pluggable Authentication Modules T1556.003
+Defense Evasion::Modify Authentication Process::Reversible Encryption T1556.005
+Defense Evasion::Modify Cloud Compute Infrastructure T1578
+Defense Evasion::Modify Cloud Compute Infrastructure::Create Cloud Instance T1578.002
+Defense Evasion::Modify Cloud Compute Infrastructure::Create Snapshot T1578.001
+Defense Evasion::Modify Cloud Compute Infrastructure::Delete Cloud Instance T1578.003
+Defense Evasion::Modify Cloud Compute Infrastructure::Revert Cloud Instance T1578.004
+Defense Evasion::Modify Registry T1112
+Defense Evasion::Modify System Image T1601
+Defense Evasion::Modify System Image::Downgrade System Image T1601.002
+Defense Evasion::Modify System Image::Patch System Image T1601.001
+Defense Evasion::Mshta T1170
+Defense Evasion::NTFS File Attributes T1096
+Defense Evasion::Network Boundary Bridging T1599
+Defense Evasion::Network Boundary Bridging::Network Address Translation Traversal T1599.001
+Defense Evasion::Network Share Connection Removal T1126
+Defense Evasion::Obfuscated Files or Information T1027
+Defense Evasion::Obfuscated Files or Information::Binary Padding T1027.001
+Defense Evasion::Obfuscated Files or Information::Compile After Delivery T1027.004
+Defense Evasion::Obfuscated Files or Information::Dynamic API Resolution T1027.007
+Defense Evasion::Obfuscated Files or Information::Embedded Payloads T1027.009
+Defense Evasion::Obfuscated Files or Information::HTML Smuggling T1027.006
+Defense Evasion::Obfuscated Files or Information::Indicator Removal from Tools T1027.005
+Defense Evasion::Obfuscated Files or Information::Software Packing T1027.002
+Defense Evasion::Obfuscated Files or Information::Steganography T1027.003
+Defense Evasion::Obfuscated Files or Information::Stripped Payloads T1027.008
+Defense Evasion::Parent PID Spoofing T1502
+Defense Evasion::Plist File Modification T1647
+Defense Evasion::Plist Modification T1150
+Defense Evasion::Pre-OS Boot T1542
+Defense Evasion::Pre-OS Boot::Bootkit T1542.003
+Defense Evasion::Pre-OS Boot::Component Firmware T1542.002
+Defense Evasion::Pre-OS Boot::ROMMONkit T1542.004
+Defense Evasion::Pre-OS Boot::System Firmware T1542.001
+Defense Evasion::Pre-OS Boot::TFTP Boot T1542.005
+Defense Evasion::Process Doppelgänging T1186
+Defense Evasion::Process Hollowing T1093
+Defense Evasion::Process Injection T1055
+Defense Evasion::Process Injection::Asynchronous Procedure Call T1055.004
+Defense Evasion::Process Injection::Dynamic-link Library Injection T1055.001
+Defense Evasion::Process Injection::Extra Window Memory Injection T1055.011
+Defense Evasion::Process Injection::ListPlanting T1055.015
+Defense Evasion::Process Injection::Portable Executable Injection T1055.002
+Defense Evasion::Process Injection::Proc Memory T1055.009
+Defense Evasion::Process Injection::Process Doppelgänging T1055.013
+Defense Evasion::Process Injection::Process Hollowing T1055.012
+Defense Evasion::Process Injection::Ptrace System Calls T1055.008
+Defense Evasion::Process Injection::Thread Execution Hijacking T1055.003
+Defense Evasion::Process Injection::Thread Local Storage T1055.005
+Defense Evasion::Process Injection::VDSO Hijacking T1055.014
+Defense Evasion::Redundant Access T1108
+Defense Evasion::Reflective Code Loading T1620
+Defense Evasion::Regsvcs/Regasm T1121
+Defense Evasion::Regsvr32 T1117
+Defense Evasion::Revert Cloud Instance T1536
+Defense Evasion::Rogue Domain Controller T1207
+Defense Evasion::Rootkit T1014
+Defense Evasion::Rundll32 T1085
+Defense Evasion::SIP and Trust Provider Hijacking T1198
+Defense Evasion::Scripting T1064
+Defense Evasion::Software Packing T1045
+Defense Evasion::Space after Filename T1151
+Defense Evasion::Subvert Trust Controls T1553
+Defense Evasion::Subvert Trust Controls::Code Signing Policy Modification T1553.006
+Defense Evasion::Subvert Trust Controls::Code Signing T1553.002
+Defense Evasion::Subvert Trust Controls::Gatekeeper Bypass T1553.001
+Defense Evasion::Subvert Trust Controls::Install Root Certificate T1553.004
+Defense Evasion::Subvert Trust Controls::Mark-of-the-Web Bypass T1553.005
+Defense Evasion::Subvert Trust Controls::SIP and Trust Provider Hijacking T1553.003
+Defense Evasion::System Binary Proxy Execution T1218
+Defense Evasion::System Binary Proxy Execution::CMSTP T1218.003
+Defense Evasion::System Binary Proxy Execution::Compiled HTML File T1218.001
+Defense Evasion::System Binary Proxy Execution::Control Panel T1218.002
+Defense Evasion::System Binary Proxy Execution::InstallUtil T1218.004
+Defense Evasion::System Binary Proxy Execution::MMC T1218.014
+Defense Evasion::System Binary Proxy Execution::Mavinject T1218.013
+Defense Evasion::System Binary Proxy Execution::Mshta T1218.005
+Defense Evasion::System Binary Proxy Execution::Msiexec T1218.007
+Defense Evasion::System Binary Proxy Execution::Odbcconf T1218.008
+Defense Evasion::System Binary Proxy Execution::Regsvcs/Regasm T1218.009
+Defense Evasion::System Binary Proxy Execution::Regsvr32 T1218.010
+Defense Evasion::System Binary Proxy Execution::Rundll32 T1218.011
+Defense Evasion::System Binary Proxy Execution::Verclsid T1218.012
+Defense Evasion::System Script Proxy Execution T1216
+Defense Evasion::System Script Proxy Execution::PubPrn T1216.001
+Defense Evasion::Template Injection T1221
+Defense Evasion::Timestomp T1099
+Defense Evasion::Traffic Signaling T1205
+Defense Evasion::Traffic Signaling::Port Knocking T1205.001
+Defense Evasion::Traffic Signaling::Socket Filters T1205.002
+Defense Evasion::Trusted Developer Utilities Proxy Execution T1127
+Defense Evasion::Trusted Developer Utilities Proxy Execution::MSBuild T1127.001
+Defense Evasion::Unused/Unsupported Cloud Regions T1535
+Defense Evasion::Use Alternate Authentication Material T1550
+Defense Evasion::Use Alternate Authentication Material::Application Access Token T1550.001
+Defense Evasion::Use Alternate Authentication Material::Pass the Hash T1550.002
+Defense Evasion::Use Alternate Authentication Material::Pass the Ticket T1550.003
+Defense Evasion::Use Alternate Authentication Material::Web Session Cookie T1550.004
+Defense Evasion::Valid Accounts T1078
+Defense Evasion::Valid Accounts::Cloud Accounts T1078.004
+Defense Evasion::Valid Accounts::Default Accounts T1078.001
+Defense Evasion::Valid Accounts::Domain Accounts T1078.002
+Defense Evasion::Valid Accounts::Local Accounts T1078.003
+Defense Evasion::Virtualization/Sandbox Evasion T1497
+Defense Evasion::Virtualization/Sandbox Evasion::System Checks T1497.001
+Defense Evasion::Virtualization/Sandbox Evasion::Time Based Evasion T1497.003
+Defense Evasion::Virtualization/Sandbox Evasion::User Activity Based Checks T1497.002
+Defense Evasion::Weaken Encryption T1600
+Defense Evasion::Weaken Encryption::Disable Crypto Hardware T1600.002
+Defense Evasion::Weaken Encryption::Reduce Key Space T1600.001
+Defense Evasion::Web Session Cookie T1506
+Defense Evasion::XSL Script Processing T1220
+Discovery::Account Discovery T1087
+Discovery::Account Discovery::Cloud Account T1087.004
+Discovery::Account Discovery::Domain Account T1087.002
+Discovery::Account Discovery::Email Account T1087.003
+Discovery::Account Discovery::Local Account T1087.001
+Discovery::Application Window Discovery T1010
+Discovery::Browser Bookmark Discovery T1217
+Discovery::Cloud Infrastructure Discovery T1580
+Discovery::Cloud Service Dashboard T1538
+Discovery::Cloud Service Discovery T1526
+Discovery::Cloud Storage Object Discovery T1619
+Discovery::Container and Resource Discovery T1613
+Discovery::Debugger Evasion T1622
+Discovery::Domain Trust Discovery T1482
+Discovery::File and Directory Discovery T1083
+Discovery::Group Policy Discovery T1615
+Discovery::Network Service Discovery T1046
+Discovery::Network Share Discovery T1135
+Discovery::Network Sniffing T1040
+Discovery::Password Policy Discovery T1201
+Discovery::Peripheral Device Discovery T1120
+Discovery::Permission Groups Discovery T1069
+Discovery::Permission Groups Discovery::Cloud Groups T1069.003
+Discovery::Permission Groups Discovery::Domain Groups T1069.002
+Discovery::Permission Groups Discovery::Local Groups T1069.001
+Discovery::Process Discovery T1057
+Discovery::Query Registry T1012
+Discovery::Remote System Discovery T1018
+Discovery::Security Software Discovery T1063
+Discovery::Software Discovery T1518
+Discovery::Software Discovery::Security Software Discovery T1518.001
+Discovery::System Information Discovery T1082
+Discovery::System Location Discovery T1614
+Discovery::System Location Discovery::System Language Discovery T1614.001
+Discovery::System Network Configuration Discovery T1016
+Discovery::System Network Configuration Discovery::Internet Connection Discovery T1016.001
+Discovery::System Network Connections Discovery T1049
+Discovery::System Owner/User Discovery T1033
+Discovery::System Service Discovery T1007
+Discovery::System Time Discovery T1124
+Discovery::Virtualization/Sandbox Evasion T1497
+Discovery::Virtualization/Sandbox Evasion::System Checks T1497.001
+Discovery::Virtualization/Sandbox Evasion::Time Based Evasion T1497.003
+Discovery::Virtualization/Sandbox Evasion::User Activity Based Checks T1497.002
+Execution::AppleScript T1155
+Execution::CMSTP T1191
+Execution::Command and Scripting Interpreter T1059
+Execution::Command and Scripting Interpreter::AppleScript T1059.002
+Execution::Command and Scripting Interpreter::JavaScript T1059.007
+Execution::Command and Scripting Interpreter::Network Device CLI T1059.008
+Execution::Command and Scripting Interpreter::PowerShell T1059.001
+Execution::Command and Scripting Interpreter::Python T1059.006
+Execution::Command and Scripting Interpreter::Unix Shell T1059.004
+Execution::Command and Scripting Interpreter::Visual Basic T1059.005
+Execution::Command and Scripting Interpreter::Windows Command Shell T1059.003
+Execution::Compiled HTML File T1223
+Execution::Component Object Model and Distributed COM T1175
+Execution::Container Administration Command T1609
+Execution::Control Panel Items T1196
+Execution::Deploy Container T1610
+Execution::Dynamic Data Exchange T1173
+Execution::Exploitation for Client Execution T1203
+Execution::Graphical User Interface T1061
+Execution::InstallUtil T1118
+Execution::Inter-Process Communication T1559
+Execution::Inter-Process Communication::Component Object Model T1559.001
+Execution::Inter-Process Communication::Dynamic Data Exchange T1559.002
+Execution::Inter-Process Communication::XPC Services T1559.003
+Execution::LSASS Driver T1177
+Execution::Launchctl T1152
+Execution::Local Job Scheduling T1168
+Execution::Mshta T1170
+Execution::Native API T1106
+Execution::PowerShell T1086
+Execution::Regsvcs/Regasm T1121
+Execution::Regsvr32 T1117
+Execution::Rundll32 T1085
+Execution::Scheduled Task/Job T1053
+Execution::Scheduled Task/Job::At (Linux) T1053.001
+Execution::Scheduled Task/Job::At T1053.002
+Execution::Scheduled Task/Job::Container Orchestration Job T1053.007
+Execution::Scheduled Task/Job::Cron T1053.003
+Execution::Scheduled Task/Job::Launchd T1053.004
+Execution::Scheduled Task/Job::Scheduled Task T1053.005
+Execution::Scheduled Task/Job::Systemd Timers T1053.006
+Execution::Scripting T1064
+Execution::Serverless Execution T1648
+Execution::Service Execution T1035
+Execution::Shared Modules T1129
+Execution::Software Deployment Tools T1072
+Execution::Source T1153
+Execution::Space after Filename T1151
+Execution::System Services T1569
+Execution::System Services::Launchctl T1569.001
+Execution::System Services::Service Execution T1569.002
+Execution::Trap T1154
+Execution::User Execution T1204
+Execution::User Execution::Malicious File T1204.002
+Execution::User Execution::Malicious Image T1204.003
+Execution::User Execution::Malicious Link T1204.001
+Execution::Windows Management Instrumentation T1047
+Execution::Windows Remote Management T1028
+Exfiltration::Automated Exfiltration T1020
+Exfiltration::Automated Exfiltration::Traffic Duplication T1020.001
+Exfiltration::Data Compressed T1002
+Exfiltration::Data Encrypted T1022
+Exfiltration::Data Transfer Size Limits T1030
+Exfiltration::Exfiltration Over Alternative Protocol T1048
+Exfiltration::Exfiltration Over Alternative Protocol::Exfiltration Over Asymmetric Encrypted Non-C2 Protocol T1048.002
+Exfiltration::Exfiltration Over Alternative Protocol::Exfiltration Over Symmetric Encrypted Non-C2 Protocol T1048.001
+Exfiltration::Exfiltration Over Alternative Protocol::Exfiltration Over Unencrypted Non-C2 Protocol T1048.003
+Exfiltration::Exfiltration Over C2 Channel T1041
+Exfiltration::Exfiltration Over Other Network Medium T1011
+Exfiltration::Exfiltration Over Other Network Medium::Exfiltration Over Bluetooth T1011.001
+Exfiltration::Exfiltration Over Physical Medium T1052
+Exfiltration::Exfiltration Over Physical Medium::Exfiltration over USB T1052.001
+Exfiltration::Exfiltration Over Web Service T1567
+Exfiltration::Exfiltration Over Web Service::Exfiltration to Cloud Storage T1567.002
+Exfiltration::Exfiltration Over Web Service::Exfiltration to Code Repository T1567.001
+Exfiltration::Scheduled Transfer T1029
+Exfiltration::Transfer Data to Cloud Account T1537
+Impact::Account Access Removal T1531
+Impact::Data Destruction T1485
+Impact::Data Encrypted for Impact T1486
+Impact::Data Manipulation T1565
+Impact::Data Manipulation::Runtime Data Manipulation T1565.003
+Impact::Data Manipulation::Stored Data Manipulation T1565.001
+Impact::Data Manipulation::Transmitted Data Manipulation T1565.002
+Impact::Defacement T1491
+Impact::Defacement::External Defacement T1491.002
+Impact::Defacement::Internal Defacement T1491.001
+Impact::Disk Content Wipe T1488
+Impact::Disk Structure Wipe T1487
+Impact::Disk Wipe T1561
+Impact::Disk Wipe::Disk Content Wipe T1561.001
+Impact::Disk Wipe::Disk Structure Wipe T1561.002
+Impact::Endpoint Denial of Service T1499
+Impact::Endpoint Denial of Service::Application Exhaustion Flood T1499.003
+Impact::Endpoint Denial of Service::Application or System Exploitation T1499.004
+Impact::Endpoint Denial of Service::OS Exhaustion Flood T1499.001
+Impact::Endpoint Denial of Service::Service Exhaustion Flood T1499.002
+Impact::Firmware Corruption T1495
+Impact::Inhibit System Recovery T1490
+Impact::Network Denial of Service T1498
+Impact::Network Denial of Service::Direct Network Flood T1498.001
+Impact::Network Denial of Service::Reflection Amplification T1498.002
+Impact::Resource Hijacking T1496
+Impact::Runtime Data Manipulation T1494
+Impact::Service Stop T1489
+Impact::Stored Data Manipulation T1492
+Impact::System Shutdown/Reboot T1529
+Impact::Transmitted Data Manipulation T1493
+Initial Access::Drive-by Compromise T1189
+Initial Access::Exploit Public-Facing Application T1190
+Initial Access::External Remote Services T1133
+Initial Access::Hardware Additions T1200
+Initial Access::Phishing T1566
+Initial Access::Phishing::Spearphishing Attachment T1566.001
+Initial Access::Phishing::Spearphishing Link T1566.002
+Initial Access::Phishing::Spearphishing via Service T1566.003
+Initial Access::Replication Through Removable Media T1091
+Initial Access::Spearphishing Attachment T1193
+Initial Access::Spearphishing Link T1192
+Initial Access::Spearphishing via Service T1194
+Initial Access::Supply Chain Compromise T1195
+Initial Access::Supply Chain Compromise::Compromise Hardware Supply Chain T1195.003
+Initial Access::Supply Chain Compromise::Compromise Software Dependencies and Development Tools T1195.001
+Initial Access::Supply Chain Compromise::Compromise Software Supply Chain T1195.002
+Initial Access::Trusted Relationship T1199
+Initial Access::Valid Accounts T1078
+Initial Access::Valid Accounts::Cloud Accounts T1078.004
+Initial Access::Valid Accounts::Default Accounts T1078.001
+Initial Access::Valid Accounts::Domain Accounts T1078.002
+Initial Access::Valid Accounts::Local Accounts T1078.003
+Lateral Movement::Application Access Token T1527
+Lateral Movement::Application Deployment Software T1017
+Lateral Movement::Component Object Model and Distributed COM T1175
+Lateral Movement::Exploitation of Remote Services T1210
+Lateral Movement::Internal Spearphishing T1534
+Lateral Movement::Lateral Tool Transfer T1570
+Lateral Movement::Pass the Hash T1075
+Lateral Movement::Pass the Ticket T1097
+Lateral Movement::Remote Desktop Protocol T1076
+Lateral Movement::Remote Service Session Hijacking T1563
+Lateral Movement::Remote Service Session Hijacking::RDP Hijacking T1563.002
+Lateral Movement::Remote Service Session Hijacking::SSH Hijacking T1563.001
+Lateral Movement::Remote Services T1021
+Lateral Movement::Remote Services::Distributed Component Object Model T1021.003
+Lateral Movement::Remote Services::Remote Desktop Protocol T1021.001
+Lateral Movement::Remote Services::SMB/Windows Admin Shares T1021.002
+Lateral Movement::Remote Services::SSH T1021.004
+Lateral Movement::Remote Services::VNC T1021.005
+Lateral Movement::Remote Services::Windows Remote Management T1021.006
+Lateral Movement::Replication Through Removable Media T1091
+Lateral Movement::SSH Hijacking T1184
+Lateral Movement::Shared Webroot T1051
+Lateral Movement::Software Deployment Tools T1072
+Lateral Movement::Taint Shared Content T1080
+Lateral Movement::Use Alternate Authentication Material T1550
+Lateral Movement::Use Alternate Authentication Material::Application Access Token T1550.001
+Lateral Movement::Use Alternate Authentication Material::Pass the Hash T1550.002
+Lateral Movement::Use Alternate Authentication Material::Pass the Ticket T1550.003
+Lateral Movement::Use Alternate Authentication Material::Web Session Cookie T1550.004
+Lateral Movement::Web Session Cookie T1506
+Lateral Movement::Windows Admin Shares T1077
+Lateral Movement::Windows Remote Management T1028
+Persistence::Accessibility Features T1015
+Persistence::Account Manipulation T1098
+Persistence::Account Manipulation::Additional Cloud Credentials T1098.001
+Persistence::Account Manipulation::Additional Cloud Roles T1098.003
+Persistence::Account Manipulation::Additional Email Delegate Permissions T1098.002
+Persistence::Account Manipulation::Device Registration T1098.005
+Persistence::Account Manipulation::SSH Authorized Keys T1098.004
+Persistence::AppCert DLLs T1182
+Persistence::AppInit DLLs T1103
+Persistence::Application Shimming T1138
+Persistence::Authentication Package T1131
+Persistence::BITS Jobs T1197
+Persistence::Boot or Logon Autostart Execution T1547
+Persistence::Boot or Logon Autostart Execution::Active Setup T1547.014
+Persistence::Boot or Logon Autostart Execution::Authentication Package T1547.002
+Persistence::Boot or Logon Autostart Execution::Kernel Modules and Extensions T1547.006
+Persistence::Boot or Logon Autostart Execution::LSASS Driver T1547.008
+Persistence::Boot or Logon Autostart Execution::Login Items T1547.015
+Persistence::Boot or Logon Autostart Execution::Plist Modification T1547.011
+Persistence::Boot or Logon Autostart Execution::Port Monitors T1547.010
+Persistence::Boot or Logon Autostart Execution::Print Processors T1547.012
+Persistence::Boot or Logon Autostart Execution::Re-opened Applications T1547.007
+Persistence::Boot or Logon Autostart Execution::Registry Run Keys / Startup Folder T1547.001
+Persistence::Boot or Logon Autostart Execution::Security Support Provider T1547.005
+Persistence::Boot or Logon Autostart Execution::Shortcut Modification T1547.009
+Persistence::Boot or Logon Autostart Execution::Time Providers T1547.003
+Persistence::Boot or Logon Autostart Execution::Winlogon Helper DLL T1547.004
+Persistence::Boot or Logon Autostart Execution::XDG Autostart Entries T1547.013
+Persistence::Boot or Logon Initialization Scripts T1037
+Persistence::Boot or Logon Initialization Scripts::Login Hook T1037.002
+Persistence::Boot or Logon Initialization Scripts::Logon Script (Windows) T1037.001
+Persistence::Boot or Logon Initialization Scripts::Network Logon Script T1037.003
+Persistence::Boot or Logon Initialization Scripts::RC Scripts T1037.004
+Persistence::Boot or Logon Initialization Scripts::Startup Items T1037.005
+Persistence::Bootkit T1067
+Persistence::Browser Extensions T1176
+Persistence::Change Default File Association T1042
+Persistence::Component Firmware T1109
+Persistence::Component Object Model Hijacking T1122
+Persistence::Compromise Client Software Binary T1554
+Persistence::Create Account T1136
+Persistence::Create Account::Cloud Account T1136.003
+Persistence::Create Account::Domain Account T1136.002
+Persistence::Create Account::Local Account T1136.001
+Persistence::Create or Modify System Process T1543
+Persistence::Create or Modify System Process::Launch Agent T1543.001
+Persistence::Create or Modify System Process::Launch Daemon T1543.004
+Persistence::Create or Modify System Process::Systemd Service T1543.002
+Persistence::Create or Modify System Process::Windows Service T1543.003
+Persistence::DLL Search Order Hijacking T1038
+Persistence::Dylib Hijacking T1157
+Persistence::Emond T1519
+Persistence::Event Triggered Execution T1546
+Persistence::Event Triggered Execution::Accessibility Features T1546.008
+Persistence::Event Triggered Execution::AppCert DLLs T1546.009
+Persistence::Event Triggered Execution::AppInit DLLs T1546.010
+Persistence::Event Triggered Execution::Application Shimming T1546.011
+Persistence::Event Triggered Execution::Change Default File Association T1546.001
+Persistence::Event Triggered Execution::Component Object Model Hijacking T1546.015
+Persistence::Event Triggered Execution::Emond T1546.014
+Persistence::Event Triggered Execution::Image File Execution Options Injection T1546.012
+Persistence::Event Triggered Execution::Installer Packages T1546.016
+Persistence::Event Triggered Execution::LC_LOAD_DYLIB Addition T1546.006
+Persistence::Event Triggered Execution::Netsh Helper DLL T1546.007
+Persistence::Event Triggered Execution::PowerShell Profile T1546.013
+Persistence::Event Triggered Execution::Screensaver T1546.002
+Persistence::Event Triggered Execution::Trap T1546.005
+Persistence::Event Triggered Execution::Unix Shell Configuration Modification T1546.004
+Persistence::Event Triggered Execution::Windows Management Instrumentation Event Subscription T1546.003
+Persistence::External Remote Services T1133
+Persistence::File System Permissions Weakness T1044
+Persistence::Hidden Files and Directories T1158
+Persistence::Hijack Execution Flow T1574
+Persistence::Hijack Execution Flow::COR_PROFILER T1574.012
+Persistence::Hijack Execution Flow::DLL Search Order Hijacking T1574.001
+Persistence::Hijack Execution Flow::DLL Side-Loading T1574.002
+Persistence::Hijack Execution Flow::Dylib Hijacking T1574.004
+Persistence::Hijack Execution Flow::Dynamic Linker Hijacking T1574.006
+Persistence::Hijack Execution Flow::Executable Installer File Permissions Weakness T1574.005
+Persistence::Hijack Execution Flow::KernelCallbackTable T1574.013
+Persistence::Hijack Execution Flow::Path Interception by PATH Environment Variable T1574.007
+Persistence::Hijack Execution Flow::Path Interception by Search Order Hijacking T1574.008
+Persistence::Hijack Execution Flow::Path Interception by Unquoted Path T1574.009
+Persistence::Hijack Execution Flow::Services File Permissions Weakness T1574.010
+Persistence::Hijack Execution Flow::Services Registry Permissions Weakness T1574.011
+Persistence::Hooking T1179
+Persistence::Hypervisor T1062
+Persistence::Image File Execution Options Injection T1183
+Persistence::Implant Internal Image T1525
+Persistence::Kernel Modules and Extensions T1215
+Persistence::LC_LOAD_DYLIB Addition T1161
+Persistence::LSASS Driver T1177
+Persistence::Launch Agent T1159
+Persistence::Launch Daemon T1160
+Persistence::Launchctl T1152
+Persistence::Local Job Scheduling T1168
+Persistence::Login Item T1162
+Persistence::Malicious Shell Modification T1156
+Persistence::Modify Authentication Process T1556
+Persistence::Modify Authentication Process::Domain Controller Authentication T1556.001
+Persistence::Modify Authentication Process::Hybrid Identity T1556.007
+Persistence::Modify Authentication Process::Multi-Factor Authentication T1556.006
+Persistence::Modify Authentication Process::Network Device Authentication T1556.004
+Persistence::Modify Authentication Process::Password Filter DLL T1556.002
+Persistence::Modify Authentication Process::Pluggable Authentication Modules T1556.003
+Persistence::Modify Authentication Process::Reversible Encryption T1556.005
+Persistence::Modify Existing Service T1031
+Persistence::Netsh Helper DLL T1128
+Persistence::New Service T1050
+Persistence::Office Application Startup T1137
+Persistence::Office Application Startup::Add-ins T1137.006
+Persistence::Office Application Startup::Office Template Macros T1137.001
+Persistence::Office Application Startup::Office Test T1137.002
+Persistence::Office Application Startup::Outlook Forms T1137.003
+Persistence::Office Application Startup::Outlook Home Page T1137.004
+Persistence::Office Application Startup::Outlook Rules T1137.005
+Persistence::Path Interception T1034
+Persistence::Plist Modification T1150
+Persistence::Port Monitors T1013
+Persistence::PowerShell Profile T1504
+Persistence::Pre-OS Boot T1542
+Persistence::Pre-OS Boot::Bootkit T1542.003
+Persistence::Pre-OS Boot::Component Firmware T1542.002
+Persistence::Pre-OS Boot::ROMMONkit T1542.004
+Persistence::Pre-OS Boot::System Firmware T1542.001
+Persistence::Pre-OS Boot::TFTP Boot T1542.005
+Persistence::Rc.common T1163
+Persistence::Re-opened Applications T1164
+Persistence::Redundant Access T1108
+Persistence::Registry Run Keys / Startup Folder T1060
+Persistence::SIP and Trust Provider Hijacking T1198
+Persistence::Scheduled Task/Job T1053
+Persistence::Scheduled Task/Job::At (Linux) T1053.001
+Persistence::Scheduled Task/Job::At T1053.002
+Persistence::Scheduled Task/Job::Container Orchestration Job T1053.007
+Persistence::Scheduled Task/Job::Cron T1053.003
+Persistence::Scheduled Task/Job::Launchd T1053.004
+Persistence::Scheduled Task/Job::Scheduled Task T1053.005
+Persistence::Scheduled Task/Job::Systemd Timers T1053.006
+Persistence::Screensaver T1180
+Persistence::Security Support Provider T1101
+Persistence::Server Software Component T1505
+Persistence::Server Software Component::IIS Components T1505.004
+Persistence::Server Software Component::SQL Stored Procedures T1505.001
+Persistence::Server Software Component::Terminal Services DLL T1505.005
+Persistence::Server Software Component::Transport Agent T1505.002
+Persistence::Server Software Component::Web Shell T1505.003
+Persistence::Service Registry Permissions Weakness T1058
+Persistence::Setuid and Setgid T1166
+Persistence::Shortcut Modification T1023
+Persistence::Startup Items T1165
+Persistence::System Firmware T1019
+Persistence::Systemd Service T1501
+Persistence::Time Providers T1209
+Persistence::Traffic Signaling T1205
+Persistence::Traffic Signaling::Port Knocking T1205.001
+Persistence::Traffic Signaling::Socket Filters T1205.002
+Persistence::Trap T1154
+Persistence::Valid Accounts T1078
+Persistence::Valid Accounts::Cloud Accounts T1078.004
+Persistence::Valid Accounts::Default Accounts T1078.001
+Persistence::Valid Accounts::Domain Accounts T1078.002
+Persistence::Valid Accounts::Local Accounts T1078.003
+Persistence::Web Shell T1100
+Persistence::Windows Management Instrumentation Event Subscription T1084
+Persistence::Winlogon Helper DLL T1004
+Privilege Escalation::Abuse Elevation Control Mechanism T1548
+Privilege Escalation::Abuse Elevation Control Mechanism::Bypass User Account Control T1548.002
+Privilege Escalation::Abuse Elevation Control Mechanism::Elevated Execution with Prompt T1548.004
+Privilege Escalation::Abuse Elevation Control Mechanism::Setuid and Setgid T1548.001
+Privilege Escalation::Abuse Elevation Control Mechanism::Sudo and Sudo Caching T1548.003
+Privilege Escalation::Access Token Manipulation T1134
+Privilege Escalation::Access Token Manipulation::Create Process with Token T1134.002
+Privilege Escalation::Access Token Manipulation::Make and Impersonate Token T1134.003
+Privilege Escalation::Access Token Manipulation::Parent PID Spoofing T1134.004
+Privilege Escalation::Access Token Manipulation::SID-History Injection T1134.005
+Privilege Escalation::Access Token Manipulation::Token Impersonation/Theft T1134.001
+Privilege Escalation::Accessibility Features T1015
+Privilege Escalation::AppCert DLLs T1182
+Privilege Escalation::AppInit DLLs T1103
+Privilege Escalation::Application Shimming T1138
+Privilege Escalation::Boot or Logon Autostart Execution T1547
+Privilege Escalation::Boot or Logon Autostart Execution::Active Setup T1547.014
+Privilege Escalation::Boot or Logon Autostart Execution::Authentication Package T1547.002
+Privilege Escalation::Boot or Logon Autostart Execution::Kernel Modules and Extensions T1547.006
+Privilege Escalation::Boot or Logon Autostart Execution::LSASS Driver T1547.008
+Privilege Escalation::Boot or Logon Autostart Execution::Login Items T1547.015
+Privilege Escalation::Boot or Logon Autostart Execution::Plist Modification T1547.011
+Privilege Escalation::Boot or Logon Autostart Execution::Port Monitors T1547.010
+Privilege Escalation::Boot or Logon Autostart Execution::Print Processors T1547.012
+Privilege Escalation::Boot or Logon Autostart Execution::Re-opened Applications T1547.007
+Privilege Escalation::Boot or Logon Autostart Execution::Registry Run Keys / Startup Folder T1547.001
+Privilege Escalation::Boot or Logon Autostart Execution::Security Support Provider T1547.005
+Privilege Escalation::Boot or Logon Autostart Execution::Shortcut Modification T1547.009
+Privilege Escalation::Boot or Logon Autostart Execution::Time Providers T1547.003
+Privilege Escalation::Boot or Logon Autostart Execution::Winlogon Helper DLL T1547.004
+Privilege Escalation::Boot or Logon Autostart Execution::XDG Autostart Entries T1547.013
+Privilege Escalation::Boot or Logon Initialization Scripts T1037
+Privilege Escalation::Boot or Logon Initialization Scripts::Login Hook T1037.002
+Privilege Escalation::Boot or Logon Initialization Scripts::Logon Script (Windows) T1037.001
+Privilege Escalation::Boot or Logon Initialization Scripts::Network Logon Script T1037.003
+Privilege Escalation::Boot or Logon Initialization Scripts::RC Scripts T1037.004
+Privilege Escalation::Boot or Logon Initialization Scripts::Startup Items T1037.005
+Privilege Escalation::Bypass User Account Control T1088
+Privilege Escalation::Create or Modify System Process T1543
+Privilege Escalation::Create or Modify System Process::Launch Agent T1543.001
+Privilege Escalation::Create or Modify System Process::Launch Daemon T1543.004
+Privilege Escalation::Create or Modify System Process::Systemd Service T1543.002
+Privilege Escalation::Create or Modify System Process::Windows Service T1543.003
+Privilege Escalation::DLL Search Order Hijacking T1038
+Privilege Escalation::Domain Policy Modification T1484
+Privilege Escalation::Domain Policy Modification::Domain Trust Modification T1484.002
+Privilege Escalation::Domain Policy Modification::Group Policy Modification T1484.001
+Privilege Escalation::Dylib Hijacking T1157
+Privilege Escalation::Elevated Execution with Prompt T1514
+Privilege Escalation::Emond T1519
+Privilege Escalation::Escape to Host T1611
+Privilege Escalation::Event Triggered Execution T1546
+Privilege Escalation::Event Triggered Execution::Accessibility Features T1546.008
+Privilege Escalation::Event Triggered Execution::AppCert DLLs T1546.009
+Privilege Escalation::Event Triggered Execution::AppInit DLLs T1546.010
+Privilege Escalation::Event Triggered Execution::Application Shimming T1546.011
+Privilege Escalation::Event Triggered Execution::Change Default File Association T1546.001
+Privilege Escalation::Event Triggered Execution::Component Object Model Hijacking T1546.015
+Privilege Escalation::Event Triggered Execution::Emond T1546.014
+Privilege Escalation::Event Triggered Execution::Image File Execution Options Injection T1546.012
+Privilege Escalation::Event Triggered Execution::Installer Packages T1546.016
+Privilege Escalation::Event Triggered Execution::LC_LOAD_DYLIB Addition T1546.006
+Privilege Escalation::Event Triggered Execution::Netsh Helper DLL T1546.007
+Privilege Escalation::Event Triggered Execution::PowerShell Profile T1546.013
+Privilege Escalation::Event Triggered Execution::Screensaver T1546.002
+Privilege Escalation::Event Triggered Execution::Trap T1546.005
+Privilege Escalation::Event Triggered Execution::Unix Shell Configuration Modification T1546.004
+Privilege Escalation::Event Triggered Execution::Windows Management Instrumentation Event Subscription T1546.003
+Privilege Escalation::Exploitation for Privilege Escalation T1068
+Privilege Escalation::Extra Window Memory Injection T1181
+Privilege Escalation::File System Permissions Weakness T1044
+Privilege Escalation::Hijack Execution Flow T1574
+Privilege Escalation::Hijack Execution Flow::COR_PROFILER T1574.012
+Privilege Escalation::Hijack Execution Flow::DLL Search Order Hijacking T1574.001
+Privilege Escalation::Hijack Execution Flow::DLL Side-Loading T1574.002
+Privilege Escalation::Hijack Execution Flow::Dylib Hijacking T1574.004
+Privilege Escalation::Hijack Execution Flow::Dynamic Linker Hijacking T1574.006
+Privilege Escalation::Hijack Execution Flow::Executable Installer File Permissions Weakness T1574.005
+Privilege Escalation::Hijack Execution Flow::KernelCallbackTable T1574.013
+Privilege Escalation::Hijack Execution Flow::Path Interception by PATH Environment Variable T1574.007
+Privilege Escalation::Hijack Execution Flow::Path Interception by Search Order Hijacking T1574.008
+Privilege Escalation::Hijack Execution Flow::Path Interception by Unquoted Path T1574.009
+Privilege Escalation::Hijack Execution Flow::Services File Permissions Weakness T1574.010
+Privilege Escalation::Hijack Execution Flow::Services Registry Permissions Weakness T1574.011
+Privilege Escalation::Hooking T1179
+Privilege Escalation::Image File Execution Options Injection T1183
+Privilege Escalation::Launch Daemon T1160
+Privilege Escalation::New Service T1050
+Privilege Escalation::Parent PID Spoofing T1502
+Privilege Escalation::Path Interception T1034
+Privilege Escalation::Plist Modification T1150
+Privilege Escalation::Port Monitors T1013
+Privilege Escalation::PowerShell Profile T1504
+Privilege Escalation::Process Injection T1055
+Privilege Escalation::Process Injection::Asynchronous Procedure Call T1055.004
+Privilege Escalation::Process Injection::Dynamic-link Library Injection T1055.001
+Privilege Escalation::Process Injection::Extra Window Memory Injection T1055.011
+Privilege Escalation::Process Injection::ListPlanting T1055.015
+Privilege Escalation::Process Injection::Portable Executable Injection T1055.002
+Privilege Escalation::Process Injection::Proc Memory T1055.009
+Privilege Escalation::Process Injection::Process Doppelgänging T1055.013
+Privilege Escalation::Process Injection::Process Hollowing T1055.012
+Privilege Escalation::Process Injection::Ptrace System Calls T1055.008
+Privilege Escalation::Process Injection::Thread Execution Hijacking T1055.003
+Privilege Escalation::Process Injection::Thread Local Storage T1055.005
+Privilege Escalation::Process Injection::VDSO Hijacking T1055.014
+Privilege Escalation::SID-History Injection T1178
+Privilege Escalation::Scheduled Task/Job T1053
+Privilege Escalation::Scheduled Task/Job::At (Linux) T1053.001
+Privilege Escalation::Scheduled Task/Job::At T1053.002
+Privilege Escalation::Scheduled Task/Job::Container Orchestration Job T1053.007
+Privilege Escalation::Scheduled Task/Job::Cron T1053.003
+Privilege Escalation::Scheduled Task/Job::Launchd T1053.004
+Privilege Escalation::Scheduled Task/Job::Scheduled Task T1053.005
+Privilege Escalation::Scheduled Task/Job::Systemd Timers T1053.006
+Privilege Escalation::Service Registry Permissions Weakness T1058
+Privilege Escalation::Setuid and Setgid T1166
+Privilege Escalation::Startup Items T1165
+Privilege Escalation::Sudo Caching T1206
+Privilege Escalation::Sudo T1169
+Privilege Escalation::Valid Accounts T1078
+Privilege Escalation::Valid Accounts::Cloud Accounts T1078.004
+Privilege Escalation::Valid Accounts::Default Accounts T1078.001
+Privilege Escalation::Valid Accounts::Domain Accounts T1078.002
+Privilege Escalation::Valid Accounts::Local Accounts T1078.003
+Privilege Escalation::Web Shell T1100
+Reconnaissance::Active Scanning T1595
+Reconnaissance::Active Scanning::Scanning IP Blocks T1595.001
+Reconnaissance::Active Scanning::Vulnerability Scanning T1595.002
+Reconnaissance::Active Scanning::Wordlist Scanning T1595.003
+Reconnaissance::Gather Victim Host Information T1592
+Reconnaissance::Gather Victim Host Information::Client Configurations T1592.004
+Reconnaissance::Gather Victim Host Information::Firmware T1592.003
+Reconnaissance::Gather Victim Host Information::Hardware T1592.001
+Reconnaissance::Gather Victim Host Information::Software T1592.002
+Reconnaissance::Gather Victim Identity Information T1589
+Reconnaissance::Gather Victim Identity Information::Credentials T1589.001
+Reconnaissance::Gather Victim Identity Information::Email Addresses T1589.002
+Reconnaissance::Gather Victim Identity Information::Employee Names T1589.003
+Reconnaissance::Gather Victim Network Information T1590
+Reconnaissance::Gather Victim Network Information::DNS T1590.002
+Reconnaissance::Gather Victim Network Information::Domain Properties T1590.001
+Reconnaissance::Gather Victim Network Information::IP Addresses T1590.005
+Reconnaissance::Gather Victim Network Information::Network Security Appliances T1590.006
+Reconnaissance::Gather Victim Network Information::Network Topology T1590.004
+Reconnaissance::Gather Victim Network Information::Network Trust Dependencies T1590.003
+Reconnaissance::Gather Victim Org Information T1591
+Reconnaissance::Gather Victim Org Information::Business Relationships T1591.002
+Reconnaissance::Gather Victim Org Information::Determine Physical Locations T1591.001
+Reconnaissance::Gather Victim Org Information::Identify Business Tempo T1591.003
+Reconnaissance::Gather Victim Org Information::Identify Roles T1591.004
+Reconnaissance::Phishing for Information T1598
+Reconnaissance::Phishing for Information::Spearphishing Attachment T1598.002
+Reconnaissance::Phishing for Information::Spearphishing Link T1598.003
+Reconnaissance::Phishing for Information::Spearphishing Service T1598.001
+Reconnaissance::Search Closed Sources T1597
+Reconnaissance::Search Closed Sources::Purchase Technical Data T1597.002
+Reconnaissance::Search Closed Sources::Threat Intel Vendors T1597.001
+Reconnaissance::Search Open Technical Databases T1596
+Reconnaissance::Search Open Technical Databases::CDNs T1596.004
+Reconnaissance::Search Open Technical Databases::DNS/Passive DNS T1596.001
+Reconnaissance::Search Open Technical Databases::Digital Certificates T1596.003
+Reconnaissance::Search Open Technical Databases::Scan Databases T1596.005
+Reconnaissance::Search Open Technical Databases::WHOIS T1596.002
+Reconnaissance::Search Open Websites/Domains T1593
+Reconnaissance::Search Open Websites/Domains::Code Repositories T1593.003
+Reconnaissance::Search Open Websites/Domains::Search Engines T1593.002
+Reconnaissance::Search Open Websites/Domains::Social Media T1593.001
+Reconnaissance::Search Victim-Owned Websites T1594
+Resource Development::Acquire Infrastructure T1583
+Resource Development::Acquire Infrastructure::Botnet T1583.005
+Resource Development::Acquire Infrastructure::DNS Server T1583.002
+Resource Development::Acquire Infrastructure::Domains T1583.001
+Resource Development::Acquire Infrastructure::Server T1583.004
+Resource Development::Acquire Infrastructure::Serverless T1583.007
+Resource Development::Acquire Infrastructure::Virtual Private Server T1583.003
+Resource Development::Acquire Infrastructure::Web Services T1583.006
+Resource Development::Compromise Accounts T1586
+Resource Development::Compromise Accounts::Cloud Accounts T1586.003
+Resource Development::Compromise Accounts::Email Accounts T1586.002
+Resource Development::Compromise Accounts::Social Media Accounts T1586.001
+Resource Development::Compromise Infrastructure T1584
+Resource Development::Compromise Infrastructure::Botnet T1584.005
+Resource Development::Compromise Infrastructure::DNS Server T1584.002
+Resource Development::Compromise Infrastructure::Domains T1584.001
+Resource Development::Compromise Infrastructure::Server T1584.004
+Resource Development::Compromise Infrastructure::Serverless T1584.007
+Resource Development::Compromise Infrastructure::Virtual Private Server T1584.003
+Resource Development::Compromise Infrastructure::Web Services T1584.006
+Resource Development::Develop Capabilities T1587
+Resource Development::Develop Capabilities::Code Signing Certificates T1587.002
+Resource Development::Develop Capabilities::Digital Certificates T1587.003
+Resource Development::Develop Capabilities::Exploits T1587.004
+Resource Development::Develop Capabilities::Malware T1587.001
+Resource Development::Establish Accounts T1585
+Resource Development::Establish Accounts::Cloud Accounts T1585.003
+Resource Development::Establish Accounts::Email Accounts T1585.002
+Resource Development::Establish Accounts::Social Media Accounts T1585.001
+Resource Development::Obtain Capabilities T1588
+Resource Development::Obtain Capabilities::Code Signing Certificates T1588.003
+Resource Development::Obtain Capabilities::Digital Certificates T1588.004
+Resource Development::Obtain Capabilities::Exploits T1588.005
+Resource Development::Obtain Capabilities::Malware T1588.001
+Resource Development::Obtain Capabilities::Tool T1588.002
+Resource Development::Obtain Capabilities::Vulnerabilities T1588.006
+Resource Development::Stage Capabilities T1608
+Resource Development::Stage Capabilities::Drive-by Target T1608.004
+Resource Development::Stage Capabilities::Install Digital Certificate T1608.003
+Resource Development::Stage Capabilities::Link Target T1608.005
+Resource Development::Stage Capabilities::SEO Poisoning T1608.006
+Resource Development::Stage Capabilities::Upload Malware T1608.001
+Resource Development::Stage Capabilities::Upload Tool T1608.002

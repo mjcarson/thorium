@@ -1,0 +1,15 @@
+#!/bin/bash
+
+curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-darwin-arm64
+sudo install minikube-darwin-arm64 /usr/local/bin/minikube && rm minikube-darwin-arm64
+# set resources for VM
+minikube config set cpus 8
+minikube config set memory 15976
+# alias kubectl command to minikube subcommand
+alias kubectl="minikube kubectl --"
+# start of k8s cluster
+minikube start --cni calico
+# add required plugins
+minikube addons enable csi-hostpath-driver
+minikube addons enable ingress
+minikube addons enable ingress-dns

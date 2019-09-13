@@ -1,0 +1,773 @@
+Anti-Behavioral Analysis::Capture Evasion B0036
+Anti-Behavioral Analysis::Conditional Execution B0025
+Anti-Behavioral Analysis::Debugger Detection B0001
+Anti-Behavioral Analysis::Debugger Evasion B0002
+Anti-Behavioral Analysis::Dynamic Analysis Evasion B0003
+Anti-Behavioral Analysis::Emulator Detection B0004
+Anti-Behavioral Analysis::Emulator Evasion B0005
+Anti-Behavioral Analysis::Executable Code Virtualization B0008
+Anti-Behavioral Analysis::Hooking F0003
+Anti-Behavioral Analysis::Memory Dump Evasion B0006
+Anti-Behavioral Analysis::Sandbox Detection B0007
+Anti-Behavioral Analysis::Software Packing F0001
+Anti-Behavioral Analysis::Virtual Machine Detection B0009
+Anti-Behavioral Analysis::Capture Evasion::Multiple Stages of Loaders B0036.003
+Anti-Behavioral Analysis::Capture Evasion::Memory-only Payload B0036.001
+Anti-Behavioral Analysis::Capture Evasion::Encrypted Payloads B0036.002
+Anti-Behavioral Analysis::Conditional Execution::Runs as Service B0025.007
+Anti-Behavioral Analysis::Conditional Execution::Environmental Keys B0025.002
+Anti-Behavioral Analysis::Conditional Execution::Suicide Exit B0025.001
+Anti-Behavioral Analysis::Conditional Execution::GetVolumeInformation B0025.003
+Anti-Behavioral Analysis::Conditional Execution::Secure Triggers B0025.005
+Anti-Behavioral Analysis::Conditional Execution::Deposited Keys B0025.008
+Anti-Behavioral Analysis::Conditional Execution::Host Fingerprint Check B0025.004
+Anti-Behavioral Analysis::Conditional Execution::Token Check B0025.006
+Anti-Behavioral Analysis::Debugger Detection::CloseHandle B0001.003
+Anti-Behavioral Analysis::Debugger Detection::WudfIsAnyDebuggerPresent B0001.031
+Anti-Behavioral Analysis::Debugger Detection::Software Breakpoints B0001.025
+Anti-Behavioral Analysis::Debugger Detection::TIB Aware B0001.027
+Anti-Behavioral Analysis::Debugger Detection::Timing/Delay Check B0001.028
+Anti-Behavioral Analysis::Debugger Detection::SetHandleInformation B0001.024
+Anti-Behavioral Analysis::Debugger Detection::Interrupt 1 B0001.007
+Anti-Behavioral Analysis::Debugger Detection::TLS Callbacks B0001.029
+Anti-Behavioral Analysis::Debugger Detection::Parent Process B0001.018
+Anti-Behavioral Analysis::Debugger Detection::Memory Breakpoints B0001.009
+Anti-Behavioral Analysis::Debugger Detection::Stack Canary B0001.026
+Anti-Behavioral Analysis::Debugger Detection::Timing/Delay Check QueryPerformanceCounter B0001.033
+Anti-Behavioral Analysis::Debugger Detection::Timing/Delay Check GetTickCount B0001.032
+Anti-Behavioral Analysis::Debugger Detection::Interrupt 0x2d B0001.006
+Anti-Behavioral Analysis::Debugger Detection::Page Exception Breakpoint Detection B0001.017
+Anti-Behavioral Analysis::Debugger Detection::Anti-debugging Instructions B0001.034
+Anti-Behavioral Analysis::Debugger Detection::NtYieldExecution/SwitchToThread B0001.015
+Anti-Behavioral Analysis::Debugger Detection::ProcessHeap B0001.021
+Anti-Behavioral Analysis::Debugger Detection::Process Environment Block IsDebugged B0001.037
+Anti-Behavioral Analysis::Debugger Detection::API Hook Detection B0001.001
+Anti-Behavioral Analysis::Debugger Detection::Debugger Artifacts B0001.004
+Anti-Behavioral Analysis::Debugger Detection::NtQueryInformationProcess B0001.012
+Anti-Behavioral Analysis::Debugger Detection::SeDebugPrivilege B0001.023
+Anti-Behavioral Analysis::Debugger Detection::OutputDebugString B0001.016
+Anti-Behavioral Analysis::Debugger Detection::IsDebuggerPresent B0001.008
+Anti-Behavioral Analysis::Debugger Detection::RtlAdjustPrivilege B0001.022
+Anti-Behavioral Analysis::Debugger Detection::Memory Write Watching B0001.010
+Anti-Behavioral Analysis::Debugger Detection::Process Environment Block NtGlobalFlag B0001.036
+Anti-Behavioral Analysis::Debugger Detection::CheckRemoteDebuggerPresent B0001.002
+Anti-Behavioral Analysis::Debugger Detection::Hardware Breakpoints B0001.005
+Anti-Behavioral Analysis::Debugger Detection::NtSetInformationThread B0001.014
+Anti-Behavioral Analysis::Debugger Detection::NtQueryObject B0001.013
+Anti-Behavioral Analysis::Debugger Detection::UnhandledExceptionFilter B0001.030
+Anti-Behavioral Analysis::Debugger Detection::Monitoring Thread B0001.011
+Anti-Behavioral Analysis::Debugger Detection::Process Jobs B0001.020
+Anti-Behavioral Analysis::Debugger Detection::Process Environment Block BeingDebugged B0001.035
+Anti-Behavioral Analysis::Debugger Detection::Process Environment Block B0001.019
+Anti-Behavioral Analysis::Debugger Evasion::Hook Interrupt B0002.009
+Anti-Behavioral Analysis::Debugger Evasion::Self-Unmapping B0002.025
+Anti-Behavioral Analysis::Debugger Evasion::Get Base Indirectly B0002.007
+Anti-Behavioral Analysis::Debugger Evasion::Code Integrity Check B0002.005
+Anti-Behavioral Analysis::Debugger Evasion::Self-Debugging B0002.024
+Anti-Behavioral Analysis::Debugger Evasion::Change SizeOfImage B0002.004
+Anti-Behavioral Analysis::Debugger Evasion::Malloc Use B0002.013
+Anti-Behavioral Analysis::Debugger Evasion::Static Linking B0002.026
+Anti-Behavioral Analysis::Debugger Evasion::Use Interrupts B0002.030
+Anti-Behavioral Analysis::Debugger Evasion::Return Obfuscation B0002.021
+Anti-Behavioral Analysis::Debugger Evasion::Byte Stealing B0002.003
+Anti-Behavioral Analysis::Debugger Evasion::Inlining B0002.011
+Anti-Behavioral Analysis::Debugger Evasion::Pre-Debug B0002.019
+Anti-Behavioral Analysis::Debugger Evasion::Thread Timeout B0002.029
+Anti-Behavioral Analysis::Debugger Evasion::Section Misalignment B0002.023
+Anti-Behavioral Analysis::Debugger Evasion::Tampering B0002.028
+Anti-Behavioral Analysis::Debugger Evasion::Pipeline Misdirection B0002.018
+Anti-Behavioral Analysis::Debugger Evasion::Break Point Clearing B0002.002
+Anti-Behavioral Analysis::Debugger Evasion::Guard Pages B0002.008
+Anti-Behavioral Analysis::Debugger Evasion::Relocate API Code B0002.020
+Anti-Behavioral Analysis::Debugger Evasion::Exception Misdirection B0002.006
+Anti-Behavioral Analysis::Debugger Evasion::RtlAdjustPrivilege B0002.022
+Anti-Behavioral Analysis::Debugger Evasion::Loop Escapes B0002.012
+Anti-Behavioral Analysis::Debugger Evasion::Modify PE Header B0002.014
+Anti-Behavioral Analysis::Debugger Evasion::Nanomites B0002.015
+Anti-Behavioral Analysis::Debugger Evasion::Parallel Threads B0002.017
+Anti-Behavioral Analysis::Debugger Evasion::Block Interrupts B0002.001
+Anti-Behavioral Analysis::Debugger Evasion::Obfuscate Library Use B0002.016
+Anti-Behavioral Analysis::Debugger Evasion::Stolen API Code B0002.027
+Anti-Behavioral Analysis::Debugger Evasion::Import Obfuscation B0002.010
+Anti-Behavioral Analysis::Dynamic Analysis Evasion::Hook File System B0003.007
+Anti-Behavioral Analysis::Dynamic Analysis Evasion::Alternative ntdll.dll B0003.001
+Anti-Behavioral Analysis::Dynamic Analysis Evasion::Illusion B0003.009
+Anti-Behavioral Analysis::Dynamic Analysis Evasion::Demo Mode B0003.004
+Anti-Behavioral Analysis::Dynamic Analysis Evasion::Hook Interrupt B0003.008
+Anti-Behavioral Analysis::Dynamic Analysis Evasion::Delayed Execution B0003.003
+Anti-Behavioral Analysis::Dynamic Analysis Evasion::Data Flood B0003.002
+Anti-Behavioral Analysis::Dynamic Analysis Evasion::Encode File B0003.006
+Anti-Behavioral Analysis::Dynamic Analysis Evasion::Restart B0003.010
+Anti-Behavioral Analysis::Dynamic Analysis Evasion::Drop Code B0003.005
+Anti-Behavioral Analysis::Emulator Detection::Check Emulator-related Registry Keys B0004.003
+Anti-Behavioral Analysis::Emulator Detection::Check for Emulator-related Files B0004.001
+Anti-Behavioral Analysis::Emulator Detection::Failed Network Connections B0004.004
+Anti-Behavioral Analysis::Emulator Detection::Check for WINE Version B0004.002
+Anti-Behavioral Analysis::Emulator Evasion::Extra Loops/Time Locks B0005.004
+Anti-Behavioral Analysis::Emulator Evasion::Different Opcode Sets B0005.001
+Anti-Behavioral Analysis::Emulator Evasion::Undocumented Opcodes B0005.002
+Anti-Behavioral Analysis::Emulator Evasion::Unusual/Undocumented API Calls B0005.003
+Anti-Behavioral Analysis::Executable Code Virtualization::Multiple VMs B0008.001
+Anti-Behavioral Analysis::Hooking::Procedure Hooking F0003.003
+Anti-Behavioral Analysis::Hooking::Shadow SDT Hooking F0003.005
+Anti-Behavioral Analysis::Hooking::Import Address Table (IAT) Hooking F0003.001
+Anti-Behavioral Analysis::Hooking::Inline Patching F0003.002
+Anti-Behavioral Analysis::Hooking::Export Address Table (EAT) Hooking F0003.006
+Anti-Behavioral Analysis::Hooking::System Service Dispatch Table Hooking F0003.004
+Anti-Behavioral Analysis::Memory Dump Evasion::Hook memory mapping APIs B0006.010
+Anti-Behavioral Analysis::Memory Dump Evasion::Code Encryption in Memory B0006.001
+Anti-Behavioral Analysis::Memory Dump Evasion::Hide virtual memory B0006.003
+Anti-Behavioral Analysis::Memory Dump Evasion::Tampering B0006.005
+Anti-Behavioral Analysis::Memory Dump Evasion::Erase the PE header B0006.002
+Anti-Behavioral Analysis::Memory Dump Evasion::SizeOfImage B0006.004
+Anti-Behavioral Analysis::Memory Dump Evasion::Patch MmGetPhysicalMemoryRanges B0006.011
+Anti-Behavioral Analysis::Memory Dump Evasion::Guard Pages B0006.006
+Anti-Behavioral Analysis::Memory Dump Evasion::Feed Misinformation B0006.008
+Anti-Behavioral Analysis::Memory Dump Evasion::Flow Opcode Obstruction B0006.009
+Anti-Behavioral Analysis::Memory Dump Evasion::On-the-Fly APIs B0006.007
+Anti-Behavioral Analysis::Sandbox Detection::Screen Resolution Testing B0007.006
+Anti-Behavioral Analysis::Sandbox Detection::Self Check B0007.007
+Anti-Behavioral Analysis::Sandbox Detection::Timing/Date Check B0007.008
+Anti-Behavioral Analysis::Sandbox Detection::Product Key/ID Testing B0007.005
+Anti-Behavioral Analysis::Sandbox Detection::Timing/Uptime Check B0007.009
+Anti-Behavioral Analysis::Sandbox Detection::Check Clipboard Data B0007.001
+Anti-Behavioral Analysis::Sandbox Detection::Human User Check B0007.003
+Anti-Behavioral Analysis::Sandbox Detection::Check Files B0007.002
+Anti-Behavioral Analysis::Sandbox Detection::Injected DLL Testing B0007.004
+Anti-Behavioral Analysis::Software Packing::Confuser F0001.009
+Anti-Behavioral Analysis::Software Packing::Custom Compression F0001.005
+Anti-Behavioral Analysis::Software Packing::Custom Compression of Data F0001.007
+Anti-Behavioral Analysis::Software Packing::VMProtect F0001.010
+Anti-Behavioral Analysis::Software Packing::Themida F0001.011
+Anti-Behavioral Analysis::Software Packing::Nested Packing F0001.001
+Anti-Behavioral Analysis::Software Packing::Standard Compression of Data F0001.004
+Anti-Behavioral Analysis::Software Packing::Standard Compression of Code F0001.003
+Anti-Behavioral Analysis::Software Packing::Armadillo F0001.012
+Anti-Behavioral Analysis::Software Packing::ASPack F0001.013
+Anti-Behavioral Analysis::Software Packing::Standard Compression F0001.002
+Anti-Behavioral Analysis::Software Packing::Custom Compression of Code F0001.006
+Anti-Behavioral Analysis::Software Packing::UPX F0001.008
+Anti-Behavioral Analysis::Virtual Machine Detection::Check Windows B0009.009
+Anti-Behavioral Analysis::Virtual Machine Detection::Modern Specs Check - Processor count B0009.018
+Anti-Behavioral Analysis::Virtual Machine Detection::Check Registry Keys B0009.005
+Anti-Behavioral Analysis::Virtual Machine Detection::Check Running Services B0009.006
+Anti-Behavioral Analysis::Virtual Machine Detection::Instruction Testing - CPUID B0009.034
+Anti-Behavioral Analysis::Virtual Machine Detection::Check Windows - Window size B0009.020
+Anti-Behavioral Analysis::Virtual Machine Detection::Human User Check B0009.012
+Anti-Behavioral Analysis::Virtual Machine Detection::Modern Specs Check - Keyboard layout B0009.019
+Anti-Behavioral Analysis::Virtual Machine Detection::HTML5 Performance Object Check B0009.011
+Anti-Behavioral Analysis::Virtual Machine Detection::Check Windows - Unique windows B0009.021
+Anti-Behavioral Analysis::Virtual Machine Detection::Modern Specs Check - USB drive B0009.016
+Anti-Behavioral Analysis::Virtual Machine Detection::Instruction Testing - VPCEXT B0009.038
+Anti-Behavioral Analysis::Virtual Machine Detection::Instruction Testing B0009.029
+Anti-Behavioral Analysis::Virtual Machine Detection::Instruction Testing - RDTSC B0009.036
+Anti-Behavioral Analysis::Virtual Machine Detection::Check Named System Objects B0009.003
+Anti-Behavioral Analysis::Virtual Machine Detection::Instruction Testing - VMCPUID B0009.037
+Anti-Behavioral Analysis::Virtual Machine Detection::Modern Specs Check - Printer B0009.017
+Anti-Behavioral Analysis::Virtual Machine Detection::Modern Specs Check B0009.013
+Anti-Behavioral Analysis::Virtual Machine Detection::Instruction Testing - SIDT (red pill) B0009.030
+Anti-Behavioral Analysis::Virtual Machine Detection::Check Software B0009.007
+Anti-Behavioral Analysis::Virtual Machine Detection::Check Windows - Title bars B0009.022
+Anti-Behavioral Analysis::Virtual Machine Detection::Instruction Testing - SMSW B0009.032
+Anti-Behavioral Analysis::Virtual Machine Detection::Instruction Testing - STR B0009.033
+Anti-Behavioral Analysis::Virtual Machine Detection::Unique Hardware/Firmware Check - CPU Location B0009.027
+Anti-Behavioral Analysis::Virtual Machine Detection::Instruction Testing - SGDT/SLDT (no pill) B0009.031
+Anti-Behavioral Analysis::Virtual Machine Detection::Guest Process Testing B0009.010
+Anti-Behavioral Analysis::Virtual Machine Detection::Check File and Directory Artifacts B0009.001
+Anti-Behavioral Analysis::Virtual Machine Detection::Unique Hardware/Firmware Check - I/O Communication Port B0009.025
+Anti-Behavioral Analysis::Virtual Machine Detection::Check Processes B0009.004
+Anti-Behavioral Analysis::Virtual Machine Detection::Instruction Testing - IN B0009.035
+Anti-Behavioral Analysis::Virtual Machine Detection::Check Virtual Devices B0009.008
+Anti-Behavioral Analysis::Virtual Machine Detection::Unique Hardware/Firmware Check - CPU Name B0009.026
+Anti-Behavioral Analysis::Virtual Machine Detection::Unique Hardware/Firmware Check - BIOS B0009.024
+Anti-Behavioral Analysis::Virtual Machine Detection::Modern Specs Check - Drive size B0009.015
+Anti-Behavioral Analysis::Virtual Machine Detection::Check Memory Artifacts B0009.002
+Anti-Behavioral Analysis::Virtual Machine Detection::Unique Hardware/Firmware Check - MAC Address B0009.028
+Anti-Behavioral Analysis::Virtual Machine Detection::Modern Specs Check - Total physical memory B0009.014
+Anti-Behavioral Analysis::Virtual Machine Detection::Unique Hardware/Firmware Check B0009.023
+Anti-Static Analysis::Call Graph Generation Evasion B0010
+Anti-Static Analysis::Data Flow Analysis Evasion B0045
+Anti-Static Analysis::Disassembler Evasion B0012
+Anti-Static Analysis::Executable Code Obfuscation B0032
+Anti-Static Analysis::Executable Code Optimization B0034
+Anti-Static Analysis::Executable Code Virtualization B0008
+Anti-Static Analysis::Obfuscated Files or Information E1027
+Anti-Static Analysis::Software Packing F0001
+Anti-Static Analysis::Call Graph Generation Evasion::Two-layer Function Return B0010.001
+Anti-Static Analysis::Call Graph Generation Evasion::Invoke NTDLL System Calls via Encoded Table B0010.002
+Anti-Static Analysis::Data Flow Analysis Evasion::Control Dependence B0045.001
+Anti-Static Analysis::Data Flow Analysis Evasion::Implicit Flows B0045.002
+Anti-Static Analysis::Data Flow Analysis Evasion::Arbitrary Memory Corruption B0045.003
+Anti-Static Analysis::Disassembler Evasion::Argument Obfuscation B0012.001
+Anti-Static Analysis::Disassembler Evasion::Conditional Misdirection B0012.002
+Anti-Static Analysis::Disassembler Evasion::VBA Stomping B0012.005
+Anti-Static Analysis::Disassembler Evasion::Variable Recomposition B0012.004
+Anti-Static Analysis::Disassembler Evasion::Value Dependent Jumps B0012.003
+Anti-Static Analysis::Executable Code Obfuscation::API Hashing B0032.001
+Anti-Static Analysis::Executable Code Obfuscation::Stack Strings B0032.017
+Anti-Static Analysis::Executable Code Obfuscation::Code Insertion B0032.002
+Anti-Static Analysis::Executable Code Obfuscation::Dead Code Insertion B0032.003
+Anti-Static Analysis::Executable Code Obfuscation::Data Value Obfuscation B0032.008
+Anti-Static Analysis::Executable Code Obfuscation::Interleaving Code B0032.014
+Anti-Static Analysis::Executable Code Obfuscation::Jump Insertion B0032.005
+Anti-Static Analysis::Executable Code Obfuscation::Fake Code Insertion B0032.004
+Anti-Static Analysis::Executable Code Obfuscation::Entry Point Obfuscation B0032.009
+Anti-Static Analysis::Executable Code Obfuscation::Junk Code Insertion B0032.007
+Anti-Static Analysis::Executable Code Obfuscation::Import Address Table Obfuscation B0032.011
+Anti-Static Analysis::Executable Code Obfuscation::Merged Code Sections B0032.015
+Anti-Static Analysis::Executable Code Obfuscation::Import Compression B0032.012
+Anti-Static Analysis::Executable Code Obfuscation::Symbol Obfuscation B0032.018
+Anti-Static Analysis::Executable Code Obfuscation::Structured Exception Handling (SEH) B0032.016
+Anti-Static Analysis::Executable Code Obfuscation::Instruction Overlap B0032.013
+Anti-Static Analysis::Executable Code Obfuscation::Thunk Code Insertion B0032.006
+Anti-Static Analysis::Executable Code Obfuscation::Guard Pages B0032.010
+Anti-Static Analysis::Executable Code Optimization::Minification B0034.002
+Anti-Static Analysis::Executable Code Optimization::Jump/Call Absolute Address B0034.001
+Anti-Static Analysis::Executable Code Virtualization::Multiple VMs B0008.001
+Anti-Static Analysis::Obfuscated Files or Information::Encryption of Data E1027.m07
+Anti-Static Analysis::Obfuscated Files or Information::Encryption-Custom Algorithm E1027.m08
+Anti-Static Analysis::Obfuscated Files or Information::Encoding E1027.m01
+Anti-Static Analysis::Obfuscated Files or Information::Encryption of Code E1027.m06
+Anti-Static Analysis::Obfuscated Files or Information::Encryption-Standard Algorithm E1027.m05
+Anti-Static Analysis::Obfuscated Files or Information::Encryption E1027.m04
+Anti-Static Analysis::Obfuscated Files or Information::Encoding-Custom Algorithm E1027.m03
+Anti-Static Analysis::Obfuscated Files or Information::Encoding-Standard Algorithm E1027.m02
+Anti-Static Analysis::Software Packing::Confuser F0001.009
+Anti-Static Analysis::Software Packing::Custom Compression F0001.005
+Anti-Static Analysis::Software Packing::Custom Compression of Data F0001.007
+Anti-Static Analysis::Software Packing::VMProtect F0001.010
+Anti-Static Analysis::Software Packing::Themida F0001.011
+Anti-Static Analysis::Software Packing::Nested Packing F0001.001
+Anti-Static Analysis::Software Packing::Standard Compression of Data F0001.004
+Anti-Static Analysis::Software Packing::Standard Compression of Code F0001.003
+Anti-Static Analysis::Software Packing::Armadillo F0001.012
+Anti-Static Analysis::Software Packing::ASPack F0001.013
+Anti-Static Analysis::Software Packing::Standard Compression F0001.002
+Anti-Static Analysis::Software Packing::Custom Compression of Code F0001.006
+Anti-Static Analysis::Software Packing::UPX F0001.008
+Collection::Cryptocurrency B0028
+Collection::Hooking F0003
+Collection::Input Capture E1056
+Collection::Keylogging F0002
+Collection::Screen Capture E1113
+Collection::Cryptocurrency::Bitcoin B0028.001
+Collection::Cryptocurrency::Ethereum B0028.002
+Collection::Cryptocurrency::Zcash B0028.003
+Collection::Hooking::Procedure Hooking F0003.003
+Collection::Hooking::Shadow SDT Hooking F0003.005
+Collection::Hooking::Import Address Table (IAT) Hooking F0003.001
+Collection::Hooking::Inline Patching F0003.002
+Collection::Hooking::Export Address Table (EAT) Hooking F0003.006
+Collection::Hooking::System Service Dispatch Table Hooking F0003.004
+Collection::Input Capture::Mouse Events E1056.m01
+Collection::Keylogging::Application Hook F0002.001
+Collection::Keylogging::Polling F0002.002
+Collection::Screen Capture::WinAPI E1113.m01
+Command and Control::C2 Communication B0030
+Command and Control::Domain Name Generation B0031
+Command and Control::Ingress Tool Transfer E1105
+Command and Control::C2 Communication::Directory Listing B0030.012
+Command and Control::C2 Communication::Request Email Template B0030.009
+Command and Control::C2 Communication::Request Command B0030.008
+Command and Control::C2 Communication::Request Email Address List B0030.010
+Command and Control::C2 Communication::Send Data B0030.001
+Command and Control::C2 Communication::Send Heartbeat B0030.007
+Command and Control::C2 Communication::Execute Shell Command B0030.014
+Command and Control::C2 Communication::Receive Data B0030.002
+Command and Control::C2 Communication::Start Interactive Shell B0030.016
+Command and Control::C2 Communication::Implant to Controller File Transfer B0030.004
+Command and Control::C2 Communication::Server to Client File Transfer B0030.003
+Command and Control::C2 Communication::Execute File B0030.013
+Command and Control::C2 Communication::Send System Information B0030.006
+Command and Control::C2 Communication::Authenticate B0030.011
+Command and Control::C2 Communication::Check for Payload B0030.005
+Command and Control::C2 Communication::File search B0030.015
+Credential Access::Cryptocurrency B0028
+Credential Access::Hooking F0003
+Credential Access::Input Capture E1056
+Credential Access::Keylogging F0002
+Credential Access::Screen Capture E1113
+Credential Access::Cryptocurrency::Bitcoin B0028.001
+Credential Access::Cryptocurrency::Ethereum B0028.002
+Credential Access::Cryptocurrency::Zcash B0028.003
+Credential Access::Hooking::Procedure Hooking F0003.003
+Credential Access::Hooking::Shadow SDT Hooking F0003.005
+Credential Access::Hooking::Import Address Table (IAT) Hooking F0003.001
+Credential Access::Hooking::Inline Patching F0003.002
+Credential Access::Hooking::Export Address Table (EAT) Hooking F0003.006
+Credential Access::Hooking::System Service Dispatch Table Hooking F0003.004
+Credential Access::Input Capture::Mouse Events E1056.m01
+Credential Access::Keylogging::Application Hook F0002.001
+Credential Access::Keylogging::Polling F0002.002
+Credential Access::Screen Capture::WinAPI E1113.m01
+Defense Evasion::Alternative Installation Location B0027
+Defense Evasion::Bootkit F0013
+Defense Evasion::Bypass Data Execution Prevention B0037
+Defense Evasion::Component Firmware F0009
+Defense Evasion::Conditional Execution B0025
+Defense Evasion::Covert Location B0040
+Defense Evasion::Disable or Evade Security Tools F0004
+Defense Evasion::Hidden Artifacts E1564
+Defense Evasion::Hidden Files and Directories F0005
+Defense Evasion::Hijack Execution Flow F0015
+Defense Evasion::Hooking F0003
+Defense Evasion::Indicator Blocking F0006
+Defense Evasion::Install Insecure or Malicious Configuration B0047
+Defense Evasion::Modify Registry E1112
+Defense Evasion::Obfuscated Files or Information E1027
+Defense Evasion::Polymorphic Code B0029
+Defense Evasion::Process Injection E1055
+Defense Evasion::Rootkit E1014
+Defense Evasion::Self Deletion F0007
+Defense Evasion::Software Packing F0001
+Defense Evasion::Alternative Installation Location::Registry Install B0027.002
+Defense Evasion::Alternative Installation Location::Fileless Malware B0027.001
+Defense Evasion::Bypass Data Execution Prevention::ROP Chains B0037.001
+Defense Evasion::Component Firmware::Router Firmware F0009.001
+Defense Evasion::Conditional Execution::Runs as Service B0025.007
+Defense Evasion::Conditional Execution::Environmental Keys B0025.002
+Defense Evasion::Conditional Execution::Suicide Exit B0025.001
+Defense Evasion::Conditional Execution::GetVolumeInformation B0025.003
+Defense Evasion::Conditional Execution::Secure Triggers B0025.005
+Defense Evasion::Conditional Execution::Deposited Keys B0025.008
+Defense Evasion::Conditional Execution::Host Fingerprint Check B0025.004
+Defense Evasion::Conditional Execution::Token Check B0025.006
+Defense Evasion::Covert Location::Hide Data in Registry B0040.001
+Defense Evasion::Covert Location::Steganography B0040.002
+Defense Evasion::Disable or Evade Security Tools::Heavens Gate F0004.008
+Defense Evasion::Disable or Evade Security Tools::Modify Policy F0004.005
+Defense Evasion::Disable or Evade Security Tools::AMSI Bypass F0004.004
+Defense Evasion::Disable or Evade Security Tools::Disable Code Integrity F0004.009
+Defense Evasion::Disable or Evade Security Tools::Disable Kernel Patch Protection F0004.001
+Defense Evasion::Disable or Evade Security Tools::Disable System File Overwrite Protection F0004.002
+Defense Evasion::Disable or Evade Security Tools::Bypass Windows File Protection F0004.007
+Defense Evasion::Disable or Evade Security Tools::Force Lazy Writing F0004.006
+Defense Evasion::Disable or Evade Security Tools::Unhook APIs F0004.003
+Defense Evasion::Hidden Artifacts::Hidden Userspace Libraries E1564.m01
+Defense Evasion::Hidden Artifacts::Hidden Services E1564.m04
+Defense Evasion::Hidden Artifacts::Hidden Kernel Modules E1564.m05
+Defense Evasion::Hidden Artifacts::Hidden Processes E1564.m03
+Defense Evasion::Hidden Artifacts::Direct Kernel Object Manipulation E1564.m02
+Defense Evasion::Hidden Files and Directories::Location F0005.002
+Defense Evasion::Hidden Files and Directories::Timestamp F0005.004
+Defense Evasion::Hidden Files and Directories::Extension F0005.001
+Defense Evasion::Hidden Files and Directories::Attribute F0005.003
+Defense Evasion::Hijack Execution Flow::Import Address Table (IAT) Hooking F0015.003
+Defense Evasion::Hijack Execution Flow::Abuse Windows Function Calls F0015.006
+Defense Evasion::Hijack Execution Flow::System Service Dispatch Table Hooking F0015.005
+Defense Evasion::Hijack Execution Flow::Export Address Table (EAT) Hooking F0015.001
+Defense Evasion::Hijack Execution Flow::Inline Patching F0015.002
+Defense Evasion::Hijack Execution Flow::Shadow System Service Dispatch Table Hooking F0015.004
+Defense Evasion::Hooking::Procedure Hooking F0003.003
+Defense Evasion::Hooking::Shadow SDT Hooking F0003.005
+Defense Evasion::Hooking::Import Address Table (IAT) Hooking F0003.001
+Defense Evasion::Hooking::Inline Patching F0003.002
+Defense Evasion::Hooking::Export Address Table (EAT) Hooking F0003.006
+Defense Evasion::Hooking::System Service Dispatch Table Hooking F0003.004
+Defense Evasion::Indicator Blocking::Remove SMS Warning Messages F0006.001
+Defense Evasion::Obfuscated Files or Information::Encryption of Data E1027.m07
+Defense Evasion::Obfuscated Files or Information::Encryption-Custom Algorithm E1027.m08
+Defense Evasion::Obfuscated Files or Information::Encoding E1027.m01
+Defense Evasion::Obfuscated Files or Information::Encryption of Code E1027.m06
+Defense Evasion::Obfuscated Files or Information::Encryption-Standard Algorithm E1027.m05
+Defense Evasion::Obfuscated Files or Information::Encryption E1027.m04
+Defense Evasion::Obfuscated Files or Information::Encoding-Custom Algorithm E1027.m03
+Defense Evasion::Obfuscated Files or Information::Encoding-Standard Algorithm E1027.m02
+Defense Evasion::Polymorphic Code::Packer Stub B0029.001
+Defense Evasion::Polymorphic Code::Code Reordering B0029.003
+Defense Evasion::Polymorphic Code::Call Indirections B0029.002
+Defense Evasion::Process Injection::Patch Process Command Line E1055.m04
+Defense Evasion::Process Injection::Hook Injection via SetWindowsHooksEx E1055.m01
+Defense Evasion::Process Injection::Injection via Windows Fibers E1055.m05
+Defense Evasion::Process Injection::Injection and Persistence via Registry Modification E1055.m02
+Defense Evasion::Process Injection::Injection using Shims E1055.m03
+Defense Evasion::Rootkit::Hypervisor/Virtualized Rootkit E1014.m15
+Defense Evasion::Rootkit::Hardware/Firmware Rootkit E1014.m14
+Defense Evasion::Rootkit::Application Rootkit E1014.m12
+Defense Evasion::Rootkit::Memory Rootkit E1014.m17
+Defense Evasion::Rootkit::Kernel Mode Rootkit E1014.m16
+Defense Evasion::Rootkit::Bootloader E1014.m13
+Defense Evasion::Self Deletion::COMSPEC Environment Variable F0007.001
+Defense Evasion::Software Packing::Confuser F0001.009
+Defense Evasion::Software Packing::Custom Compression F0001.005
+Defense Evasion::Software Packing::Custom Compression of Data F0001.007
+Defense Evasion::Software Packing::VMProtect F0001.010
+Defense Evasion::Software Packing::Themida F0001.011
+Defense Evasion::Software Packing::Nested Packing F0001.001
+Defense Evasion::Software Packing::Standard Compression of Data F0001.004
+Defense Evasion::Software Packing::Standard Compression of Code F0001.003
+Defense Evasion::Software Packing::Armadillo F0001.012
+Defense Evasion::Software Packing::ASPack F0001.013
+Defense Evasion::Software Packing::Standard Compression F0001.002
+Defense Evasion::Software Packing::Custom Compression of Code F0001.006
+Defense Evasion::Software Packing::UPX F0001.008
+Discovery::Analysis Tool Discovery B0013
+Discovery::Application Window Discovery E1010
+Discovery::Code Discovery B0046
+Discovery::File and Directory Discovery E1083
+Discovery::Self Discovery B0038
+Discovery::SMTP Connection Discovery B0014
+Discovery::System Information Discovery E1082
+Discovery::Taskbar Discovery B0043
+Discovery::Analysis Tool Discovery::Process detection - Debuggers B0013.002
+Discovery::Analysis Tool Discovery::Process detection - PCAP Utilities B0013.004
+Discovery::Analysis Tool Discovery::Process detection - Process Utilities B0013.005
+Discovery::Analysis Tool Discovery::Process detection - SysInternals Suite Tools B0013.003
+Discovery::Analysis Tool Discovery::Process detection - PE Utilities B0013.006
+Discovery::Analysis Tool Discovery::Process detection B0013.001
+Discovery::Analysis Tool Discovery::Known File Location B0013.008
+Discovery::Analysis Tool Discovery::Known Window B0013.009
+Discovery::Analysis Tool Discovery::Process detection - Sandboxes B0013.007
+Discovery::Application Window Discovery::Window Text E1010.m01
+Discovery::Code Discovery::Enumerate PE Sections B0046.001
+Discovery::Code Discovery::Parse PE Header B0046.003
+Discovery::Code Discovery::Inspect Section Memory Permissions B0046.002
+Discovery::File and Directory Discovery::Log File E1083.m01
+Discovery::System Information Discovery::Generate Windows Exception E1082.m01
+Execution::Command and Scripting Interpreter E1059
+Execution::Conditional Execution B0025
+Execution::Execution Dependency B0044
+Execution::Exploitation for Client Execution E1203
+Execution::Install Additional Program B0023
+Execution::Prevent Concurrent Execution B0024
+Execution::Remote Commands B0011
+Execution::Send Email B0020
+Execution::Send Poisoned Text Message B0021
+Execution::System Services E1569
+Execution::User Interaction E1204
+Execution::Conditional Execution::Runs as Service B0025.007
+Execution::Conditional Execution::Environmental Keys B0025.002
+Execution::Conditional Execution::Suicide Exit B0025.001
+Execution::Conditional Execution::GetVolumeInformation B0025.003
+Execution::Conditional Execution::Secure Triggers B0025.005
+Execution::Conditional Execution::Deposited Keys B0025.008
+Execution::Conditional Execution::Host Fingerprint Check B0025.004
+Execution::Conditional Execution::Token Check B0025.006
+Execution::Exploitation for Client Execution::Remote Desktop Protocols (RDP) E1203.m01
+Execution::Exploitation for Client Execution::Sysinternals E1203.m05
+Execution::Exploitation for Client Execution::File Transfer Protocol (FTP) Servers E1203.m03
+Execution::Exploitation for Client Execution::Java-based Web Servers E1203.m02
+Execution::Exploitation for Client Execution::Windows Utilities E1203.m06
+Execution::Exploitation for Client Execution::Red Hat JBoss Enterprise Products E1203.m04
+Execution::Remote Commands::Delete File B0011.001
+Execution::Remote Commands::Execute B0011.003
+Execution::Remote Commands::Sleep B0011.005
+Execution::Remote Commands::Uninstall B0011.006
+Execution::Remote Commands::Upload File B0011.007
+Execution::Remote Commands::Shutdown B0011.004
+Execution::Remote Commands::Download File B0011.002
+Execution::System Services::MSDTC E1569.m01
+Exfiltration::Archive Collected Data E1560
+Exfiltration::Automated Exfiltration E1020
+Exfiltration::Archive Collected Data::Encoding - Standard Encoding E1560.m03
+Exfiltration::Archive Collected Data::Encryption - Standard Encryption E1560.m05
+Exfiltration::Archive Collected Data::Encryption - Custom Encryption E1560.m06
+Exfiltration::Archive Collected Data::Encoding E1560.m01
+Exfiltration::Archive Collected Data::Encoding - Custom Encoding E1560.m04
+Exfiltration::Archive Collected Data::Encryption E1560.m02
+Exfiltration::Automated Exfiltration::Exfiltrate via File Hosting Service E1020.m01
+Impact::Clipboard Modification E1510
+Impact::Component Firmware F0009
+Impact::Compromise Data Integrity B0016
+Impact::Data Destruction E1485
+Impact::Data Encrypted for Impact E1486
+Impact::Denial of Service B0033
+Impact::Destroy Hardware B0017
+Impact::Disk Wipe F0014
+Impact::Exploit Kit Behavior E1190
+Impact::Exploitation for Client Execution E1203
+Impact::Generate Fraudulent Advertising Revenue E1472
+Impact::Manipulate Network Traffic B0019
+Impact::Modify Hardware B0042
+Impact::Remote Access B0022
+Impact::Resource Hijacking B0018
+Impact::Spamming B0039
+Impact::Component Firmware::Router Firmware F0009.001
+Impact::Data Destruction::Empty Recycle Bin E1485.m02
+Impact::Data Destruction::Delete Application/Software E1485.m03
+Impact::Data Destruction::Delete Shadow Copies E1485.m04
+Impact::Data Encrypted for Impact::Ransom Note E1486.001
+Impact::Exploitation for Client Execution::Remote Desktop Protocols (RDP) E1203.m01
+Impact::Exploitation for Client Execution::Sysinternals E1203.m05
+Impact::Exploitation for Client Execution::File Transfer Protocol (FTP) Servers E1203.m03
+Impact::Exploitation for Client Execution::Java-based Web Servers E1203.m02
+Impact::Exploitation for Client Execution::Windows Utilities E1203.m06
+Impact::Exploitation for Client Execution::Red Hat JBoss Enterprise Products E1203.m04
+Impact::Generate Fraudulent Advertising Revenue::Click Hijacking E1472.m01
+Impact::Generate Fraudulent Advertising Revenue::Advertisement Replacement Fraud E1472.m02
+Impact::Modify Hardware::Mouse B0042.002
+Impact::Modify Hardware::CDROM B0042.001
+Impact::Modify Hardware::Printer B0042.003
+Impact::Remote Access::Reverse Shell B0022.001
+Impact::Resource Hijacking::Cryptojacking B0018.002
+Impact::Resource Hijacking::Password Cracking B0018.001
+Lateral Movement::Malicious Network Driver B0026
+Lateral Movement::Ingress Tool Transfer E1105
+Lateral Movement::Send Email B0020
+Lateral Movement::Send Poisoned Text Message B0021
+Lateral Movement::Supply Chain Compromise E1195
+Lateral Movement::Supply Chain Compromise::Exploit Private APIs E1195.m02
+Lateral Movement::Supply Chain Compromise::Abuse Enterprise Certificates E1195.m01
+Communication::DNS Communication C0011
+Communication::FTP Communication C0004
+Communication::HTTP Communication C0002
+Communication::ICMP Communication C0014
+Communication::Interprocess Communication C0003
+Communication::SMTP Communication C0012
+Communication::Socket Communication C0001
+Communication::WinINet C0005
+Communication::DNS Communication::Resolve TLD C0011.004
+Communication::DNS Communication::DDNS Domain Connect C0011.003
+Communication::DNS Communication::Resolve Free Hosting Domain C0011.005
+Communication::DNS Communication::Resolve C0011.001
+Communication::DNS Communication::Server Connect C0011.002
+Communication::FTP Communication::Send File C0004.001
+Communication::FTP Communication::WinINet C0004.002
+Communication::HTTP Communication::Client C0002.002
+Communication::HTTP Communication::Connect to Server C0002.009
+Communication::HTTP Communication::Get Response C0002.017
+Communication::HTTP Communication::Send Request C0002.003
+Communication::HTTP Communication::Open URL C0002.004
+Communication::HTTP Communication::WinINet C0002.007
+Communication::HTTP Communication::Receive Request C0002.015
+Communication::HTTP Communication::Set Header C0002.013
+Communication::HTTP Communication::Send Data C0002.005
+Communication::HTTP Communication::IWebBrowser C0002.010
+Communication::HTTP Communication::Send Response C0002.016
+Communication::HTTP Communication::Create Request C0002.012
+Communication::HTTP Communication::Server C0002.001
+Communication::HTTP Communication::Extract Body C0002.011
+Communication::HTTP Communication::Read Header C0002.014
+Communication::HTTP Communication::WinHTTP C0002.008
+Communication::HTTP Communication::Start Server C0002.018
+Communication::HTTP Communication::Download URL C0002.006
+Communication::ICMP Communication::Echo Request C0014.002
+Communication::ICMP Communication::Generate Traffic C0014.001
+Communication::Interprocess Communication::Create Pipe C0003.001
+Communication::Interprocess Communication::Read Pipe C0003.003
+Communication::Interprocess Communication::Write Pipe C0003.004
+Communication::Interprocess Communication::Connect Pipe C0003.002
+Communication::SMTP Communication::Request C0012.002
+Communication::SMTP Communication::Server Connect C0012.001
+Communication::Socket Communication::Send UDP Data C0001.015
+Communication::Socket Communication::Receive TCP Data C0001.016
+Communication::Socket Communication::Start TCP Server C0001.005
+Communication::Socket Communication::Receive Data C0001.006
+Communication::Socket Communication::UDP Client C0001.013
+Communication::Socket Communication::Get Socket Status C0001.012
+Communication::Socket Communication::Receive UDP Data C0001.017
+Communication::Socket Communication::Send Data C0001.007
+Communication::Socket Communication::Send TCP Data C0001.014
+Communication::Socket Communication::Initialize Winsock Library C0001.009
+Communication::Socket Communication::TCP Client C0001.008
+Communication::Socket Communication::Connect Socket C0001.004
+Communication::Socket Communication::Create TCP Socket C0001.011
+Communication::Socket Communication::Create Socket C0001.003
+Communication::Socket Communication::Set Socket Config C0001.001
+Communication::Socket Communication::Create UDP Socket C0001.010
+Communication::Socket Communication::TCP Server C0001.002
+Communication::WinINet::InternetOpen C0005.002
+Communication::WinINet::InternetOpenURL C0005.003
+Communication::WinINet::InternetWriteFile C0005.005
+Communication::WinINet::InternetReadFile C0005.004
+Communication::WinINet::InternetConnect C0005.001
+Cryptography::Crypto Library C0059
+Cryptography::Cryptographic Hash C0029
+Cryptography::Decrypt Data C0031
+Cryptography::Encrypt Data C0027
+Cryptography::Encryption Key C0028
+Cryptography::Generate Pseudo-random Sequence C0021
+Cryptography::Hashed Message Authentication Code C0061
+Cryptography::Cryptographic Hash::SHA1 C0029.002
+Cryptography::Cryptographic Hash::SHA256 C0029.003
+Cryptography::Cryptographic Hash::SHA224 C0029.004
+Cryptography::Cryptographic Hash::MD5 C0029.001
+Cryptography::Cryptographic Hash::Snefru C0029.006
+Cryptography::Cryptographic Hash::Tiger C0029.005
+Cryptography::Decrypt Data::Twofish C0031.014
+Cryptography::Decrypt Data::Skipjack C0031.011
+Cryptography::Decrypt Data::Blowfish C0031.003
+Cryptography::Decrypt Data::HC-128 C0031.006
+Cryptography::Decrypt Data::AES C0031.001
+Cryptography::Decrypt Data::RC4 C0031.008
+Cryptography::Decrypt Data::Stream Cipher C0031.013
+Cryptography::Decrypt Data::Block Cipher C0031.002
+Cryptography::Decrypt Data::Camellia C0031.004
+Cryptography::Decrypt Data::HC-256 C0031.007
+Cryptography::Decrypt Data::3DES C0031.005
+Cryptography::Decrypt Data::Sosemanuk C0031.012
+Cryptography::Decrypt Data::RC6 C0031.009
+Cryptography::Decrypt Data::RSA C0031.010
+Cryptography::Encrypt Data::RSA C0027.011
+Cryptography::Encrypt Data::Block Cipher C0027.014
+Cryptography::Encrypt Data::AES C0027.001
+Cryptography::Encrypt Data::Stream Cipher C0027.012
+Cryptography::Encrypt Data::RC6 C0027.010
+Cryptography::Encrypt Data::Camellia C0027.003
+Cryptography::Encrypt Data::HC-256 C0027.007
+Cryptography::Encrypt Data::Twofish C0027.005
+Cryptography::Encrypt Data::Blowfish C0027.002
+Cryptography::Encrypt Data::HC-128 C0027.006
+Cryptography::Encrypt Data::Skipjack C0027.013
+Cryptography::Encrypt Data::RC4 C0027.009
+Cryptography::Encrypt Data::3DES C0027.004
+Cryptography::Encrypt Data::Sosemanuk C0027.008
+Cryptography::Encryption Key::Import Public Key C0028.001
+Cryptography::Encryption Key::RC4 KSA C0028.002
+Cryptography::Generate Pseudo-random Sequence::GetTickCount C0021.001
+Cryptography::Generate Pseudo-random Sequence::Mersenne Twister C0021.005
+Cryptography::Generate Pseudo-random Sequence::Use API C0021.003
+Cryptography::Generate Pseudo-random Sequence::rand C0021.002
+Cryptography::Generate Pseudo-random Sequence::RC4 PRGA C0021.004
+Data Micro-objective::Check String C0019
+Data Micro-objective::Checksum C0032
+Data Micro-objective::Compress Data C0024
+Data Micro-objective::Compression Library C0060
+Data Micro-objective::Decode Data C0053
+Data Micro-objective::Decompress Data C0025
+Data Micro-objective::Encode Data C0026
+Data Micro-objective::Modulo C0058
+Data Micro-objective::Non-Cryptographic Hash C0030
+Data Micro-objective::Use Constant C0020
+Data Micro-objective::Checksum::BSD C0032.003
+Data Micro-objective::Checksum::Luhn C0032.002
+Data Micro-objective::Checksum::CRC32 C0032.001
+Data Micro-objective::Checksum::Adler C0032.005
+Data Micro-objective::Checksum::Verhoeff C0032.004
+Data Micro-objective::Compress Data::QuickLZ C0024.001
+Data Micro-objective::Compress Data::IEncodingFilterFactory C0024.002
+Data Micro-objective::Decode Data::Base64 C0053.001
+Data Micro-objective::Decode Data::XOR C0053.002
+Data Micro-objective::Decompress Data::aPLib C0025.003
+Data Micro-objective::Decompress Data::IEncodingFilterFactory C0025.002
+Data Micro-objective::Decompress Data::QuickLZ C0025.001
+Data Micro-objective::Encode Data::XOR C0026.002
+Data Micro-objective::Encode Data::Base64 C0026.001
+Data Micro-objective::Non-Cryptographic Hash::Fast-Hash C0030.003
+Data Micro-objective::Non-Cryptographic Hash::MurmurHash C0030.001
+Data Micro-objective::Non-Cryptographic Hash::dhash C0030.004
+Data Micro-objective::Non-Cryptographic Hash::pHash C0030.002
+Data Micro-objective::Non-Cryptographic Hash::FNV C0030.005
+File System Micro-objective::Alter File Extension C0015
+File System Micro-objective::Copy File C0045
+File System Micro-objective::Create Directory C0046
+File System Micro-objective::Create File C0016
+File System Micro-objective::Delete Directory C0048
+File System Micro-objective::Delete File C0047
+File System Micro-objective::Get File Attributes C0049
+File System Micro-objective::Move File C0063
+File System Micro-objective::Read File C0051
+File System Micro-objective::Read Virtual Disk C0056
+File System Micro-objective::Set File Attributes C0050
+File System Micro-objective::Writes File C0052
+File System Micro-objective::Alter File Extension::Append Extension C0015.001
+File System Micro-objective::Create File::Create Office Document C0016.001
+File System Micro-objective::Create File::Create Ransomware File C0016.002
+Hardware Micro-objective::Install Driver C0037
+Hardware Micro-objective::Load Driver C0023
+Hardware Micro-objective::Simulate Hardware C0057
+Hardware Micro-objective::Install Driver::Minifilter C0037.001
+Hardware Micro-objective::Load Driver::Minifilter C0023.001
+Hardware Micro-objective::Simulate Hardware::Mouse Click C0057.002
+Hardware Micro-objective::Simulate Hardware::Ctrl-Alt-Del C0057.001
+Memory Micro-objective::Allocate Memory C0007
+Memory Micro-objective::Change Memory Protection C0008
+Memory Micro-objective::Free Memory C0044
+Memory Micro-objective::Heap Spray C0006
+Memory Micro-objective::Overflow Buffer C0010
+Memory Micro-objective::Stack Pivot C0009
+Memory Micro-objective::Change Memory Protection::Executable Stack C0008.001
+Memory Micro-objective::Change Memory Protection::Executable Heap C0008.002
+Operating::Console C0033
+Operating::Environment Variable C0034
+Operating::Registry C0036
+Operating::Wallpaper C0035
+Operating::Environment Variable::Get Variable C0034.002
+Operating::Environment Variable::Set Variable C0034.001
+Operating::Registry::Create Registry Key C0036.004
+Operating::Registry::Delete Registry Key C0036.002
+Operating::Registry::Set Registry Key C0036.001
+Operating::Registry::Query Registry Key C0036.005
+Operating::Registry::Delete Registry Value C0036.007
+Operating::Registry::Open Registry Key C0036.003
+Operating::Registry::Query Registry Value C0036.006
+Process Micro-objective::Allocate Thread Local Storage C0040
+Process Micro-objective::Check Mutex C0043
+Process Micro-objective::Create Mutex C0042
+Process Micro-objective::Create Process C0017
+Process Micro-objective::Create Thread C0038
+Process Micro-objective::Enumerate Threads C0064
+Process Micro-objective::Open Process C0065
+Process Micro-objective::Open Thread C0066
+Process Micro-objective::Resume Thread C0054
+Process Micro-objective::Set Thread Local Storage Value C0041
+Process Micro-objective::Suspend Thread C0055
+Process Micro-objective::Synchronization C0022
+Process Micro-objective::Terminate Process C0018
+Process Micro-objective::Terminate Thread C0039
+Process Micro-objective::Create Process::Create Process via Shellcode C0017.001
+Process Micro-objective::Create Process::Create Suspended Process C0017.003
+Process Micro-objective::Create Process::Create Process via WMI C0017.002
+Process Micro-objective::Synchronization::Create Mutex C0022.001
+Persistence::Bootkit F0013
+Persistence::Component Firmware F0009
+Persistence::Hidden Artifacts E1564
+Persistence::Hidden Files and Directories F0005
+Persistence::Hijack Execution Flow F0015
+Persistence::Hooking F0003
+Persistence::Install Insecure or Malicious Configuration B0047
+Persistence::Kernel Modules and Extensions F0010
+Persistence::Malicious Network Driver B0026
+Persistence::Modify Existing Service F0011
+Persistence::Modify Registry E1112
+Persistence::Registry Run Keys / Startup Folder F0012
+Persistence::Remote Access B0022
+Persistence::Ingress Tool Transfer E1105
+Persistence::Shutdown Event B0035
+Persistence::Component Firmware::Router Firmware F0009.001
+Persistence::Hidden Artifacts::Hidden Userspace Libraries E1564.m01
+Persistence::Hidden Artifacts::Hidden Services E1564.m04
+Persistence::Hidden Artifacts::Hidden Kernel Modules E1564.m05
+Persistence::Hidden Artifacts::Hidden Processes E1564.m03
+Persistence::Hidden Artifacts::Direct Kernel Object Manipulation E1564.m02
+Persistence::Hidden Files and Directories::Location F0005.002
+Persistence::Hidden Files and Directories::Timestamp F0005.004
+Persistence::Hidden Files and Directories::Extension F0005.001
+Persistence::Hidden Files and Directories::Attribute F0005.003
+Persistence::Hijack Execution Flow::Import Address Table (IAT) Hooking F0015.003
+Persistence::Hijack Execution Flow::Abuse Windows Function Calls F0015.006
+Persistence::Hijack Execution Flow::System Service Dispatch Table Hooking F0015.005
+Persistence::Hijack Execution Flow::Export Address Table (EAT) Hooking F0015.001
+Persistence::Hijack Execution Flow::Inline Patching F0015.002
+Persistence::Hijack Execution Flow::Shadow System Service Dispatch Table Hooking F0015.004
+Persistence::Hooking::Procedure Hooking F0003.003
+Persistence::Hooking::Shadow SDT Hooking F0003.005
+Persistence::Hooking::Import Address Table (IAT) Hooking F0003.001
+Persistence::Hooking::Inline Patching F0003.002
+Persistence::Hooking::Export Address Table (EAT) Hooking F0003.006
+Persistence::Hooking::System Service Dispatch Table Hooking F0003.004
+Persistence::Kernel Modules and Extensions::Device Driver F0010.001
+Persistence::Remote Access::Reverse Shell B0022.001
+Privilege Escalation::Hijack Execution Flow F0015
+Privilege Escalation::Hooking F0003
+Privilege Escalation::Kernel Modules and Extensions F0010
+Privilege Escalation::Modify Existing Service F0011
+Privilege Escalation::Process Injection E1055
+Privilege Escalation::Hijack Execution Flow::Import Address Table (IAT) Hooking F0015.003
+Privilege Escalation::Hijack Execution Flow::Abuse Windows Function Calls F0015.006
+Privilege Escalation::Hijack Execution Flow::System Service Dispatch Table Hooking F0015.005
+Privilege Escalation::Hijack Execution Flow::Export Address Table (EAT) Hooking F0015.001
+Privilege Escalation::Hijack Execution Flow::Inline Patching F0015.002
+Privilege Escalation::Hijack Execution Flow::Shadow System Service Dispatch Table Hooking F0015.004
+Privilege Escalation::Hooking::Procedure Hooking F0003.003
+Privilege Escalation::Hooking::Shadow SDT Hooking F0003.005
+Privilege Escalation::Hooking::Import Address Table (IAT) Hooking F0003.001
+Privilege Escalation::Hooking::Inline Patching F0003.002
+Privilege Escalation::Hooking::Export Address Table (EAT) Hooking F0003.006
+Privilege Escalation::Hooking::System Service Dispatch Table Hooking F0003.004
+Privilege Escalation::Kernel Modules and Extensions::Device Driver F0010.001
+Privilege Escalation::Process Injection::Patch Process Command Line E1055.m04
+Privilege Escalation::Process Injection::Hook Injection via SetWindowsHooksEx E1055.m01
+Privilege Escalation::Process Injection::Injection via Windows Fibers E1055.m05
+Privilege Escalation::Process Injection::Injection and Persistence via Registry Modification E1055.m02
+Privilege Escalation::Process Injection::Injection using Shims E1055.m03

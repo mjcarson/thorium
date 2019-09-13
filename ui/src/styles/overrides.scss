@@ -1,0 +1,448 @@
+@use './scaling';
+/*
+$grid-breakpoints: (
+  xs: 0,
+  sm: 576px,
+  md: 768px,
+  lg: 992px,
+  xl: 1200px,
+  xxl: 1400px
+);
+*/
+
+td {
+  max-width: 900px;
+  color: var(--thorium-text) !important;
+}
+
+// 1400px
+//@media (max-width: scaling.$xxl) { ... }
+
+// 1200px
+//@media (max-width: scaling.$xl) { ... }
+
+// 992px
+//@media (max-width: scaling.$lg) { ... }
+
+// 768px
+//@media (max-width: scaling.$md) { ... }
+
+// 576px
+//@media (max-width: scaling.$sm) { ... }
+
+body,
+html {
+  font-family: 'Product Sans';
+  letter-spacing: 0.5px;
+
+  /* width (no effect in FireFox) */
+  ::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+
+  /* Track (no effect in FireFox) */
+  ::-webkit-scrollbar-track {
+    background: var(--thorium-scroll-bar-track-bg);
+  }
+
+  /* Handle (no effect in FireFox) */
+  ::-webkit-scrollbar-thumb {
+    background: var(--thorium-scroll-bar-thumb-bg);
+  }
+
+  /* Handle on hover (no effect in FireFox) */
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--thorium-scroll-bar-thumb-hover-bg);
+  }
+
+  /* Corner between side and bottom (no effect in FireFox) */
+  ::-webkit-scrollbar-corner {
+    background: var(--thorium-scroll-bar-track-bg);
+  }
+}
+
+body {
+  background-color: var(--thorium-body-bg);
+}
+
+// force wrapping long strings so flex columns work
+// this is primarily needed for the results table-of-contents
+pre {
+  white-space: pre-wrap; /* Since CSS 2.1 */
+  white-space: -moz-pre-wrap; /* Mozilla, since 1999 */
+  white-space: -pre-wrap; /* Opera 4-6 */
+  white-space: -o-pre-wrap; /* Opera 7 */
+  word-wrap: break-word; /* Internet Explorer 5.5+ */
+}
+
+h1,
+h2,
+h3 {
+  font-weight: 700;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  color: var(--thorium-text);
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--thorium-text);
+
+  /*&:hover {
+    color: var(--thorium-highlight-text);
+  }*/
+
+  &:active {
+    color: var(--thorium-selected-text);
+  }
+}
+
+hr {
+  position: relative;
+  border: none;
+  height: 1px;
+  background: var(--thorium-highlight-panel-border);
+}
+
+hr.tagshr {
+  position: relative;
+  top: 5px;
+  border: none;
+  height: 1px;
+  background: var(--thorium-highlight-panel-border);
+  margin-bottom: 10px;
+}
+
+.table {
+  word-wrap: break-all;
+  --bs-table-bg: var(--thorium-panel-bg);
+  --bs-table-color: var(--thorium-text);
+  --bs-table-border-color: var(--thorium-panel-border);
+}
+
+// <Badge>
+.badge {
+  --bs-badge-color: var(--thorium-button-text);
+}
+
+// nav-link is used on the horizontal top navigation bar
+.nav-link {
+  color: var(--thorium-text);
+
+  &:hover {
+    background-color: var(--thorium-highlight-panel-bg);
+    color: var(--thorium-highlight-text);
+  }
+}
+
+.nav-tabs {
+  //--bs-nav-tabs-border-width: var(--bs-border-width);
+  --bs-nav-tabs-border-color: var(--thorium-panel-border);
+  //--bs-nav-tabs-border-radius: var(--bs-border-radius);
+  --bs-nav-tabs-link-hover-border-color: var(--thorium-secondary-panel-bg) var(--thorium-secondary-panel-bg) var(--thorium-panel-border);
+  --bs-nav-tabs-link-active-color: var(--thorium-selected-text);
+  --bs-nav-tabs-link-active-bg: var(--thorium-highlight-panel-bg);
+  --bs-nav-tabs-link-active-border-color: var(--thorium-panel-border) var(--thorium-panel-border) var(--thorium-panel-bg);
+}
+
+.nav-pills .nav-link.active {
+  background-color: var(--thorium-highlight-panel-bg);
+  color: var(--thorium-text);
+}
+
+// horizontal navigation bar username button drop down
+.dropdown-menu {
+  color: var(--thorium-nav-text);
+  background-color: var(--thorium-nav-panel-bg);
+  border-color: var(--thorium-panel-border);
+}
+
+// username dropdown when clicked and menu is showing
+.navbar-nav .nav-link.show {
+  color: var(--thorium-nav-text);
+  background-color: var(--thorium-nav-panel-bg);
+}
+
+div.justify-content-end.navbar-nav {
+  margin-right: 0.5rem;
+}
+
+// top navbar username dropdown item
+.dropdown-item {
+  color: var(--thorium-nav-text);
+
+  &:hover {
+    color: var(--thorium-nav-text);
+    background-color: var(--thorium-highlight-panel-bg);
+  }
+}
+
+a.dropdown-toggle.nav-link {
+  color: var(--thorium-nav-text);
+  background-color: var(--thorium-nav-panel-bg);
+
+  &:hover {
+    color: var(--thorium-highlight-text);
+    background-color: var(--thorium-nav-panel-bg);
+  }
+}
+// -----------------------------------------------------------------------------
+// -------------------------------- Pagination ---------------------------------
+
+// Bootstrap pagination buttons
+.pagination {
+  --bs-pagination-color: var(--thorium-text);
+  --bs-pagination-bg: var(--thorium-secondary-panel-bg);
+  --bs-pagination-border-color: var(--thorium-panel-border);
+  --bs-pagination-hover-bg: var(--thorium-panel-bg);
+  --bs-pagination-hover-color: var(--thorium-highlight-text);
+  --bs-pagination-hover-border-color: var(--thorium-panel-border);
+  --bs-pagination-disabled-bg: var(--thorium-panel-bg);
+  --bs-pagination-disabled-color: var(--thorium-secondary-text);
+  --bs-pagination-disabled-border-color: var(--thorium-panel-border);
+  --bs-pagination-active-color: var(--thorium-text);
+  --bs-pagination-active-bg: var(--thorium-highlight-panel-bg);
+  --bs-pagination-active-border-color: var(--thorium-panel-border);
+  --bs-pagination-focus-color: var(--thorium-text);
+  --bs-pagination-focus-bg: var(--thorium-highlight-panel-border);
+  --bs-pagination-focus-box-shadow: 0 0 0 0.05rem var(--thorium-panel-bg);
+}
+
+// -----------------------------------------------------------------------------
+// --------------------------------- Accordion ---------------------------------
+.accordion {
+  --bs-accordion-color: var(--thorium-text);
+  --bs-accordion-bg: var(--thorium-panel-bg);
+  --bs-accordion-border-color: var(--thorium-panel-border);
+  --bs-accordion-btn-color: var(--thorium-secondary-text);
+  --bs-accordion-btn-bg: var(--thorium-panel-bg);
+  //--bs-accordion-btn-focus-box-shadow: 0 0 0 0.1rem var(--thorium-highlight-panel-border);
+  --bs-accordion-btn-focus-box-shadow: inset 0 0 1px var(--thorium-panel-border), 0 0 8px var(--thorium-highlight-panel-border) !important;
+  --bs-accordion-active-color: var(--thorium-secondary-text);
+  --bs-accordion-active-bg: var(--thorium-secondary-panel-bg);
+  // hard coded icon color fill='%23YOUR_HEX_COLOR_HERE'
+  // This probably will cause problems for light gray color schemes
+  --bs-accordion-btn-icon: url("data:image/svg+xml,%3csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27 fill='%23999999'%3e%3cpath fill-rule=%27evenodd%27 d=%27M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z%27/%3e%3c/svg%3e");
+  --bs-accordion-btn-active-icon: url("data:image/svg+xml,%3csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27 fill='%23999999'%3e%3cpath fill-rule=%27evenodd%27 d=%27M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z%27/%3e%3c/svg%3e");
+}
+
+.accordion-button {
+  &:hover {
+    background-color: var(--thorium-highlight-panel-bg);
+  }
+}
+// -----------------------------------------------------------------------------
+// ----------------------------------- Forms -----------------------------------
+.form-label {
+  color: var(--thorium-text);
+}
+
+.form-text {
+  color: var(--thorium-secondary-text) !important;
+}
+
+.form-control {
+  background-color: var(--thorium-secondary-panel-bg);
+  color: var(--thorium-text);
+  border-color: var(--thorium-panel-border);
+
+  &:focus {
+    background-color: var(--thorium-highlight-panel-bg);
+    color: var(--thorium-text);
+    border-color: var(--thorium-panel-border);
+    box-shadow:
+      inset 0 0 1px var(--thorium-panel-border),
+      0 0 6px var(--thorium-highlight-panel-border) !important;
+  }
+
+  &:disabled {
+    filter: brightness(60%);
+  }
+
+  &::placeholder {
+    color: var(--thorium-secondary-text);
+    opacity: 1; /* Firefox */
+  }
+
+  &:focus::placeholder,
+  &:hover::placeholder {
+    color: transparent;
+  }
+
+  &::-ms-input-placeholder {
+    /* Edge 12 -18 */
+    color: var(--thorium-secondary-text);
+  }
+}
+
+.caret {
+  color: red;
+}
+
+.form-select {
+  color: var(--thorium-text);
+  background-color: var(--thorium-highlight-panel-bg);
+  border-color: var(--thorium-panel-border);
+  background-image: var(--thorium-form-select-arrow);
+
+  &:hover {
+    filter: brightness(80%);
+    border-color: var(--thorium-panel-border);
+  }
+
+  &:disabled {
+    filter: brightness(60%);
+    border-color: var(--thorium-panel-border);
+    color: var(--thorium-secondary-text);
+  }
+
+  //TODO: not really sure what this is for
+  &:focus {
+    filter: brightness(80%);
+    border-color: var(--thorium-panel-border);
+    box-shadow:
+      inset 0 0 1px var(--thorium-panel-bg),
+      0 0 8px var(--thorium-highlight-panel-bg);
+  }
+}
+
+.form-check-input {
+  color: var(--thorium-text);
+  background-color: var(--thorium-panel-bg);
+  border-color: var(--thorium-panel-border);
+
+  &:checked {
+    color: var(--thorium-text);
+    background-color: var(--thorium-highlight-panel-bg);
+    border-color: var(--thorium-highlight-panel-border);
+    &:focus {
+      --bs-form-switch-bg: url('data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%27-4 -4 8 8%27><circle r=%273%27 fill=%27white%27/></svg>') !important;
+    }
+  }
+
+  &:active {
+    border-color: var(--thorium-highlight-panel-border);
+  }
+
+  &:focus {
+    border-color: var(--thorium-panel-border);
+    box-shadow:
+      inset 0 0 1px var(--thorium-panel-border),
+      0 0 6px var(--thorium-highlight-panel-border) !important;
+    --bs-form-switch-bg: url('data:image/svg+xml,<svg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%27-4 -4 8 8%27><circle r=%273%27 fill=%27%27/></svg>') !important;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// ----------------------------------- Modal -----------------------------------
+
+// Modal colors
+.modal-content {
+  background-color: var(--thorium-panel-bg);
+  color: var(--thorium-text);
+}
+
+.modal-footer {
+  border-top: var(--bs-modal-footer-border-width) solid var(--thorium-highlight-panel-border);
+}
+
+.modal-header {
+  border-bottom: var(--bs-modal-footer-border-width) solid var(--thorium-highlight-panel-border);
+}
+
+.btn-close {
+  // can use the white mode also:  closeVariant='white'
+  --bs-btn-close-bg: url("data:image/svg+xml,%3csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27 fill='%23999999'%3e%3cpath d=%27M.293.293a1 1 0 0 1 1.414 0L8 6.586 14.293.293a1 1 0 1 1 1.414 1.414L9.414 8l6.293 6.293a1 1 0 0 1-1.414 1.414L8 9.414l-6.293 6.293a1 1 0 0 1-1.414-1.414L6.586 8 .293 1.707a1 1 0 0 1 0-1.414z%27/%3e%3c/svg%3e");
+}
+// -----------------------------------------------------------------------------
+
+@media (min-width: scaling.$sm) {
+  .container,
+  .container-sm {
+    max-width: 490px;
+  }
+}
+
+@media (min-width: scaling.$md) {
+  .container,
+  .container-sm,
+  .container-md {
+    max-width: 690px;
+  }
+}
+
+@media (min-width: scaling.$lg) {
+  .container,
+  .container-sm,
+  .container-md,
+  .container-lg {
+    max-width: 910px;
+  }
+}
+
+@media (min-width: scaling.$xl) {
+  .container,
+  .container-sm,
+  .container-md,
+  .container-lg,
+  .container-xl {
+    max-width: 1040px;
+  }
+}
+
+@media (min-width: scaling.$xxl) {
+  .container,
+  .container-sm,
+  .container-md,
+  .container-lg,
+  .container-xl,
+  .container-xxl {
+    max-width: 1230px;
+  }
+}
+
+// -----------------------------------------------------------------------------
+
+.react-datepicker {
+  background-color: var(--thorium-bs-btn-color);
+  color: var(--thorium-secondary-text);
+}
+
+.react-datepicker__header {
+  background-color: var(--thorium-secondary-panel-bg);
+}
+
+.react-datepicker__current-month,
+.react-datepicker__day-name,
+.react-datepicker__time-name {
+  color: var(--thorium-text);
+}
+
+.react-datepicker__day--highlighted {
+  &:hover {
+    background-color: var(--thorium-bs-btn-hover-color);
+    color: var(--thorium-secondary-text);
+  }
+}
+
+.react-datepicker__day--keyboard-selected,
+.react-datepicker__day--selected {
+  background-color: var(--thorium-info-bg);
+  color: var(--thorium-button-text);
+
+  &:hover {
+    background-color: var(--thorium-info-bg);
+    color: var(--thorium-button-text);
+  }
+}

@@ -1,0 +1,540 @@
+@function tint($color, $percentage) {
+  @return mix(white, $color, $percentage);
+}
+
+@function shade($color, $percentage) {
+  @return mix(black, $color, $percentage);
+}
+
+/************************/
+/* Base Color Variables */
+/************************/
+
+// cools
+$snl-dark-blue: #003359;
+$snl-medium-blue: #0076a9;
+$snl-light-blue: #00add0;
+$snl-blue: #0066cc;
+$snl-teal: #008e74;
+$snl-purple: #5a3cbf;
+$snl-lavender: #b312b1;
+$snl-green: #297b29; // Original #6CB312
+
+// warms
+$snl-crimson: #822433;
+$snl-red: #cc0000;
+$snl-red-orange: #f23f00;
+$snl-orange: #ff743d; // Original #fd5947
+$snl-amber: #e5913d; // Original #ff8800
+$snl-yellow: #ffc200;
+
+// greys
+$snl-grey: #999999;
+$snl-warm-grey: #82786f;
+$snl-blue-grey: #7d8ea0;
+$snl-white: #ffffff;
+$snl-black: #000000;
+
+/***************************/
+/* Tint & Shades Variables */
+/***************************/
+
+// cools
+$snl-dark-blue-900: shade($snl-dark-blue, 60%);
+$snl-dark-blue-800: shade($snl-dark-blue, 45%);
+$snl-dark-blue-700: shade($snl-dark-blue, 30%);
+$snl-dark-blue-600: shade($snl-dark-blue, 15%);
+$snl-dark-blue-500: $snl-dark-blue;
+$snl-dark-blue-400: tint($snl-dark-blue, 20%);
+$snl-dark-blue-300: tint($snl-dark-blue, 40%);
+$snl-dark-blue-200: tint($snl-dark-blue, 60%);
+$snl-dark-blue-100: tint($snl-dark-blue, 80%);
+$snl-dark-blue-50: tint($snl-dark-blue, 90%);
+
+$snl-medium-blue-900: shade($snl-medium-blue, 60%);
+$snl-medium-blue-800: shade($snl-medium-blue, 45%);
+$snl-medium-blue-700: shade($snl-medium-blue, 30%);
+$snl-medium-blue-600: shade($snl-medium-blue, 15%);
+$snl-medium-blue-500: $snl-medium-blue;
+$snl-medium-blue-400: tint($snl-medium-blue, 20%);
+$snl-medium-blue-300: tint($snl-medium-blue, 40%);
+$snl-medium-blue-200: tint($snl-medium-blue, 60%);
+$snl-medium-blue-100: tint($snl-medium-blue, 80%);
+$snl-medium-blue-50: tint($snl-medium-blue, 90%);
+
+$snl-light-blue-900: shade($snl-light-blue, 60%);
+$snl-light-blue-800: shade($snl-light-blue, 45%);
+$snl-light-blue-700: shade($snl-light-blue, 30%);
+$snl-light-blue-600: shade($snl-light-blue, 15%);
+$snl-light-blue-500: $snl-light-blue;
+$snl-light-blue-400: tint($snl-light-blue, 20%);
+$snl-light-blue-300: tint($snl-light-blue, 40%);
+$snl-light-blue-200: tint($snl-light-blue, 60%);
+$snl-light-blue-100: tint($snl-light-blue, 80%);
+$snl-light-blue-50: tint($snl-light-blue, 90%);
+
+$snl-blue-900: shade($snl-blue, 60%);
+$snl-blue-800: shade($snl-blue, 45%);
+$snl-blue-700: shade($snl-blue, 30%);
+$snl-blue-600: shade($snl-blue, 15%);
+$snl-blue-500: $snl-blue;
+$snl-blue-400: tint($snl-blue, 20%);
+$snl-blue-300: tint($snl-blue, 40%);
+$snl-blue-200: tint($snl-blue, 60%);
+$snl-blue-100: tint($snl-blue, 80%);
+$snl-blue-50: tint($snl-blue, 90%);
+
+$snl-teal-900: shade($snl-teal, 60%);
+$snl-teal-800: shade($snl-teal, 45%);
+$snl-teal-700: shade($snl-teal, 30%);
+$snl-teal-600: shade($snl-teal, 15%);
+$snl-teal-500: $snl-teal;
+$snl-teal-400: tint($snl-teal, 20%);
+$snl-teal-300: tint($snl-teal, 40%);
+$snl-teal-200: tint($snl-teal, 60%);
+$snl-teal-100: tint($snl-teal, 80%);
+$snl-teal-50: tint($snl-teal, 90%);
+
+$snl-purple-900: shade($snl-purple, 60%);
+$snl-purple-800: shade($snl-purple, 45%);
+$snl-purple-700: shade($snl-purple, 30%);
+$snl-purple-600: shade($snl-purple, 15%);
+$snl-purple-500: $snl-purple;
+$snl-purple-400: tint($snl-purple, 20%);
+$snl-purple-300: tint($snl-purple, 40%);
+$snl-purple-200: tint($snl-purple, 60%);
+$snl-purple-100: tint($snl-purple, 80%);
+$snl-purple-50: tint($snl-purple, 90%);
+
+$snl-lavender-900: shade($snl-lavender, 60%);
+$snl-lavender-800: shade($snl-lavender, 45%);
+$snl-lavender-700: shade($snl-lavender, 30%);
+$snl-lavender-600: shade($snl-lavender, 15%);
+$snl-lavender-500: $snl-lavender;
+$snl-lavender-400: tint($snl-lavender, 20%);
+$snl-lavender-300: tint($snl-lavender, 40%);
+$snl-lavender-200: tint($snl-lavender, 60%);
+$snl-lavender-100: tint($snl-lavender, 80%);
+$snl-lavender-50: tint($snl-lavender, 90%);
+
+$snl-green-900: shade($snl-green, 60%);
+$snl-green-800: shade($snl-green, 45%);
+$snl-green-700: shade($snl-green, 30%);
+$snl-green-600: shade($snl-green, 15%);
+$snl-green-500: $snl-green;
+$snl-green-400: tint($snl-green, 20%);
+$snl-green-300: tint($snl-green, 40%);
+$snl-green-200: tint($snl-green, 60%);
+$snl-green-100: tint($snl-green, 80%);
+$snl-green-50: tint($snl-green, 90%);
+
+// warms
+$snl-crimson-900: shade($snl-crimson, 60%);
+$snl-crimson-800: shade($snl-crimson, 45%);
+$snl-crimson-700: shade($snl-crimson, 30%);
+$snl-crimson-600: shade($snl-crimson, 15%);
+$snl-crimson-500: $snl-crimson;
+$snl-crimson-400: tint($snl-crimson, 20%);
+$snl-crimson-300: tint($snl-crimson, 40%);
+$snl-crimson-200: tint($snl-crimson, 60%);
+$snl-crimson-100: tint($snl-crimson, 80%);
+$snl-crimson-50: tint($snl-crimson, 90%);
+
+$snl-red-900: shade($snl-red, 60%);
+$snl-red-800: shade($snl-red, 45%);
+$snl-red-700: shade($snl-red, 30%);
+$snl-red-600: shade($snl-red, 15%);
+$snl-red-500: $snl-red;
+$snl-red-400: tint($snl-red, 20%);
+$snl-red-300: tint($snl-red, 40%);
+$snl-red-200: tint($snl-red, 60%);
+$snl-red-100: tint($snl-red, 80%);
+$snl-red-50: tint($snl-red, 90%);
+
+$snl-red-orange-900: shade($snl-red-orange, 60%);
+$snl-red-orange-800: shade($snl-red-orange, 45%);
+$snl-red-orange-700: shade($snl-red-orange, 30%);
+$snl-red-orange-600: shade($snl-red-orange, 15%);
+$snl-red-orange-500: $snl-red-orange;
+$snl-red-orange-400: tint($snl-red-orange, 20%);
+$snl-red-orange-300: tint($snl-red-orange, 40%);
+$snl-red-orange-200: tint($snl-red-orange, 60%);
+$snl-red-orange-100: tint($snl-red-orange, 80%);
+$snl-red-orange-50: tint($snl-red-orange, 90%);
+
+$snl-orange-900: shade($snl-orange, 60%);
+$snl-orange-800: shade($snl-orange, 45%);
+$snl-orange-700: shade($snl-orange, 30%);
+$snl-orange-600: shade($snl-orange, 15%);
+$snl-orange-500: $snl-orange;
+$snl-orange-400: tint($snl-orange, 20%);
+$snl-orange-300: tint($snl-orange, 40%);
+$snl-orange-200: tint($snl-orange, 60%);
+$snl-orange-100: tint($snl-orange, 80%);
+$snl-orange-50: tint($snl-orange, 90%);
+
+$snl-amber-900: shade($snl-amber, 60%);
+$snl-amber-800: shade($snl-amber, 45%);
+$snl-amber-700: shade($snl-amber, 30%);
+$snl-amber-600: shade($snl-amber, 15%);
+$snl-amber-500: $snl-amber;
+$snl-amber-400: tint($snl-amber, 20%);
+$snl-amber-300: tint($snl-amber, 40%);
+$snl-amber-200: tint($snl-amber, 60%);
+$snl-amber-100: tint($snl-amber, 80%);
+$snl-amber-50: tint($snl-amber, 90%);
+
+$snl-yellow-900: shade($snl-yellow, 60%);
+$snl-yellow-800: shade($snl-yellow, 45%);
+$snl-yellow-700: shade($snl-yellow, 30%);
+$snl-yellow-600: shade($snl-yellow, 15%);
+$snl-yellow-500: $snl-yellow;
+$snl-yellow-400: tint($snl-yellow, 20%);
+$snl-yellow-300: tint($snl-yellow, 40%);
+$snl-yellow-200: tint($snl-yellow, 60%);
+$snl-yellow-100: tint($snl-yellow, 80%);
+$snl-yellow-50: tint($snl-yellow, 90%);
+
+// greys
+$snl-grey-900: shade($snl-grey, 60%);
+$snl-grey-800: shade($snl-grey, 45%);
+$snl-grey-700: shade($snl-grey, 30%);
+$snl-grey-600: shade($snl-grey, 15%);
+$snl-grey-500: $snl-grey;
+$snl-grey-400: tint($snl-grey, 20%);
+$snl-grey-300: tint($snl-grey, 40%);
+$snl-grey-200: tint($snl-grey, 60%);
+$snl-grey-100: tint($snl-grey, 80%);
+$snl-grey-50: tint($snl-grey, 90%);
+
+$snl-warm-grey-900: shade($snl-warm-grey, 60%);
+$snl-warm-grey-800: shade($snl-warm-grey, 45%);
+$snl-warm-grey-700: shade($snl-warm-grey, 30%);
+$snl-warm-grey-600: shade($snl-warm-grey, 15%);
+$snl-warm-grey-500: $snl-warm-grey;
+$snl-warm-grey-400: tint($snl-warm-grey, 20%);
+$snl-warm-grey-300: tint($snl-warm-grey, 40%);
+$snl-warm-grey-200: tint($snl-warm-grey, 60%);
+$snl-warm-grey-100: tint($snl-warm-grey, 80%);
+$snl-warm-grey-50: tint($snl-warm-grey, 90%);
+
+$snl-blue-grey-900: shade($snl-blue-grey, 60%);
+$snl-blue-grey-800: shade($snl-blue-grey, 45%);
+$snl-blue-grey-700: shade($snl-blue-grey, 30%);
+$snl-blue-grey-600: shade($snl-blue-grey, 15%);
+$snl-blue-grey-500: $snl-blue-grey;
+$snl-blue-grey-400: tint($snl-blue-grey, 20%);
+$snl-blue-grey-300: tint($snl-blue-grey, 40%);
+$snl-blue-grey-200: tint($snl-blue-grey, 60%);
+$snl-blue-grey-100: tint($snl-blue-grey, 80%);
+$snl-blue-grey-50: tint($snl-blue-grey, 90%);
+
+$snl-white-900: shade($snl-white, 25%);
+$snl-white-800: shade($snl-white, 22.5%);
+$snl-white-700: shade($snl-white, 20%);
+$snl-white-600: shade($snl-white, 17.5%);
+$snl-white-500: shade($snl-white, 15%);
+$snl-white-400: shade($snl-white, 12.5%);
+$snl-white-300: shade($snl-white, 10%);
+$snl-white-200: shade($snl-white, 7%);
+$snl-white-100: shade($snl-white, 5%);
+$snl-white-50: shade($snl-white, 2.5%);
+$snl-white-0: $snl-white;
+
+$snl-black-900: $snl-black;
+$snl-black-800: tint($snl-black, 2.5%);
+$snl-black-700: tint($snl-black, 5%);
+$snl-black-600: tint($snl-black, 7%);
+$snl-black-500: tint($snl-black, 10%);
+$snl-black-400: tint($snl-black, 12.5%);
+$snl-black-300: tint($snl-black, 15%);
+$snl-black-200: tint($snl-black, 17.5%);
+$snl-black-100: tint($snl-black, 20%);
+$snl-black-50: tint($snl-black, 22.5%);
+$snl-black-0: tint($snl-black, 25%);
+
+/*
+ * Themes:
+ *
+ * Thorium supports the following themes: Automatic (browser preference), Dark, Light, Ocean, and Crab.
+ * Future support might include a Custom theme where the theme colors would need to be enumerated.
+ * For Custom to be possible, we must have a stable set of CSS variables for colors.
+ */
+[theme='Dark'] {
+  // Body
+  --thorium-body-bg: #{$snl-black-300};
+  // Text
+  --thorium-text: #{$snl-white-400};
+  --thorium-secondary-text: #{$snl-grey-500};
+  --thorium-selected-text: #{$snl-white-100};
+  --thorium-highlight-text: #{$snl-grey-600};
+  --thorium-nav-text: var(--thorium-text);
+  --thorium-link-text: #{$snl-medium-blue-600};
+  --thorium-link-text-alt: #{$snl-medium-blue-200};
+  // Panels
+  --thorium-panel-bg: #{$snl-black-100}; // body - 200
+  --thorium-secondary-panel-bg: #{$snl-black-0}; // panel - 100 ????
+  --thorium-highlight-panel-bg: #{$snl-grey-900}; // secondary-panel - 100
+  --thorium-nav-panel-bg: var(--thorium-panel-bg);
+  // Borders
+  --thorium-panel-border: #{$snl-grey-900}; // secondary-panel - 100
+  --thorium-highlight-panel-border: #{$snl-grey-800}; // border - 100
+  //Scrollbars
+  --thorium-scroll-bar-track-bg: #{$snl-grey-900};
+  --thorium-scroll-bar-thumb-bg: #{$snl-grey-700};
+  --thorium-scroll-bar-thumb-hover-bg: #{$snl-grey-500};
+  //Selectable Buttons
+  --thorium-disabled-brightness: brightness(50%);
+  --thorium-hover-brightness: brightness(100%);
+  --thorium-selected-brightness: brightness(90%);
+  --thorium-active-brightness: brightness(80%);
+  // Buttons and Alerts
+  //  - Alerts: error, warning, info, default (alert)
+  //  - Buttons: danger, warning, info, default (alert)
+  --thorium-danger-bg: #{$snl-crimson};
+  --thorium-error-bg: #{$snl-crimson-400};
+  --thorium-warning-bg: #{$snl-amber-500};
+  --thorium-warning-secondary-bg: #{$snl-amber-300};
+  --thorium-info-bg: #{$snl-grey-600};
+  --thorium-info-secondary-bg: #{$snl-medium-blue};
+  --thorium-empty-bg: #{$snl-light-blue-800};
+  --thorium-ok-bg: #{$snl-green-600};
+  --thorium-button-text: var(--thorium-text);
+  --thorium-bs-btn-color: #{$snl-white-400};
+  --thorium-bs-btn-hover-color: #{$snl-grey-500};
+  // Progress Bars
+  --thorium-bar-bg: var(--thorium-body-bg);
+  --thorium-danger-bar-bg: #{$snl-crimson};
+  --thorium-warning-bar-bg: #{$snl-amber-500};
+  --thorium-ok-bar-bg: #{$snl-green-600};
+  --thorium-info-bar-bg: #{$snl-medium-blue};
+
+  --thorium-form-select-arrow: url('data:image/svg+xml,%3csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3e%3cpath fill=%27none%27 stroke=%27%23dfdfdf%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27 stroke-width=%272%27 d=%27m2 5 6 6 6-6%27/%3e%3c/svg%3e') !important;
+}
+
+[theme='Light'] {
+  // Body
+  --thorium-body-bg: #{$snl-white};
+  // Text
+  --thorium-text: #{$snl-black-800};
+  --thorium-secondary-text: #{$snl-grey-600};
+  --thorium-selected-text: #{$snl-black-300};
+  //--thorium-highlight-text: #{$snl-grey-400};
+  --thorium-highlight-text: #{$snl-dark-blue-400};
+  --thorium-nav-text: #{$snl-white};
+  --thorium-link-text: #{$snl-medium-blue-600};
+  --thorium-link-text-alt: #{$snl-medium-blue-800};
+  // Panels
+  --thorium-panel-bg: #{$snl-white};
+  --thorium-secondary-panel-bg: #{$snl-white-200};
+  --thorium-highlight-panel-bg: #{$snl-grey-200};
+  --thorium-nav-panel-bg: #{$snl-dark-blue-700};
+  // Borders
+  --thorium-panel-border: #{$snl-grey-300};
+  --thorium-highlight-panel-border: #{$snl-grey-100};
+  //Scrollbars
+  --thorium-scroll-bar-track-bg: #{$snl-grey-100};
+  --thorium-scroll-bar-thumb-bg: #{$snl-grey-300};
+  --thorium-scroll-bar-thumb-hover-bg: #{$snl-grey-400};
+  //Selectable Buttons
+  --thorium-disabled-brightness: brightness(70%);
+  --thorium-hover-brightness: brightness(100%);
+  --thorium-selected-brightness: brightness(90%);
+  --thorium-active-brightness: brightness(80%);
+  // Buttons and Alerts
+  //  - Alerts: error, warning, info, default (alert)
+  //  - Buttons: danger, warning, info, default (alert)
+  --thorium-danger-bg: #{$snl-crimson};
+  --thorium-error-bg: #{$snl-crimson-300};
+  --thorium-warning-bg: #{$snl-amber-500};
+  --thorium-warning-secondary-bg: #{$snl-amber-300};
+  --thorium-info-bg: #{$snl-grey-500};
+  --thorium-info-secondary-bg: #{$snl-grey-800};
+  --thorium-empty-bg: #{$snl-light-blue-800};
+  --thorium-ok-bg: #{$snl-green-600};
+  --thorium-button-text: var(--thorium-nav-text);
+  --thorium-bs-btn-color: #{$snl-grey-500};
+  --thorium-bs-btn-hover-color: #{$snl-black-300};
+  // Progress Bars
+  --thorium-bar-bg: var(--thorium-body-bg);
+  --thorium-danger-bar-bg: #{$snl-crimson};
+  --thorium-warning-bar-bg: #{$snl-amber-500};
+  --thorium-ok-bar-bg: #{$snl-green-600};
+  --thorium-info-bar-bg: #{$snl-medium-blue};
+  --thorium-form-select-arrow: url('data:image/svg+xml,%3csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3e%3cpath fill=%27none%27 stroke=%27%23060606%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27 stroke-width=%272%27 d=%27m2 5 6 6 6-6%27/%3e%3c/svg%3e');
+}
+
+[theme='Ocean'] {
+  // Body
+  --thorium-body-bg: #{$snl-dark-blue-900};
+  // Text
+  --thorium-text: #{$snl-white-200};
+  --thorium-secondary-text: #{$snl-grey-600};
+  --thorium-selected-text: #{$snl-white-500};
+  --thorium-highlight-text: #{$snl-medium-blue-500};
+  --thorium-nav-text: var(--thorium-text);
+  --thorium-link-text: #{$snl-medium-blue-600};
+  --thorium-link-text-alt: #{$snl-medium-blue-200};
+  // Panels
+  --thorium-panel-bg: #{$snl-dark-blue-700}; // body - 200
+  --thorium-secondary-panel-bg: #{$snl-dark-blue-600}; // panel - 100
+  --thorium-highlight-panel-bg: #{$snl-dark-blue-500}; // secondary-panel - 100
+  --thorium-nav-panel-bg: var(--thorium-panel-bg);
+  // Borders
+  --thorium-panel-border: #{$snl-dark-blue-500}; // secondary-panel - 100
+  --thorium-highlight-panel-border: #{$snl-dark-blue-300}; // border - 100
+  //Scrollbars
+  --thorium-scroll-bar-track-bg: #{$snl-dark-blue-500};
+  --thorium-scroll-bar-thumb-bg: #{$snl-dark-blue-300};
+  --thorium-scroll-bar-thumb-hover-bg: #{$snl-dark-blue-200};
+  //Selectable Buttons
+  --thorium-disabled-brightness: brightness(50%);
+  --thorium-hover-brightness: brightness(100%);
+  --thorium-selected-brightness: brightness(90%);
+  --thorium-active-brightness: brightness(80%);
+  // Buttons and Alerts
+  //  - Alerts: error, warning, info, default (alert)
+  //  - Buttons: danger, warning, info, default (alert)
+  --thorium-danger-bg: #{$snl-crimson};
+  --thorium-error-bg: #{$snl-crimson-300};
+  --thorium-warning-bg: #{$snl-amber-500};
+  --thorium-warning-secondary-bg: #{$snl-amber-300};
+  --thorium-info-bg: #{$snl-medium-blue};
+  --thorium-info-secondary-bg: #{$snl-light-blue-300};
+  --thorium-empty-bg: #{$snl-medium-blue-800};
+  --thorium-ok-bg: #{$snl-green-600};
+  --thorium-button-text: var(--thorium-text);
+  --thorium-bs-btn-color: #{$snl-white-400};
+  --thorium-bs-btn-hover-color: #{$snl-grey-500};
+  // Progress Bars
+  --thorium-bar-bg: var(--thorium-body-bg);
+  --thorium-danger-bar-bg: #{$snl-crimson};
+  --thorium-warning-bar-bg: #{$snl-amber-500};
+  --thorium-ok-bar-bg: #{$snl-green-600};
+  --thorium-info-bar-bg: #{$snl-medium-blue};
+
+  --thorium-form-select-arrow: url('data:image/svg+xml,%3csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3e%3cpath fill=%27none%27 stroke=%27%23ededed%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27 stroke-width=%272%27 d=%27m2 5 6 6 6-6%27/%3e%3c/svg%3e');
+}
+
+[theme='Crab'] {
+  // Body
+  --thorium-body-bg: #fff4d4;
+  // Text
+  --thorium-text: #fff0dd;
+  --thorium-secondary-text: #6f6e6e;
+  --thorium-selected-text: #2b303b;
+  --thorium-highlight-text: #edc28e;
+  --thorium-nav-text: var(--thorium-text);
+  --thorium-link-text: #{$snl-medium-blue-600};
+  --thorium-link-text-alt: #{$snl-medium-blue-800};
+  // Panels
+  --thorium-panel-bg: #{$snl-orange}; //#e85415
+  --thorium-secondary-panel-bg: #{$snl-orange-300};
+  --thorium-highlight-panel-bg: #{$snl-orange-200};
+  --thorium-nav-panel-bg: var(--thorium-panel-bg);
+  // Borders
+  --thorium-panel-border: #{$snl-orange-200};
+  --thorium-highlight-panel-border: #{$snl-orange-100};
+  // Buttons and Alerts
+  //  - Alerts: error, warning, info, default (alert)
+  //  - Buttons: danger, warning, info, default (alert)
+  --thorium-danger-bg: #{$snl-crimson};
+  --thorium-error-bg: #{$snl-crimson-300};
+  --thorium-warning-bg: #{$snl-amber-500};
+  --thorium-warning-secondary-bg: #{$snl-amber-300};
+  --thorium-info-bg: #{$snl-grey-600};
+  --thorium-info-secondary-bg: lightblue;
+  --thorium-empty-bg: #{$snl-medium-blue-800};
+  --thorium-ok-bg: #{$snl-green-600};
+  --thorium-button-text: var(--thorium-text);
+  --thorium-bs-btn-color: #{$snl-grey-500};
+  --thorium-bs-btn-hover-color: #{$snl-black-300};
+  // Progress Bars
+  --thorium-bar-bg: var(--thorium-body-bg);
+  --thorium-danger-bar-bg: #{$snl-crimson};
+  --thorium-warning-bar-bg: #{$snl-amber-500};
+  --thorium-ok-bar-bg: #{$snl-green-600};
+  --thorium-info-bar-bg: #{$snl-medium-blue};
+
+  --thorium-form-select-arrow: url('data:image/svg+xml,%3csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3e%3cpath fill=%27none%27 stroke=%27%23060606%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27 stroke-width=%272%27 d=%27m2 5 6 6 6-6%27/%3e%3c/svg%3e');
+}
+
+// Traffic light protocol colors
+$tlp-red: #ff0033;
+$tlp-amber: #ffc000;
+$tlp-green: #33ff00;
+$tlp-clear: #fff;
+$tlp-highlight: lightGrey;
+$tlp-text-light: #ffffff;
+$tlp-text-dark: #000000;
+$tlp-outline: #000000;
+
+.clear {
+  color: var(--thorium-text-bg);
+  background-color: inherit;
+  border: none;
+}
+
+.warning {
+  background-color: var(--thorium-warning-secondary-bg);
+  border-color: var(--thorium-warning-secondary-bg);
+  color: var(--thorium-text);
+}
+
+.danger {
+  background-color: var(--thorium-danger-bg);
+  border-color: var(--thorium-danger-bg);
+  color: var(--thorium-text);
+}
+
+.info {
+  background-color: var(--thorium-info-bg);
+  border-color: var(--thorium-info-bg);
+  color: var(--thorium-text);
+}
+
+.ok {
+  background-color: var(--thorium-ok-bg);
+  border-color: var(--thorium-ok-bg);
+  color: var(--thorium-text);
+}
+
+.bg-dark-slate {
+  background-color: darkslateblue;
+}
+
+.bg-cadet {
+  background-color: cadetblue;
+}
+
+.bg-corn-flower {
+  background-color: cornflowerblue;
+}
+
+.bg-grey {
+  background-color: #{$snl-grey};
+}
+
+.bg-blue {
+  background-color: #{$snl-blue};
+}
+
+.bg-amber {
+  background-color: #{$snl-amber};
+}
+
+.bg-maroon {
+  background-color: #{$snl-crimson-600};
+}
+
+.bg-green {
+  background-color: #{$snl-green};
+}
+
+.bg-grey {
+  background-color: #{$snl-grey};
+}
+
+.bg-goldenrod {
+  background-color: goldenrod;
+}

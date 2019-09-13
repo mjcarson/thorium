@@ -1,0 +1,18 @@
+[book]
+authors = ["Michael Carson"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Thorium"
+create-missing = true
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.playground]
+editable = true

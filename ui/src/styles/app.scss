@@ -1,0 +1,182 @@
+@use './scaling';
+/*
+$grid-breakpoints: (
+  xs: 0,
+  sm: 576px,
+  md: 768px,
+  lg: 992px,
+  xl: 1200px,
+  xxl: 1400px
+);
+*/
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
+.page {
+  padding: 4rem 1rem 0.5rem 0rem;
+  flex: 11 !important;
+  justify-content: center !important;
+  align-items: center !important;
+}
+
+.body {
+  color: var(--thorium-text);
+  background-color: var(--thorium-body-bg);
+  min-height: 100vh;
+  // removed this to enable position: sticky
+  // this is needed for the results table of contents
+  // overflow-x: hidden;
+}
+
+.panel {
+  color: var(--thorium-text);
+  background-color: var(--thorium-panel-bg);
+}
+
+.nav-panel {
+  color: var(--thorium-nav-text);
+  background-color: var(--thorium-nav-panel-bg);
+}
+
+// use this for overriding primary panel color for things like form fields
+// directly on the body color
+.secondary-panel {
+  color: var(--thorium-secondary-text);
+  background-color: var(--thorium-secondary-panel-bg);
+}
+
+.body-panel {
+  color: var(--thorium-text);
+  background-color: var(--thorium-body-bg);
+}
+
+.text {
+  // this is setup to override other styling
+  color: var(--thorium-text) !important;
+}
+
+.secondary-text {
+  // this is setup to override other styling
+  color: var(--thorium-secondary-text) !important;
+}
+
+.loading {
+  color: var(--thorium-secondary-text);
+}
+
+.no-decoration {
+  text-decoration: none;
+}
+
+.no-border {
+  border: none;
+}
+
+.wrap {
+  flex-wrap: wrap;
+}
+
+.auto-width {
+  width: auto;
+}
+
+.main-col {
+  flex: 4 !important;
+}
+
+.side-col {
+  flex: 1 !important;
+}
+
+// profile container
+.profile {
+  width: 50rem;
+  border: none;
+  background-color: var(--thorium-body-bg);
+}
+
+// login container
+.login {
+  max-width: 25rem;
+}
+
+// system stats container
+.stats {
+  max-width: 900px;
+}
+
+// system settings container
+.settings {
+  max-width: 600px;
+}
+
+// login page banner
+.banner {
+  max-width: 50rem;
+  white-space: pre-wrap;
+  color: var(--thorium-text);
+}
+
+// generic width classes
+.auto-width {
+  width: auto !important;
+}
+
+.near-full-width {
+  width: 95% !important;
+}
+
+.full-width {
+  width: 100% !important;
+}
+
+.full-min-width {
+  min-width: 100% !important;
+}
+
+// no bullet unordered lists
+.ul.no-bullets {
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
+}
+
+.alert {
+  a {
+    color: var(--bs-alert-color);
+  }
+}
+
+.alert {
+  --bs-alert-margin-bottom: 0rem;
+}
+
+.viewport-center {
+  min-height: 320px;
+  height: 100vh;
+  margin-top: -4.5rem;
+}
+
+// 1400px
+//@media (max-width: scaling.$xxl) { ... }
+
+// 1200px
+//@media (max-width: scaling.$xl) { ... }
+
+// 992px
+//@media (max-width: scaling.$lg) { ... }
+
+// 768px
+//@media (max-width: scaling.$md) { ... }
+
+// 576px
+//@media (max-width: scaling.$sm) { ... }

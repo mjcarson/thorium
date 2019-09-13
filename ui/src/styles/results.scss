@@ -1,0 +1,77 @@
+@use './scaling';
+/*
+$grid-breakpoints: (
+  xs: 0,
+  sm: 576px,
+  md: 768px,
+  lg: 992px,
+  xl: 1200px,
+  xxl: 1400px
+);
+*/
+
+.results-col {
+  flex: 8;
+}
+
+.results-toc-col {
+  flex: 2;
+}
+
+.results-toc {
+  // float the table of contents when scrolling
+  position: sticky;
+  top: 5rem;
+  left: 3rem;
+  overflow-y: auto;
+  height: calc(100vh - 50px);
+}
+
+// position of tool results needs to be relative to allow
+// for scrolling within the tool results card
+.results-content {
+  position: relative;
+  max-width: 74vw;
+}
+
+// table of contents entry for tool results
+.results-toc-item {
+  font-size: 1rem;
+  text-transform: uppercase;
+}
+
+// coloring for results TOC items whose result IS in view
+.results-toc-item .selected {
+  color: var(--thorium-text) !important;
+  text-decoration: none;
+}
+
+// coloring for results TOC items whose result IS NOT in view
+.results-toc-item .unselected {
+  color: var(--thorium-secondary-text) !important;
+  text-decoration: none;
+}
+
+// 1400px
+//@media (max-width: scaling.$xxl) { ... }
+
+// 1200px
+//@media (max-width: scaling.$xl) { ... }
+
+// 992px
+@media (max-width: scaling.$lg) {
+  // hide results TOC for smaller page sizes
+  .results-toc {
+    display: none;
+  }
+
+  .results-content {
+    max-width: 100%;
+  }
+}
+
+// 768px
+//@media (max-width: scaling.$md) { ... }
+
+// 576px
+//@media (max-width: scaling.$sm) { ... }

@@ -1,0 +1,119 @@
+#!/bin/bash
+alias kubectl="minikube kubectl --"
+
+##### Helm
+curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+chmod 700 get_helm.sh
+./get_helm.sh
+rm ./get_helm.sh
+
+###### Redis
+kubectl apply -k ./infrastructure/redis
+
+###### Elastic
+kubectl apply -f https://download.elastic.co/downloads/eck/2.13.0/crds.yaml
+kubectl apply -f https://download.elastic.co/downloads/eck/2.13.0/operator.yaml
+kubectl rollout status --watch --timeout=600s statefulset/elastic-operator -n elastic-system
+kubectl apply -k infrastructure/elastic
+
+####### Scylla
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.15.0/cert-manager.yaml
+kubectl wait --for condition=established crd/certificates.cert-manager.io crd/issuers.cert-manager.io
+sleep 30
+kubectl -n cert-manager rollout status deployment.apps/cert-manager-webhook -w
+sleep 30
+kubectl apply -f infrastructure/scylla/operator.yaml
+kubectl wait --for condition=established crd/scyllaclusters.scylla.scylladb.com
+kubectl -n scylla-operator rollout status deployment.apps/scylla-operator -w
+sleep 30
+kubectl apply -f infrastructure/scylla/cluster.yaml
+sleep 30
+kubectl rollout status --watch --timeout=600s statefulset/scylla-us-east-1-us-east-1a -n scylla
+kubectl create cm scylla-config --from-file infrastructure/scylla/scylla.yaml -n scylla
+sleep 10
+kubectl rollout restart -n scylla statefulset.apps/scylla-us-east-1-us-east-1a
+sleep 10
+kubectl rollout status --watch --timeout=600s statefulset/scylla-us-east-1-us-east-1a -n scylla
+sleep 30
+# configure scylla, this will eventually be done by the operator
+kubectl -n scylla exec -i --tty=false pod/scylla-us-east-1-us-east-1a-0 -- /bin/bash << EOF
+cqlsh 'scylla-us-east-1-us-east-1a-0.scylla.svc.cluster.local' -u cassandra -p cassandra -e "CREATE ROLE admin with SUPERUSER = true"
+cqlsh "scylla-us-east-1-us-east-1a-0.scylla.svc.cluster.local" -u cassandra -p cassandra -e "CREATE ROLE thorium WITH PASSWORD = 'INSECURE_DEV_PASSWORD' AND LOGIN = true"
+cqlsh 'scylla-us-east-1-us-east-1a-0.scylla.svc.cluster.local' -u cassandra -p cassandra -e "GRANT admin to thorium"
+cqlsh 'scylla-us-east-1-us-east-1a-0.scylla.svc.cluster.local' -u cassandra -p cassandra -e "CREATE KEYSPACE IF NOT EXISTS thorium WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1}"
+cqlsh 'scylla-us-east-1-us-east-1a-0.scylla.svc.cluster.local' -u cassandra -p cassandra -e "GRANT ALL ON KEYSPACE thorium TO thorium"
+cqlsh 'scylla-us-east-1-us-east-1a-0.scylla.svc.cluster.local' -u cassandra -p cassandra -e "GRANT CREATE ON ALL KEYSPACES TO thorium"
+cqlsh 'scylla-us-east-1-us-east-1a-0.scylla.svc.cluster.local' -u thorium -p INSECURE_DEV_PASSWORD -e "DROP ROLE cassandra"
+EOF
+
+###### Minio
+kubectl apply -k infrastructure/minio
+
+####### Jaeger
+# create our namespace
+kubectl create namespace jaeger
+# deploy jaeger
+kubectl apply -f infrastructure/jaeger/service.yml -n jaeger
+kubectl apply -f infrastructure/jaeger/deployment.yml -n jaeger
+
+####### Kubegres
+kubectl apply -f https://raw.githubusercontent.com/reactive-tech/kubegres/v1.18/kubegres.yaml
+kubectl rollout status --watch --timeout=600s deployment.apps/kubegres-controller-manager -n kubegres-system
+
+####### Quickwit
+kubectl create ns quickwit
+kubectl apply -f infrastructure/quickwit/postgres-secret.yml
+kubectl apply -f infrastructure/quickwit/postgres-cluster.yml
+sleep 30
+kubectl rollout status --watch --timeout=600s statefulset/postgres-1 -n quickwit
+sleep 30
+kubectl -n quickwit exec -it pod/postgres-1-0 -- /bin/bash -c "PGPASSWORD=INSECURE_DEV_PASSWORD su postgres -c \"createdb quickwit-metastore\""
+helm repo add quickwit https://helm.quickwit.io
+sleep 10
+helm repo update quickwit
+helm install quickwit quickwit/quickwit -n quickwit -f infrastructure/quickwit/values.yml
+
+###### Make sure we are all deployed
+#kubectl rollout status --watch --timeout=600s statefulset.apps/elastic-es-default -n elastic-system
+kubectl rollout status --watch --timeout=600s statefulset/scylla-us-east-1-us-east-1a -n scylla
+kubectl rollout status --watch --timeout=600s statefulset.apps/minio -n minio
+kubectl rollout status --watch --timeout=600s statefulset.apps/redis -n redis
+kubectl rollout status --watch --timeout=600s statefulset/postgres-1 -n quickwit
+kubectl rollout status --watch --timeout=600s statefulset.apps/quickwit-searcher -n quickwit
+kubectl rollout status --watch --timeout=600s statefulset.apps/quickwit-indexer -n quickwit
+
+
+### Configure Elastic Index/Role/User
+export ESPASS=$(kubectl get secret -n elastic-system elastic-es-elastic-user -o=jsonpath='{.data.elastic}' | base64 --decode; echo)
+kubectl -n elastic-system exec -i --tty=false pod/elastic-es-default-0 -- /bin/bash << EOF
+# Create index
+curl -k -X PUT -u elastic:$ESPASS "https://localhost:9200/thorium?pretty"
+# Create Thorium role
+curl -k -X POST -u elastic:$ESPASS "https://localhost:9200/_security/role/thorium?pretty" -H 'Content-Type: application/json' -d'
+{
+  "indices": [
+    {
+      "names": ["results"],
+      "privileges": ["all"]
+    }
+  ]
+}
+'
+curl -k -X POST -u elastic:$ESPASS "https://localhost:9200/_security/user/thorium?pretty" -H 'Content-Type: application/json' -d'
+{
+  "password" : "INSECURE_DEV_PASSWORD",
+  "roles" : ["thorium"],
+  "full_name" : "Thorium",
+  "email" : "<Thorium Entity account or dummy email>"
+}
+'
+EOF
+
+###### Thorium
+kubectl create ns thorium
+kubectl create cm banner --from-file=../ui/src/assets/banner.txt -n thorium
+kubectl create secret docker-registry registry-token -n thorium --from-file=".dockerconfigjson=.dockerconfigjson"
+kubectl apply -f infrastructure/thorium/rbac.yml
+kubectl apply -f infrastructure/thorium/operator.yml -n thorium
+kubectl apply -f infrastructure/thorium/ingress.yml -n thorium
+kubectl rollout status --watch --timeout=600s deployment.apps/operator -n thorium

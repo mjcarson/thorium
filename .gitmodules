@@ -1,0 +1,3 @@
+[submodule "ui/mitre_tags/mitreattack-python"]
+	path = ui/mitre_tags/mitreattack-python
+	url = https://github.com/mitre-attack/mitreattack-python.git

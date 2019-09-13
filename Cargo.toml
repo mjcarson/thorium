@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+
+members = [
+  "api",
+  "scaler",
+  "agent",
+  "thorctl",
+  "reactor",
+  "event-handler",
+  "thoradm",
+  "search-streamer",
+  "operator", "thorium-derive",
+]
+
+[workspace.package]
+version = "1.0.0"
+authors = ["mcarson <mcarson@sandia.gov>", "gmbaker <gmbaker@sandia.gov>", "jehamza <jehamza@sandia.gov>"]
+edition = "2021"
+
+[profile.profiling]
+inherits = "release"
+debug = true

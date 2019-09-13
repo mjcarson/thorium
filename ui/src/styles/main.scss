@@ -1,0 +1,47 @@
+// spacing needs to be set before bootstrap is imported
+@use 'sass:map';
+@use './colors';
+
+// we explicitly overwrite bootstrap spacing to enable more margin/padding options
+@use 'bootstrap/scss/bootstrap' with (
+  $spacer: 1rem,
+  $spacers: (
+    0: 0,
+    1: 0.1rem,
+    2: 0.25rem,
+    3: 0.5rem,
+    4: 1rem,
+    5: 2rem,
+    6: 3rem,
+    7: 4rem,
+    8: 5rem,
+    9: 6rem,
+    10: 7rem,
+  )
+);
+
+@use './app';
+@use './accordion';
+@use './browsing';
+@use './buttons';
+@use './comments';
+@use './details';
+@use './groups';
+@use './icons';
+@use './image';
+@use './logs';
+@use './navigation';
+@use './overlays';
+@use './overrides';
+@use './pipelines';
+@use './profile';
+@use './reactions';
+@use './results';
+@use './related';
+@use './scaling';
+@use './search';
+@use './tags';
+@use './titles';
+@use './tool';
+@use './upload';
+@use './users';

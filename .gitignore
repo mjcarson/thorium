@@ -1,0 +1,11 @@
+book
+keys.yml
+*.txt
+target
+thorium.yml
+*.bak
+binaries
+built
+.vscode
+Cargo.lock
+.DS_Store
