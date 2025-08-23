@@ -1,12 +1,11 @@
 //! Setup elastic
 
-use elasticsearch::auth::Credentials;
-use elasticsearch::cert::CertificateValidation;
-use elasticsearch::http::transport::{SingleNodeConnectionPool, TransportBuilder};
 use elasticsearch::Elasticsearch;
+use elasticsearch::auth::Credentials;
+use elasticsearch::http::transport::{SingleNodeConnectionPool, TransportBuilder};
 use url::Url;
 
-use crate::{setup, Conf};
+use crate::{Conf, setup};
 /// Setup a connection pool to the elastic search backend
 ///
 /// # Arguments
@@ -33,10 +32,12 @@ pub async fn elastic(config: &Conf) -> Elasticsearch {
     // get our username and password
     let username = config.elastic.username.clone();
     let password = config.elastic.password.clone();
+    // get our configured elastic cert validation settings
+    let validation = config.elastic.to_cert_validation().await;
     // build our transport object for elastic
     let transport = TransportBuilder::new(pool)
         .auth(Credentials::Basic(username, password))
-        .cert_validation(CertificateValidation::None)
+        .cert_validation(validation)
         .build()
         .expect("Failed to setup transport object to Elastic");
     Elasticsearch::new(transport)

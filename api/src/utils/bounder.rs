@@ -1,9 +1,11 @@
 //! Bounds checking utilities for user input to Thorium
 
-use std::collections::HashMap;
-
+use axum::extract::multipart::Field;
 use regex::Regex;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::str::FromStr;
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -113,6 +115,46 @@ pub fn file_name(input: &str, name: &'static str, min: usize, max: usize) -> Res
         ));
     }
     Ok(())
+}
+
+/// Validate a path in a multipart form data field
+///
+/// # Arguments
+///
+/// * `field` - The field to get the file name from
+/// * `name` - The name fo the field to use in error messages
+pub fn multipart_path(field: &Field<'_>, name: &str) -> Result<String, ApiError> {
+    // try to get the name for this file
+    match field.file_name() {
+        Some(file_name) => {
+            // convert our file name to a path to validate it
+            let path = PathBuf::from_str(file_name)?;
+            // validate this file name is not an absolute path
+            if path.is_absolute() {
+                return bad!(format!("{name} paths cannot be an absolute: {path:?}"));
+            }
+            // make sure this path not contain a component with just '.'s
+            for component in path.components() {
+                // convert this component to an os str
+                match component.as_os_str().to_str() {
+                    Some(comp_str) => {
+                        if comp_str.chars().all(|chr| chr == '.') {
+                            return bad!(format!(
+                                "{name} paths cannot have components that have .. in them: {path:?}"
+                            ));
+                        }
+                    }
+                    None => {
+                        return bad!(format!("{name} paths must be valid utf-8"));
+                    }
+                }
+            }
+            // return our validated file name
+            Ok(file_name.to_owned())
+        }
+        // use a uuid as file name since we don't have one
+        None => Ok(Uuid::new_v4().to_string()),
+    }
 }
 
 /// Bounds check a JsonValue that should be cast as a string

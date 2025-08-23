@@ -1,10 +1,10 @@
 use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_sdk_s3::{
+    Client,
     config::Credentials,
     types::{BucketLocationConstraint, CreateBucketConfiguration},
-    Client,
 };
-use thorium::{conf::S3, Error};
+use thorium::{Error, conf::S3};
 
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::create_bucket::CreateBucketError;

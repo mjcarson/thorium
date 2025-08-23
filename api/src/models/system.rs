@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::models::conversions;
-use crate::{matches_adds, matches_removes, matches_update};
+use crate::{Conf, matches_adds, matches_removes, matches_update};
 
 use super::{
     Group, GroupStats, Image, ImageScaler, InvalidEnum, Pipeline, Requisition, Resources, User,
@@ -134,7 +134,7 @@ impl SystemStats {
 
     /// Gets this users image requests sorted from small to large
     #[must_use]
-    pub fn users_jobs(&self) -> SpawnMap {
+    pub fn users_jobs(&self) -> SpawnMap<'_> {
         // build a map of all users jobs
         let mut map: SpawnMap = HashMap::default();
         // crawl over each group
@@ -832,6 +832,97 @@ impl NodeListParams {
         // add our scalers
         self.scalers.extend(scaler);
         self
+    }
+
+    /// Add the clusters in a config for configured scalers
+    ///
+    /// # Arguments
+    ///
+    /// * `scaler` - The scaler to add clusters for
+    /// * `config` - The Thorium config
+    pub fn clusters_from_config(mut self, config: &Conf) -> Self {
+        // add the clusters for our scalers from our config
+        for scaler in &self.scalers {
+            // add the right cluster names for each scaler
+            match *scaler {
+                ImageScaler::K8s => {
+                    // get our k8s cluster names or aliased names
+                    for (name, cluster) in &config.thorium.scaler.k8s.clusters {
+                        // use either our cluster name or our alias
+                        match &cluster.alias {
+                            Some(alias) => self.clusters.push(alias.clone()),
+                            None => self.clusters.push(name.clone()),
+                        };
+                    }
+                }
+                ImageScaler::BareMetal => {
+                    // get our bare metal cluster names
+                    let names = config.thorium.scaler.bare_metal.clusters.keys();
+                    // add in our bare metal clusters
+                    self.clusters.extend(names.cloned());
+                }
+                ImageScaler::Windows => {
+                    // get our windows cluster names
+                    let names = config.thorium.scaler.windows.clusters.iter();
+                    // add in our windows clusters
+                    self.clusters.extend(names.cloned());
+                }
+                ImageScaler::Kvm => {
+                    // get our kvm cluster names
+                    let names = config.thorium.scaler.kvm.clusters.keys();
+                    // add in our kvm clusters
+                    self.clusters.extend(names.cloned());
+                }
+                // The external scaler has no clusters
+                ImageScaler::External => (),
+            }
+        }
+        self
+    }
+
+    /// Add the clusters in a config for configured scalers
+    ///
+    /// # Arguments
+    ///
+    /// * `scaler` - The scaler to add clusters for
+    /// * `config` - The Thorium config
+    pub fn clusters_from_config_ref(&mut self, config: &Conf) {
+        // add the clusters for our scalers from our config
+        for scaler in self.scalers.clone() {
+            // add the right cluster names for each scaler
+            match scaler {
+                ImageScaler::K8s => {
+                    // get our k8s cluster names or aliased names
+                    for (name, cluster) in &config.thorium.scaler.k8s.clusters {
+                        // use either our cluster name or our alias
+                        match &cluster.alias {
+                            Some(alias) => self.clusters.push(alias.clone()),
+                            None => self.clusters.push(name.clone()),
+                        };
+                    }
+                }
+                ImageScaler::BareMetal => {
+                    // get our bare metal cluster names
+                    let names = config.thorium.scaler.bare_metal.clusters.keys();
+                    // add in our bare metal clusters
+                    self.clusters.extend(names.cloned());
+                }
+                ImageScaler::Windows => {
+                    // get our windows cluster names
+                    let names = config.thorium.scaler.windows.clusters.iter();
+                    // add in our windows clusters
+                    self.clusters.extend(names.cloned());
+                }
+                ImageScaler::Kvm => {
+                    // get our kvm cluster names
+                    let names = config.thorium.scaler.kvm.clusters.keys();
+                    // add in our kvm clusters
+                    self.clusters.extend(names.cloned());
+                }
+                // The external scaler has no clusters
+                ImageScaler::External => (),
+            }
+        }
     }
 }
 
