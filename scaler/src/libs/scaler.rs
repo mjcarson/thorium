@@ -11,11 +11,11 @@ use thorium::models::system::WorkerRegistrationList;
 use thorium::models::{Deadline, ImageScaler, StageLogsAdd, WorkerDeleteMap, WorkerRegistration};
 use thorium::{Conf, Error, Thorium};
 use tokio::task::JoinHandle;
-use tracing::{event, instrument, span, Level};
+use tracing::{Level, event, instrument, span};
 
+use super::Cache;
 use super::schedulers::{self, Allocatable, ReqMap, Scheduler, WorkerDeletion};
 use super::tasks::{self, TaskResult, Tasks, ZombieChecker};
-use super::Cache;
 use crate::args::Args;
 use crate::from_now;
 use crate::libs::Spawned;
@@ -745,7 +745,7 @@ impl Scaler {
         // free any terminal resources
         if let Err(error) = self
             .allocatable
-            .free_deleted(&self.thorium, &failed, &terminal)
+            .free_deleted(&self.thorium, &failed, &terminal, &self.conf)
             .await
         {
             event!(Level::ERROR, error = error.msg());

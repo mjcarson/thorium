@@ -1,15 +1,15 @@
 //! The error class for the Thorium API
 
 use aws_sdk_s3::error::SdkError;
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use std::fmt;
-use tracing::{event, span, Level};
+use tracing::{Level, event, span};
 use utoipa::ToSchema;
 
-use crate::models::conversions::ConversionError;
 use crate::models::InvalidEnum;
+use crate::models::conversions::ConversionError;
 use crate::utils::trace;
 
 /// Builds an error http response
@@ -430,5 +430,18 @@ impl From<zip::result::ZipError> for ApiError {
 impl From<std::net::AddrParseError> for ApiError {
     fn from(error: std::net::AddrParseError) -> Self {
         bad_internal!(format!("Error parsing IP address: {error}"))
+    }
+}
+
+/// This conversion should never actually happen as its for infallible
+///
+/// But its better to have this code here then just unwrap in a bunch of places in case
+/// an infallible function becomes fallible in the future.
+impl From<std::convert::Infallible> for ApiError {
+    fn from(_infallible: std::convert::Infallible) -> Self {
+        // again this should never ever actually happen
+        bad_internal!(format!(
+            "Somehow you got an infallible function to error and get a gold, but sad, star!"
+        ))
     }
 }

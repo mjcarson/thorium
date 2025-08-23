@@ -1,24 +1,24 @@
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use futures::stream::{self, StreamExt};
 use futures::TryStreamExt;
+use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use scylla::errors::ExecutionError;
 use scylla::response::query_result::QueryResult;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use tracing::{instrument, span, Level, Span};
+use tracing::{Level, Span, instrument, span};
 use uuid::Uuid;
 
 use super::db::{self, SimpleCursorExt};
 use crate::models::backends::NotificationSupport;
 use crate::models::{
-    conversions, ApiCursor, Backup, Group, GroupRequest, GroupUsersRequest, HostPath,
-    HostPathWhitelistUpdate, Image, ImageBan, ImageBanKind, ImageBanUpdate, ImageKey, ImageScaler,
-    Node, NodeGetParams, NodeListLine, NodeListParams, NodeRegistration, NodeRow, NodeUpdate,
-    Pipeline, PipelineBan, PipelineBanKind, PipelineBanUpdate, PipelineKey, SystemInfo,
-    SystemSettings, SystemSettingsUpdate, SystemStats, User, VolumeTypes, Worker, WorkerDeleteMap,
-    WorkerRegistrationList, WorkerUpdate,
+    ApiCursor, Backup, Group, GroupRequest, GroupUsersRequest, HostPath, HostPathWhitelistUpdate,
+    Image, ImageBan, ImageBanKind, ImageBanUpdate, ImageKey, ImageScaler, Node, NodeGetParams,
+    NodeListLine, NodeListParams, NodeRegistration, NodeRow, NodeUpdate, Pipeline, PipelineBan,
+    PipelineBanKind, PipelineBanUpdate, PipelineKey, SystemInfo, SystemSettings,
+    SystemSettingsUpdate, SystemStats, User, VolumeTypes, Worker, WorkerDeleteMap,
+    WorkerRegistrationList, WorkerUpdate, conversions,
 };
 use crate::utils::{ApiError, Shared};
 use crate::{
@@ -615,7 +615,10 @@ impl Node {
         shared: &Shared,
     ) -> Result<ApiCursor<NodeListLine>, ApiError> {
         // if we don't have any clusters defined then add all known clusters
-        params.default_clusters(shared);
+        println!("pre_default -> {params:#?}");
+        params.default_expand(shared);
+        println!("post_default -> {params:#?}");
+        // either list nodes or get just the details for the nodes we have
         if params.nodes.is_empty() {
             // if we have no nodes specified, get a chunk of the node names list
             let scylla_cursor = db::system::list_nodes(params, shared).await?;
@@ -652,7 +655,10 @@ impl Node {
         shared: &Shared,
     ) -> Result<ApiCursor<Node>, ApiError> {
         // if we don't have any clusters defined then add all known clusters
-        params.default_clusters(shared);
+        println!("pre_default -> {params:#?}");
+        params.default_expand(shared);
+        println!("post_default -> {params:#?}");
+        // either list nodes or get just the details for the nodes we have
         if params.nodes.is_empty() {
             // if we don't have nodes, get a chunk of the node details list
             db::system::list_node_details(params, shared).await
@@ -837,37 +843,10 @@ impl NodeListParams {
     ///
     /// * `shared` - Shared Thorium objects
     pub fn default_expand(&mut self, shared: &Shared) {
-        // expand our clusters
-        self.default_clusters(shared);
         // expand our scalers
         self.default_scalers();
-    }
-
-    /// if we don't have any clusters then use all the ones we know about
-    ///
-    /// # Arguments
-    ///
-    /// * `shared` - Shared Thorium objects
-    pub fn default_clusters(&mut self, shared: &Shared) {
-        // if we dont have clusters defined then add in all known ones
-        if self.clusters.is_empty() {
-            // get our k8s cluster names or aliased names
-            for (name, cluster) in &shared.config.thorium.scaler.k8s.clusters {
-                // use either our cluster name or our alias
-                match &cluster.alias {
-                    Some(alias) => self.clusters.push(alias.clone()),
-                    None => self.clusters.push(name.clone()),
-                };
-            }
-            // get our bare metal cluster names
-            let names = shared.config.thorium.scaler.bare_metal.clusters.keys();
-            // add in our bare metal clusters
-            self.clusters.extend(names.cloned());
-            // get our windows cluster names
-            let names = shared.config.thorium.scaler.windows.clusters.iter();
-            // add in our windows clusters
-            self.clusters.extend(names.cloned());
-        }
+        // add the clusters for this scaler
+        self.clusters_from_config_ref(&shared.config);
     }
 
     /// If we don't have any scalers then use all the ones we know about

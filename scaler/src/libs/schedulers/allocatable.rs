@@ -3,16 +3,16 @@
 //! This can be resources across multiple clusters
 
 use chrono::prelude::*;
+use hashbrown::HashMap;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
-use hashbrown::HashMap;
 use thorium::conf::{FairShareWeights, IsRestricted, WorkerRestrictions};
 use thorium::models::{
     Deadline, Image, ImageScaler, NodeListParams, Pools, Requisition, Resources, SpawnLimits,
     SpawnMap, SystemSettings, WorkerDeleteMap,
 };
 use thorium::{Conf, Error, Thorium};
-use tracing::{event, instrument, Level, Span};
+use tracing::{Level, Span, event, instrument};
 
 mod pool;
 
@@ -954,13 +954,18 @@ impl Allocatable {
     ///
     /// * `thorium` - A client for the Thorium API
     /// * `failed` - The workers that have failed
+    /// * `config` - The thorium config
     async fn prune_failed_workers(
         &mut self,
         thorium: &Thorium,
         failed: &HashSet<String>,
+        config: &Conf,
     ) -> Result<HashSet<String>, Error> {
         // scan our nodes 50 at at ime
-        let params = NodeListParams::default().scaler(self.scaler_type).limit(50);
+        let params = NodeListParams::default()
+            .scaler(self.scaler_type)
+            .clusters_from_config(config)
+            .limit(50);
         // get info on the current Thorium nodes
         let mut cursor = thorium.system.list_node_details(&params).await?;
         // assume we have at least 300 workers
@@ -1016,15 +1021,17 @@ impl Allocatable {
     /// * `thorium` - A client for the Thorium API
     /// * `failed` - The workers that have failed
     /// * `deleted` - The workers that were deleted
+    /// * `config` - The thorium config
     #[instrument(name = "Allocatable::free_deleted", skip_all)]
     pub async fn free_deleted(
         &mut self,
         thorium: &Thorium,
         failed: &HashSet<String>,
         deleted: &HashSet<String>,
+        config: &Conf,
     ) -> Result<(), Error> {
         // get all currently alive workers
-        let alive = self.prune_failed_workers(thorium, failed).await?;
+        let alive = self.prune_failed_workers(thorium, failed, config).await?;
         // track the resources we have freed
         let mut freed = PoolFrees::default();
         // swap our old cluster tree out for a new one

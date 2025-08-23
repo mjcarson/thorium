@@ -4,8 +4,8 @@ use crossbeam::channel::Sender;
 use path_clean::PathClean;
 use std::path::PathBuf;
 use thorium::{
-    models::{ArgStrategy, GenericJob, GenericJobKwargs, GenericJobOpts, Image, KwargDependency},
     Error,
+    models::{ArgStrategy, GenericJob, GenericJobKwargs, GenericJobOpts, Image, KwargDependency},
 };
 use tracing::instrument;
 
@@ -158,17 +158,22 @@ impl Cmd {
                     wipe = false;
                     // expand this arg if its a joint arg
                     let (key, value) = Self::expander(arg);
-                    // inject value source docker config
-                    self.built.push(key.clone());
                     // check if this arg should be overridden
                     if self.kwargs.contains_key(&key) {
                         // enable wipe until hit another kwarg
                         wipe = true;
                         // override value if one was set
-                        let mut new_value = self.kwargs.remove(&key).unwrap();
-                        // override value with our own value
-                        self.built.append(&mut new_value);
+                        let new_values = self.kwargs.remove(&key).unwrap();
+                        // for each of our values add our kwarg
+                        for new_value in new_values {
+                            // add our key
+                            self.built.push(key.clone());
+                            // override value with our own value
+                            self.built.push(new_value);
+                        }
                     } else if value.is_some() {
+                        // add our key
+                        self.built.push(key.clone());
                         // push value from docker info
                         self.built.push(value.unwrap());
                     }
@@ -183,9 +188,14 @@ impl Cmd {
             }
         }
         // append all left over custom kwargs args if any were set
-        for (key, mut values) in self.kwargs.drain() {
-            self.built.push(key);
-            self.built.append(&mut values);
+        for (key, values) in self.kwargs.drain() {
+            // add our kwargs
+            for value in values {
+                // add our key
+                self.built.push(key.clone());
+                // add our value
+                self.built.push(value);
+            }
         }
     }
 
@@ -419,11 +429,18 @@ mod tests {
             samples: vec!["sample1".into(), "sample2".into()],
             ephemeral: vec!["file.txt".into(), "other.txt".into()],
             parent_ephemeral: HashMap::default(),
-            repos: vec![RepoDependency {
-                url: "github.com/curl/curl".into(),
-                commitish: Some("master".into()),
-                kind: Some(CommitishKinds::Branch),
-            }],
+            repos: vec![
+                RepoDependency {
+                    url: "github.com/curl/curl".into(),
+                    commitish: Some("main".into()),
+                    kind: Some(CommitishKinds::Branch),
+                },
+                RepoDependency {
+                    url: "github.com/notcurl/notcurl".into(),
+                    commitish: Some("main".into()),
+                    kind: Some(CommitishKinds::Branch),
+                },
+            ],
             trigger_depth: None,
         }
     }
@@ -750,6 +767,7 @@ mod tests {
                 "corn.py",
                 "--inputs",
                 "sample1",
+                "--inputs",
                 "sample2"
             )
         );
@@ -796,6 +814,7 @@ mod tests {
                 "pos2",
                 "--inputs",
                 "sample1",
+                "--inputs",
                 "sample2"
             )
         );
@@ -840,7 +859,9 @@ mod tests {
                 "corn.py",
                 "--inputs",
                 "sample0",
+                "--inputs",
                 "sample1",
+                "--inputs",
                 "sample2"
             )
         );
@@ -974,7 +995,7 @@ mod tests {
 
     /// Test a barebones job with samples but no overlays
     #[tokio::test]
-    async fn empty_ephemnerals_kwargs() {
+    async fn empty_ephemerals_kwargs() {
         // create a temporary log channel
         let (mut logs_tx, _logs_rx) = crossbeam::channel::unbounded::<String>();
         // generate an image and set the kwarg to pass in samples with
@@ -1009,6 +1030,7 @@ mod tests {
                 "corn.py",
                 "--ephemeral",
                 "file.txt",
+                "--ephemeral",
                 "other.txt"
             )
         );
@@ -1055,6 +1077,7 @@ mod tests {
                 "pos2",
                 "--ephemeral",
                 "file.txt",
+                "--ephemeral",
                 "other.txt"
             )
         );
@@ -1099,7 +1122,9 @@ mod tests {
                 "corn.py",
                 "--ephemeral",
                 "first.txt",
+                "--ephemeral",
                 "file.txt",
+                "--ephemeral",
                 "other.txt"
             )
         );
@@ -1115,7 +1140,7 @@ mod tests {
         // generate a job
         let mut job = generate_job();
         // build stage args with just kwargs
-        job.args = job.args.kwarg("--1", vec!["1"]);
+        job.args = job.args.kwarg("--nums", vec!["1", "2"]);
         // make this job a generator
         job.generator = true;
         let cmd = Cmd::new(
@@ -1149,8 +1174,10 @@ mod tests {
         let args = vec_string!(
             "/usr/bin/python3",
             "corn.py",
-            "--1",
+            "--nums",
             "1",
+            "--nums",
+            "2",
             "--reaction",
             &reaction,
             "--job",
@@ -1355,7 +1382,9 @@ mod tests {
                 "pos2",
                 "--inputs",
                 "sample0",
+                "--inputs",
                 "sample1",
+                "--inputs",
                 "sample2",
                 "--corn",
                 "--beans"
@@ -1463,7 +1492,9 @@ mod tests {
                 "pos2",
                 "--ephemeral",
                 "first.txt",
+                "--ephemeral",
                 "file.txt",
+                "--ephemeral",
                 "other.txt",
                 "--corn",
                 "--beans"
@@ -1601,8 +1632,12 @@ mod tests {
                 "sample2",
                 "--image1-results",
                 "/tmp/thorium/testing/prior-results/sample1/image1",
+                "--image1-results",
                 "/tmp/thorium/testing/prior-results/sample2/image1",
-                "/tmp/thorium/testing/prior-results/github.com/curl/curl/image1"
+                "--image1-results",
+                "/tmp/thorium/testing/prior-results/github.com/curl/curl/image1",
+                "--image1-results",
+                "/tmp/thorium/testing/prior-results/github.com/notcurl/notcurl/image1"
             )
         );
         // remove the test directory
