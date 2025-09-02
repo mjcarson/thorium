@@ -1583,11 +1583,6 @@ impl Default for Events {
     }
 }
 
-/// Helps serde default the S3 region
-fn default_s3_region() -> String {
-    String::new()
-}
-
 /// The settings for saving/Carting files to the backend
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 pub struct S3 {
@@ -1598,8 +1593,12 @@ pub struct S3 {
     /// The endpoint S3c should talk to
     pub endpoint: String,
     /// The region our s3 client should use
-    #[serde(default = "default_s3_region")]
     pub region: String,
+    /// Specify the location constraint
+    pub location_constraint: Option<String>,
+    /// Force path style adressing for buckets
+    #[serde(default)]
+    pub force_path_style: bool,
 }
 
 /// Helps serde default the max size an incoming json body can be in mebibytes
