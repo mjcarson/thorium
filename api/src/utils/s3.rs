@@ -4,26 +4,26 @@ use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_sdk_s3::primitives::SdkBody;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::{
-    config::Credentials, operation::head_object::HeadObjectError, primitives::ByteStream, Client,
+    Client, config::Credentials, operation::head_object::HeadObjectError, primitives::ByteStream,
 };
 use axum::extract::multipart::Field;
 use base64::Engine as _;
-use bytes::{buf::Buf, BytesMut};
+use bytes::{BytesMut, buf::Buf};
 use cart_rs::{CartStreamManual, UncartStream};
 use data_encoding::HEXLOWER;
-use generic_array::{typenum::U16, GenericArray};
+use generic_array::{GenericArray, typenum::U16};
 use md5::Md5;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::io::Write;
-use tracing::{event, instrument, Level};
+use tracing::{Level, event, instrument};
 use uuid::Uuid;
 use zip::unstable::write::FileOptionsExt;
 use zip::write::ZipWriter;
 
 use super::{ApiError, Shared};
 use crate::models::ZipDownloadParams;
-use crate::{bad, unavailable, Conf};
+use crate::{Conf, bad, unavailable};
 
 /// A tuple of hashes (sha256, sha1, md5)
 pub type Hashes = (String, String, String);
@@ -166,7 +166,7 @@ impl S3Client {
             .endpoint_url(&conf.endpoint)
             .region(aws_types::region::Region::new(conf.region.clone()))
             .credentials_provider(SharedCredentialsProvider::new(creds))
-            .force_path_style(true)
+            .force_path_style(conf.force_path_style)
             .build();
         // build our s3 client
         let client = Client::from_conf(s3_config);

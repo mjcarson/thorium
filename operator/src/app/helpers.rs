@@ -44,10 +44,16 @@ pub fn get_thorium_host(meta: &ClusterMeta, url: Option<&String>) -> String {
 /// * `bucket_name` - Name of bucket to create
 pub async fn create_bucket(config: &S3, client: &Client, bucket_name: &str) -> Result<(), Error> {
     // build out the bucket creation config
-    let constraint = BucketLocationConstraint::from(config.region.clone().as_str());
-    let bucket_config = CreateBucketConfiguration::builder()
-        .location_constraint(constraint)
-        .build();
+    let mut bucket_config = CreateBucketConfiguration::builder();
+    // if we have a location contraint set then use it
+    if let Some(constraint) = &config.location_constraint {
+        // build our constraint
+        let constraint = BucketLocationConstraint::from(constraint.as_str());
+        // set our constraint
+        bucket_config = bucket_config.location_constraint(constraint);
+    }
+    // build our bucket config
+    let bucket_config = bucket_config.build();
     // attempt to create the bucket
     let response = client
         .create_bucket()
