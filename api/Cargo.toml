@@ -7,6 +7,10 @@ edition = { workspace = true }
 description = "The Thorium API and a client for it."
 license-file = "../LICENSE"
 
+[[bin]]
+name = "thorium"
+path = "src/main.rs"
+
 [lib]
 name = "thorium"
 
