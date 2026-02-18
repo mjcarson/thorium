@@ -378,8 +378,16 @@ impl Allocatable {
                 // check if this image has any restrictions
                 let nodes = match self.restrictions.check(cluster_name, image) {
                     IsRestricted::No => None,
-                    IsRestricted::Yes(nodes) => Some(nodes),
-                    IsRestricted::WrongCluster => continue,
+                    IsRestricted::Yes(nodes) => {
+                        println!(
+                            "Allocatable::allocate_cluster_helper:0 - restricted to nodees: {nodes:?}"
+                        );
+                        Some(nodes)
+                    }
+                    IsRestricted::WrongCluster => {
+                        println!("Allocatable::allocate_cluster_helper:1 - wrong cluster!");
+                        continue;
+                    }
                 };
                 // try to consume the resources for this image on a node
                 if let Some(node) = cluster.allocate_node(image, nodes, pool) {
@@ -605,8 +613,10 @@ impl Allocatable {
         // log how many deadlines we retrieved
         let prefilter = deadlines.len();
         event!(Level::INFO, deadlines = prefilter);
+        println!("Deadlines -> {deadlines:#?}");
         // remove any deadlines we can't spawn due to missing cache info or bans
         deadlines.retain(|dl| self.bans.filter_deadlines(cache, dl));
+        println!("After Filter -> {deadlines:#?}");
         // if we filtered any deadlines then log it
         if prefilter > deadlines.len() {
             // determine how many deadlines were filtered
@@ -691,6 +701,9 @@ impl Allocatable {
                         // decrement our count
                         *count -= 1;
                         // skip this deadline
+                        println!(
+                            "deadline_allocation:0 - we already spawned a worker for this -> {count}"
+                        );
                         continue;
                     }
                     // we have no longer spawned a worker to meet this deadline
@@ -708,10 +721,15 @@ impl Allocatable {
                     // remove this req from our fair share counts since we have consumed them all
                     self.fair_share_counts.remove(&req);
                 }
+                println!("deadline_allocation:1 - we are already meeting this through fairshare");
                 continue;
             }
             // get this jobs image info
             let Some(image) = cache.get_image(&req.group, &req.stage, &span) else {
+                println!(
+                    "deadline_allocation:2 - we don't have this image in cache? - {} , {}",
+                    req.group, req.stage
+                );
                 continue;
             };
             // try to allocate resources for this deadline
@@ -725,6 +743,9 @@ impl Allocatable {
                 // add this new worker allocation to our change map
                 spawns_entry.push(spawned);
             } else {
+                println!(
+                    "deadline_allocation:3 - we tried to allocate but couldn't find resources?"
+                );
                 // we would like to spawn this image but can't so check if we are low on resources
                 // and out of spawn slots
                 if self.low_resources && *spawn_slots > 0 {
@@ -737,6 +758,7 @@ impl Allocatable {
             }
             // if we have exhausted our spawn slots then exit early
             if *spawn_slots == 0 {
+                println!("out of spawn slots!");
                 break;
             }
         }
@@ -1322,6 +1344,7 @@ impl ClusterResources {
         for node_map in self.nodes.values_mut().rev() {
             // if this image has node restrictions then follow them
             if let Some(restrictions) = nodes {
+                println!("restrictions -> {restrictions:?}");
                 // get the first node that has enough resources for us
                 if let Some(name) = node_map
                     .iter_mut()
@@ -1341,6 +1364,7 @@ impl ClusterResources {
                     }
                 }
             } else {
+                println!("no restrictions!");
                 // this image has no node restrictions
                 // get the first node that has enough resources for us
                 if let Some(name) = node_map
@@ -1472,6 +1496,7 @@ impl NodeResources {
     pub fn spawnable(&self, image: &Image, pool: Pools) -> bool {
         // check if we have enough spawn slots for this pod
         if !self.spawn_slots.enough(pool) {
+            println!("NodeResources::spawnable - {} no spawn slots!", self.name);
             return false;
         }
         // make sure this node has enough resources for this image
