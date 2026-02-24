@@ -55,8 +55,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build binaries
         run: |
-          rustup default nightly-2025-08-01
-          rustup install nightly-2025-08-01
+          rustup default nightly
+          rustup install nightly
           lscpu
           # build binaries
           cargo build --release --features vendored-openssl
@@ -98,14 +98,14 @@ jobs:
           #- os-name: Linux-aarch64
           #  runs-on: ubuntu-24.04
           #  target: aarch64-unknown-linux-musl
-          - os-name: macOS-x86_64
-            runs-on: macOS-latest
-            target: x86_64-apple-darwin
-            flags: "-C target-feature=+aes,+sse2"
-          - os-name: macOS-aarch64
-            runs-on: macOS-latest
-            target: aarch64-apple-darwin
-            flags: ""
+          #- os-name: macOS-x86_64
+          #  runs-on: macOS-latest
+          #  target: x86_64-apple-darwin
+          #  flags: "-C target-feature=+aes,+sse2"
+          #- os-name: macOS-aarch64
+          #  runs-on: macOS-latest
+          #  target: aarch64-apple-darwin
+          #  flags: ""
     runs-on: ${{ matrix.platform.runs-on }}
     steps:
       - uses: actions/checkout@v4
@@ -121,7 +121,7 @@ jobs:
         with:
           command: build
           target: ${{ matrix.platform.target }}
-          toolchain: nightly-2025-08-01
+          toolchain: nightly
           args: "--features vendored-openssl --release"
           strip: true
       - name: Upload ${{ matrix.platform.target }} binary artifacts
@@ -130,42 +130,42 @@ jobs:
           name: ${{ matrix.platform.target }}-binaries
           path: target/${{ matrix.platform.target }}/release
 
-  build-windows-cross-binaries:
-    name: Build Thorium Cross - Windows ${{ matrix.build-target.name }}
-    strategy:
-      matrix:
-        build-target:
-          - path: "./agent"
-            name: agent
-          - path: "./thorctl"
-            name: thorctl
-          - path: "./reactor"
-            name: reactor
-    # This needs to run on Ubuntu or agent builds fail
-    runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: "-C target-feature=+aes,+sse2"
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install bindgen-cli
-        run: |
-          sudo apt update && sudo apt install gcc gcc-mingw-w64-x86-64 build-essential libssl-dev pkg-config libclang-dev clang-15 musl-tools cmake libvirt-dev jq memstat sysstat -y
-          rustup target add x86_64-pc-windows-gnu
-          cargo install --target=x86_64-pc-windows-gnu --force --locked bindgen-cli
-      - name: Build Windows Cross ${{ matrix.build-target.name }} Binary
-        uses: houseabsolute/actions-rust-cross@v1
-        with:
-          command: build
-          target: x86_64-pc-windows-gnu
-          toolchain: nightly
-          args: "--features vendored-openssl --release"
-          strip: true
-          working-directory: ${{ matrix.build-target.path }}
-      - name: Upload ${{ matrix.build-target.name }} x86_64-pc-windows-gnu binary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: x86_64-pc-windows-gnu-${{ matrix.build-target.name }}
-          path: target/x86_64-pc-windows-gnu/release
+  #build-windows-cross-binaries:
+  #  name: Build Thorium Cross - Windows ${{ matrix.build-target.name }}
+  #  strategy:
+  #    matrix:
+  #      build-target:
+  #        - path: "./agent"
+  #          name: agent
+  #        - path: "./thorctl"
+  #          name: thorctl
+  #        - path: "./reactor"
+  #          name: reactor
+  #  # This needs to run on Ubuntu or agent builds fail
+  #  runs-on: ubuntu-latest
+  #  env:
+  #    RUSTFLAGS: "-C target-feature=+aes,+sse2"
+  #  steps:
+  #    - uses: actions/checkout@v4
+  #    - name: Install bindgen-cli
+  #      run: |
+  #        sudo apt update && sudo apt install gcc gcc-mingw-w64-x86-64 build-essential libssl-dev pkg-config libclang-dev clang-15 musl-tools cmake libvirt-dev jq memstat sysstat -y
+  #        rustup target add x86_64-pc-windows-gnu
+  #        cargo install --target=x86_64-pc-windows-gnu --force --locked bindgen-cli
+  #    - name: Build Windows Cross ${{ matrix.build-target.name }} Binary
+  #      uses: houseabsolute/actions-rust-cross@v1
+  #      with:
+  #        command: build
+  #        target: x86_64-pc-windows-gnu
+  #        toolchain: nightly
+  #        args: "--features vendored-openssl --release"
+  #        strip: true
+  #        working-directory: ${{ matrix.build-target.path }}
+  #    - name: Upload ${{ matrix.build-target.name }} x86_64-pc-windows-gnu binary artifact
+  #      uses: actions/upload-artifact@v4
+  #      with:
+  #        name: x86_64-pc-windows-gnu-${{ matrix.build-target.name }}
+  #        path: target/x86_64-pc-windows-gnu/release
 
   build-core-container:
     #if: |
@@ -214,31 +214,31 @@ jobs:
       #  with:
       #    name: aarch64-unknown-linux-musl-binaries
       #    path: aarch
-      - name: Download Thorium Windows Agent Artifact
-        uses: actions/download-artifact@v4
-        with:
-           name: x86_64-pc-windows-gnu-agent
-           path: windows/agent
-      - name: Download Thorium Windows Thorctl Artifact
-        uses: actions/download-artifact@v4
-        with:
-           name: x86_64-pc-windows-gnu-thorctl
-           path: windows/thorctl
-      - name: Download Thorium Windows Reactor Artifact
-        uses: actions/download-artifact@v4
-        with:
-           name: x86_64-pc-windows-gnu-reactor
-           path: windows/reactor
-      - name: Download Thorium macos x86_64 Binary Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: x86_64-apple-darwin-binaries
-          path: macos/x86_64
-      - name: Download Thorium macos aarch64 Binary Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: aarch64-apple-darwin-binaries
-          path: macos/aarch64
+      #- name: Download Thorium Windows Agent Artifact
+      #  uses: actions/download-artifact@v4
+      #  with:
+      #     name: x86_64-pc-windows-gnu-agent
+      #     path: windows/agent
+      #- name: Download Thorium Windows Thorctl Artifact
+      #  uses: actions/download-artifact@v4
+      #  with:
+      #     name: x86_64-pc-windows-gnu-thorctl
+      #     path: windows/thorctl
+      #- name: Download Thorium Windows Reactor Artifact
+      #  uses: actions/download-artifact@v4
+      #  with:
+      #     name: x86_64-pc-windows-gnu-reactor
+      #     path: windows/reactor
+      #- name: Download Thorium macos x86_64 Binary Artifacts
+      #  uses: actions/download-artifact@v4
+      #  with:
+      #    name: x86_64-apple-darwin-binaries
+      #    path: macos/x86_64
+      #- name: Download Thorium macos aarch64 Binary Artifacts
+      #  uses: actions/download-artifact@v4
+      #  with:
+      #    name: aarch64-apple-darwin-binaries
+      #    path: macos/aarch64
       - name: Login to Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
       - name: Stage Artifacts For Container Build
@@ -257,11 +257,11 @@ jobs:
           mv glibc/* target/release/.
           mv musl/* target/x86_64-unknown-linux-musl/release/.
           # mv aarch64/* target/aarch64-unknown-linux-musl/release/.
-          mv windows/agent/thorium-agent.exe target/x86_64-pc-windows-gnu/release/
-          mv windows/thorctl/thorctl.exe target/x86_64-pc-windows-gnu/release/
-          mv windows/reactor/thorium-reactor.exe target/x86_64-pc-windows-gnu/release/
-          mv macos/x86_64/* target/x86_64-apple-darwin/release/.
-          mv macos/aarch64/* target/aarch64-apple-darwin/release/.
+          #mv windows/agent/thorium-agent.exe target/x86_64-pc-windows-gnu/release/
+          #mv windows/thorctl/thorctl.exe target/x86_64-pc-windows-gnu/release/
+          #mv windows/reactor/thorium-reactor.exe target/x86_64-pc-windows-gnu/release/
+          #mv macos/x86_64/* target/x86_64-apple-darwin/release/.
+          #mv macos/aarch64/* target/aarch64-apple-darwin/release/.
       - name: Build Thorium Container Image
         run: |
           IMAGE_PATH=ghcr.io/${{ github.repository }}/infrastructure/thorium
