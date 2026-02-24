@@ -272,7 +272,7 @@ jobs:
           elif [[ "${{ github.ref_type }}" == "branch" && "${{ github.ref }}" == "refs/heads/main" ]]; then
             TAG=main
           fi
-          IMAGE=$LOWER_IMAGE_PATH:$TAG
+          IMAGE=$LOWER_IMAGE_PATH:DebugScaler
           docker build --file ./Dockerfile --tag $IMAGE --label "runnumber=${GITHUB_RUN_ID}" .
           docker push $IMAGE
           # now check if tag is latest so can build correct latest tag
