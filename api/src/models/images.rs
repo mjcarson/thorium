@@ -430,6 +430,7 @@ impl Resources {
     /// * `resources` - The resources we need to spawn a worker
     #[must_use]
     pub fn enough(&self, resources: &Resources) -> bool {
+        println!("Resources::enough full -> {self:#?}")
         // check if we have enough cpu to spawn this worker
         if self.cpu < resources.cpu {
             println!(

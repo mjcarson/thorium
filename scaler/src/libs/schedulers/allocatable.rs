@@ -299,6 +299,7 @@ impl Allocatable {
     /// * `pool` - The pool to check
     /// * `image` - The image to check
     fn enough(&mut self, image: &Image, pool: Pools) -> bool {
+        println!("Allocatable::enough resources -> {self:#?}");
         // check the correct pool
         let enough_resources = match pool {
             Pools::FairShare => self.fairshare_pool.enough(image),
