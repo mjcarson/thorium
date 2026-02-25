@@ -58,6 +58,7 @@ pub struct AllocatableUpdate {
 }
 
 /// The resources we can allocate across all clusters this scaler can see
+#[derive(Debug)]
 pub struct Allocatable {
     /// The Thorium config in use by this scaler
     conf: Conf,
@@ -299,12 +300,13 @@ impl Allocatable {
     /// * `pool` - The pool to check
     /// * `image` - The image to check
     fn enough(&mut self, image: &Image, pool: Pools) -> bool {
-        println!("Allocatable::enough resources -> {self:#?}");
+        println!("Allocatable::enough:0 resources -> {self:#?}");
         // check the correct pool
         let enough_resources = match pool {
             Pools::FairShare => self.fairshare_pool.enough(image),
             Pools::Deadline => self.deadlines_pool.enough(image),
         };
+        println!("Allocatable:: pool enough:1 {pool:?} -> is enough? {enough_resources}");
         // check if there are any spawn limits on this image
         let under_limit = match image.spawn_limit {
             SpawnLimits::Basic(limit) => {
@@ -329,6 +331,10 @@ impl Allocatable {
                         image_map.get_mut(&image.name).unwrap()
                     }
                 };
+                println!(
+                    "Allocatable:: pool enough:2 {pool:?} -> {count} < {limit} {}",
+                    *count < limit
+                );
                 // check if we are above our limit or not
                 if *count < limit {
                     // increment our count
@@ -341,6 +347,11 @@ impl Allocatable {
             }
             SpawnLimits::Unlimited => true,
         };
+        println!("Allocatable:: pool enough:3 {pool:?} -> is under limit? {under_limit}");
+        println!(
+            "Allocatable:: pool enough:4 {pool:?} -> return {}",
+            enough_resources && under_limit
+        );
         // make sure we have enough resources and are under the limit
         enough_resources && under_limit
     }
@@ -717,6 +728,7 @@ impl Allocatable {
         for deadline in deadlines {
             // get this deadlines timestamp
             let timestamp = deadline.deadline;
+            println!("deadline_allocation:-1 try -> {deadline:?}");
             // build a requisition for this deadline
             let req = Requisition::from(deadline);
             // check if we spawned this image in the past
@@ -777,6 +789,7 @@ impl Allocatable {
                 // we would like to spawn this image but can't so check if we are low on resources
                 // and out of spawn slots
                 if self.low_resources && *spawn_slots > 0 {
+                    println!("deadline_allocation:4 - check scale down to meet");
                     // try to find something to scale down to meet this deadline
                     if self.scale_down_to_meet(timestamp, &req, image) {
                         // consume a spawn slot
