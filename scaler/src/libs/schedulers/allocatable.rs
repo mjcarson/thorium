@@ -410,6 +410,10 @@ impl Allocatable {
     fn allocate_cluster(&mut self, image: &Image, pool: Pools) -> Option<(String, String)> {
         // locate the cluster and node that we are allocating resources on
         if let Some((cpus, cluster_name, node)) = self.allocate_cluster_helper(image, pool) {
+            println!(
+                "Allocatable::allocate_cluster:0  / {pool:?} - {} - {cluster_name}",
+                image.name
+            );
             // get our cluster from the target cpu group
             match self
                 .clusters
@@ -417,6 +421,10 @@ impl Allocatable {
                 .map(|clusters| clusters.remove(&cluster_name))
             {
                 Some(Some(mut cluster)) => {
+                    println!(
+                        "Allocatable::allocate_cluster:1  / {pool:?} - {} - got cluster!",
+                        image.name
+                    );
                     // get an entry to this nodes new cpu group
                     let cpu_group = cluster.nodes.entry(node.available.cpu).or_default();
                     // get our node name
@@ -437,6 +445,10 @@ impl Allocatable {
                 }
             }
         }
+        println!(
+            "Allocatable::allocate_cluster:2  / {pool:?} - {} - NONE",
+            image.name
+        );
         None
     }
 
@@ -447,8 +459,13 @@ impl Allocatable {
     /// * `image` - The image to allocate resources for
     /// * `pool` - The pool we are trying to allocate resources in
     fn try_allocate(&mut self, image: &Image, pool: Pools) -> Option<(String, String)> {
+        println!("Allocatable::try_allocate:0 / {pool:?} - {}", image.name);
         // check if we have enough resources in the target pool
         if self.enough(image, pool) {
+            println!(
+                "Allocatable::try_allocate:1  / {pool:?} - {} - enough",
+                image.name
+            );
             // try to allocate this image on a node
             return match self.allocate_cluster(image, pool) {
                 Some((cluster, node)) => {
@@ -457,9 +474,19 @@ impl Allocatable {
                     // return our cluster and node
                     Some((cluster, node))
                 }
-                None => None,
+                None => {
+                    println!(
+                        "Allocatable::try_allocate:2  / {pool:?} - {} - not enough",
+                        image.name
+                    );
+                    None
+                }
             };
         }
+        println!(
+            "Allocatable::try_allocate:3  / {pool:?} - {} - not enough",
+            image.name
+        );
         // we could not spawn this image
         None
     }
@@ -1340,6 +1367,7 @@ impl ClusterResources {
         nodes: Option<&HashSet<String>>,
         pool: Pools,
     ) -> Option<NodeResources> {
+        println!("CLUSTER_RES -> {self:#?}");
         // start crawling through the nodes by total cpu
         for node_map in self.nodes.values_mut().rev() {
             // if this image has node restrictions then follow them
@@ -1494,9 +1522,10 @@ impl NodeResources {
     ///
     /// * `image` - The image we want to spawn
     pub fn spawnable(&self, image: &Image, pool: Pools) -> bool {
+        println!("NodeResources::spawnable:0 node  {pool:?} -> {self:#?}");
         // check if we have enough spawn slots for this pod
         if !self.spawn_slots.enough(pool) {
-            println!("NodeResources::spawnable - {} no spawn slots!", self.name);
+            println!("NodeResources::spawnable:1 - {} no spawn slots!", self.name);
             return false;
         }
         // make sure this node has enough resources for this image
