@@ -2,14 +2,17 @@
 
 use chrono::{DateTime, Utc};
 use gxhash::GxHasher;
-use std::collections::HashSet;
+use linearize::Linearize;
+use schemars::JsonSchema;
 use std::hash::Hasher;
-use strum::{AsRefStr, EnumDiscriminants, EnumIter, EnumString, IntoEnumIterator};
+use std::net::IpAddr;
+use std::{collections::HashSet, hash::Hash};
+use strum::{AsRefStr, EnumDiscriminants, EnumString, IntoEnumIterator};
 use uuid::Uuid;
 
 use crate::models::{
-    CollectionEntity, CollectionEntityRequest, DeviceEntityRequest, TagMap, TreeSupport,
-    VendorEntity, VendorEntityRequest,
+    CollectionEntity, CollectionEntityRequest, CollectionKind, Country, DeviceEntityRequest,
+    TagMap, TreeSupport, VendorEntity, VendorEntityRequest,
 };
 
 pub mod collections;
@@ -25,9 +28,10 @@ pub mod vendors;
 
 use devices::DeviceEntity;
 use filesystem::{FileSystemEntity, FileSystemFolderEntity};
+use flags::Flag;
 use network_activity::NetworkConnection;
 use processes::{WindowsProcessEntity, WindowsProcessTreeEntity};
-use rules::SigmaRule;
+use rules::{SigmaRule, SigmaRuleAppliesTo};
 
 // api/client imports
 cfg_if::cfg_if! {
@@ -44,20 +48,16 @@ cfg_if::cfg_if! {
 cfg_if::cfg_if! {
     if #[cfg(feature = "api")] {
         use std::collections::BTreeSet;
-        use chrono::TimeZone;
-        use network_activity::{NetConState, TransportLayerProtocol};
-        use rules::{SigmaActionToTake, SigmaRuleAppliesTo};
-        use shared::CriticalSector;
         use futures::stream::{self, StreamExt};
-        use std::net::IpAddr;
+        use chrono::TimeZone;
 
-        use super::{
-            TagRequest, User, TagDeleteRequest, Group, GroupAllowAction, UnhashedTreeBranch,
-            CollectionKind, Country,
-        };
+        use network_activity::{NetConState, TransportLayerProtocol};
+        use rules::SigmaActionToTake;
+        use shared::CriticalSector;
+        use super::{TagRequest, User, TagDeleteRequest, Group, GroupAllowAction, UnhashedTreeBranch};
         use crate::utils::{ApiError, Shared};
         use crate::models::Tree;
-
+        use flags::Confidence;
 
         /// The form for entity metadata
         #[derive(Debug, Default)]
@@ -107,6 +107,14 @@ cfg_if::cfg_if! {
             pub sigma_actions: Vec<SigmaActionToTake>,
             /// The score that a rule applies
             pub score: Option<i64>,
+            /// How suspicious this flag is where higher numbers are more suspicious
+            pub suspicion: Option<i64>,
+            /// How confident/reliable this flag is
+            pub confidence: Option<Confidence>,
+            /// The interesting, odd, or suspicious characteristic
+            pub content: Option<String>,
+            /// The reason for this Flag
+            pub reasoning: Option<String>,
         }
 
         impl EntityMetadataForm {
@@ -224,6 +232,14 @@ cfg_if::cfg_if! {
             pub remove_sigma_actions: BTreeSet<usize>,
             /// The score that a rule applies
             pub score: Option<i64>,
+            /// How suspicious this flag is where higher numbers are more suspicious
+            pub suspicion: Option<i64>,
+            /// How confident/reliable this flag is
+            pub confidence: Option<Confidence>,
+            /// The interesting, odd, or suspicious characteristic
+            pub content: Option<String>,
+            /// The reason for this Flag
+            pub reasoning: Option<String>,
         }
     }
 }
@@ -252,6 +268,21 @@ pub struct Entity {
     pub image: Option<String>,
     /// The time this entity was created
     pub created: DateTime<Utc>,
+}
+
+impl Entity {
+    /// Hash the identifying info for this entity
+    pub fn hash_identifying(&self) -> u64 {
+        // Create a hasher with a static seed
+        let mut hasher = GxHasher::with_seed(1234);
+        // hash any required identifying info thats not metadata
+        hasher.write(self.name.as_bytes());
+        self.kind.hash(&mut hasher);
+        // hash our identifying metadata
+        self.metadata.hash_identifying(&mut hasher);
+        // get this entities identifying hash
+        hasher.finish()
+    }
 }
 
 impl TreeSupport for Entity {
@@ -412,7 +443,7 @@ impl KeySupport for Entity {
     }
 
     fn key_url(key: &Self::Key, _extra: Option<&Self::ExtraKey>) -> String {
-        key.to_owned()
+        key.clone()
     }
 }
 
@@ -541,9 +572,11 @@ impl TagSupport for Entity {
     Deserialize,
     AsRefStr,
     EnumString,
-    EnumIter,
+    strum::EnumIter,
     strum::Display,
     Hash,
+    Linearize,
+    JsonSchema,
 ))]
 #[cfg_attr(feature = "python", strum_discriminants(pyo3::pyclass(from_py_object)))]
 #[cfg_attr(
@@ -582,13 +615,46 @@ pub enum EntityMetadata {
     NetworkConnection(NetworkConnection),
     /// A sigma rule to apply to data
     SigmaRule(SigmaRule),
+    /// A flag on some suspicious data
+    Flag(Flag),
     /// An entity that can't be described by any of the other variants
     #[strum_discriminants(default)]
     Other,
 }
 
+impl EntityMetadata {
+    /// Hash the identifying info for this entity
+    ///
+    /// # Arguments
+    ///
+    /// * `hasher` - The hasher to use to hash any identifying data
+    pub fn hash_identifying(&self, hasher: &mut GxHasher) {
+        match self {
+            Self::Collection(collection) => collection.collection_kind.hash(hasher),
+            Self::FileSystem(fs) => hasher.write(fs.sha256.as_bytes()),
+            Self::Folder(folder) => hasher.write(folder.all_sha256.as_bytes()),
+            Self::WindowsProcess(proc) => hasher.write_u64(proc.pid),
+            Self::NetworkConnection(conn) => {
+                // only hash the required parts of this network connection
+                conn.source.hash(hasher);
+                conn.destination.hash(hasher);
+                conn.destination_port.hash(hasher);
+            }
+            Self::SigmaRule(rule) => hasher.write(rule.rule.as_bytes()),
+            Self::Flag(flag) => {
+                // only has the required parts of this flag
+                hasher.write_i64(flag.suspicion);
+                flag.confidence.hash(hasher);
+                hasher.write(flag.reasoning.as_bytes());
+            }
+            // These entities have not identifying metadata
+            Self::Device(_) | Self::Vendor(_) | Self::WindowsProcessTree(_) | Self::Other => (),
+        }
+    }
+}
+
 /// The specific kind an entity is, including any data unique to its kind
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
 #[cfg_attr(feature = "api", derive(utoipa::ToSchema))]
 pub enum EntityMetadataRequest {
     /// A device entity
@@ -605,8 +671,12 @@ pub enum EntityMetadataRequest {
     WindowsProcessTree,
     /// A windows process
     WindowsProcess(WindowsProcessEntity),
+    /// A network connection
+    NetworkConnection(NetworkConnection),
     /// A sigma rule to apply to data
     SigmaRule(SigmaRule),
+    /// A flag on some suspicious data
+    Flag(Flag),
     /// An entity that can't be described by any of the other variants
     Other,
 }
@@ -630,7 +700,9 @@ impl EntityMetadataRequest {
                 Ok(form.text("kind", EntityKinds::WindowsProcessTree.as_str()))
             }
             EntityMetadataRequest::WindowsProcess(process) => process.add_to_form(form),
+            EntityMetadataRequest::NetworkConnection(conn) => conn.add_to_form(form),
             EntityMetadataRequest::SigmaRule(rule) => rule.add_to_form(form),
+            EntityMetadataRequest::Flag(flag) => flag.add_to_form(form),
             // just set our kind to other
             EntityMetadataRequest::Other => Ok(form.text("kind", EntityKinds::Other.as_str())),
         }
@@ -646,7 +718,9 @@ impl EntityMetadataRequest {
             EntityMetadataRequest::Folder(_) => EntityKinds::Folder,
             EntityMetadataRequest::WindowsProcessTree => EntityKinds::WindowsProcessTree,
             EntityMetadataRequest::WindowsProcess(_) => EntityKinds::WindowsProcess,
+            EntityMetadataRequest::NetworkConnection(_) => EntityKinds::NetworkConnection,
             EntityMetadataRequest::SigmaRule(_) => EntityKinds::SigmaRule,
+            EntityMetadataRequest::Flag(_) => EntityKinds::Flag,
             EntityMetadataRequest::Other => EntityKinds::Other,
         }
     }
@@ -665,6 +739,54 @@ impl EntityMetadataRequest {
         let parsed = serde_json::from_slice(&data)?;
         Ok(parsed)
     }
+
+    /// Convert this request into something that can be scanned by a sigma rule
+    #[cfg(feature = "client")]
+    pub fn to_sigma_scannable(&self) -> Result<Option<String>, crate::Error> {
+        // unwrap the outer enum so we don't needlessly nest things
+        match self {
+            Self::Device(device) => Ok(Some(serde_json::to_string(device)?)),
+            Self::Vendor(vendor) => Ok(Some(serde_json::to_string(vendor)?)),
+            Self::Collection(collection) => Ok(Some(serde_json::to_string(collection)?)),
+            Self::FileSystem(filesystem) => Ok(Some(serde_json::to_string(filesystem)?)),
+            Self::Folder(folder) => Ok(Some(serde_json::to_string(folder)?)),
+            Self::WindowsProcess(proc) => Ok(Some(serde_json::to_string(proc)?)),
+            Self::NetworkConnection(conn) => Ok(Some(serde_json::to_string(conn)?)),
+            Self::Flag(flag) => Ok(Some(serde_json::to_string(flag)?)),
+            Self::WindowsProcessTree | Self::SigmaRule(_) | Self::Other => Ok(None),
+        }
+    }
+
+    /// Hash the identifying info for this entity
+    ///
+    /// This is not the same thing as a tree hash.
+    ///
+    /// # Arguments
+    ///
+    /// * `hasher` - The hasher to use to hash any identifying data
+    pub fn hash_identifying(&self, hasher: &mut GxHasher) {
+        match self {
+            Self::Collection(collection) => collection.collection_kind.hash(hasher),
+            Self::FileSystem(fs) => hasher.write(fs.sha256.as_bytes()),
+            Self::Folder(folder) => hasher.write(folder.all_sha256.as_bytes()),
+            Self::WindowsProcess(proc) => hasher.write_u64(proc.pid),
+            Self::NetworkConnection(conn) => {
+                // only hash the required parts of this network connection
+                conn.source.hash(hasher);
+                conn.destination.hash(hasher);
+                conn.destination_port.hash(hasher);
+            }
+            Self::SigmaRule(rule) => hasher.write(rule.rule.as_bytes()),
+            Self::Flag(flag) => {
+                // only has the required parts of this flag
+                hasher.write_i64(flag.suspicion);
+                flag.confidence.hash(hasher);
+                hasher.write(flag.reasoning.as_bytes());
+            }
+            // These entities have not identifying metadata
+            Self::Device(_) | Self::Vendor(_) | Self::WindowsProcessTree | Self::Other => (),
+        }
+    }
 }
 
 impl EntityKinds {
@@ -673,10 +795,65 @@ impl EntityKinds {
     pub fn as_str(&self) -> &str {
         self.as_ref()
     }
+
+    /// Convert this entity kind to a [`SigmaRuleAppliesTo`] if possible
+    ///
+    /// Not all entity kinds can be converted and any that can't will return [`None`]
+    pub fn to_sigma_applies_to(&self) -> Option<SigmaRuleAppliesTo> {
+        match self {
+            Self::WindowsProcess => Some(SigmaRuleAppliesTo::WindowsProcesses),
+            Self::NetworkConnection => Some(SigmaRuleAppliesTo::NetworkConnections),
+            // all other entity kinds cannot be scanned with sigma rules
+            Self::Device
+            | Self::Vendor
+            | Self::Collection
+            | Self::FileSystem
+            | Self::Folder
+            | Self::WindowsProcessTree
+            | Self::SigmaRule
+            | Self::Flag
+            | Self::Other => None,
+        }
+    }
+
+    /// Get any root entity kinds if any exist
+    pub fn root_kinds(&self) -> &[EntityKinds] {
+        match self {
+            Self::WindowsProcess => &[Self::WindowsProcessTree],
+            Self::Folder => &[Self::FileSystem],
+            // all other entity kinds do not have required root kinds
+            Self::Device
+            | Self::Vendor
+            | Self::Collection
+            | Self::FileSystem
+            | Self::WindowsProcessTree
+            | Self::NetworkConnection
+            | Self::SigmaRule
+            | Self::Flag
+            | Self::Other => &[],
+        }
+    }
+}
+
+impl From<SigmaRuleAppliesTo> for EntityKinds {
+    fn from(applies_to: SigmaRuleAppliesTo) -> Self {
+        // map what a sigma rule applies to to an entity kind
+        match applies_to {
+            SigmaRuleAppliesTo::WindowsProcesses => EntityKinds::WindowsProcess,
+            SigmaRuleAppliesTo::NetworkConnections => EntityKinds::NetworkConnection,
+        }
+    }
+}
+
+impl From<&SigmaRuleAppliesTo> for EntityKinds {
+    fn from(applies_to: &SigmaRuleAppliesTo) -> Self {
+        EntityKinds::from(*applies_to)
+    }
 }
 
 /// A request to create an entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "api", derive(utoipa::ToSchema))]
 pub struct EntityRequest {
     /// The entity's name
     pub name: String,
@@ -751,6 +928,53 @@ impl EntityRequest {
         // get our entity kind based on our metadata
         self.metadata.kind()
     }
+
+    /// Get the parent info for this entity request if it has a parent
+    pub fn parent_info(&self) -> Option<EntityParentInfo> {
+        // get the identifying info for any parent processes if it exists
+        match &self.metadata {
+            EntityMetadataRequest::WindowsProcess(proc) => {
+                // if we have a parent pid set then use that
+                match proc.parent_pid {
+                    Some(ppid) => Some(EntityParentInfo::WindowsParentProcess(ppid)),
+                    None => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Get this entities root node kind
+    pub fn root_kind(&self) -> Option<EntityKinds> {
+        // only certain kinds of entities use a root node
+        match &self.metadata {
+            EntityMetadataRequest::WindowsProcess(_) => Some(EntityKinds::WindowsProcessTree),
+            EntityMetadataRequest::Folder(_) => Some(EntityKinds::FileSystem),
+            // all other entity types do not have a root node
+            EntityMetadataRequest::Device(_)
+            | EntityMetadataRequest::Vendor(_)
+            | EntityMetadataRequest::Collection(_)
+            | EntityMetadataRequest::FileSystem(_)
+            | EntityMetadataRequest::WindowsProcessTree
+            | EntityMetadataRequest::NetworkConnection(_)
+            | EntityMetadataRequest::SigmaRule(_)
+            | EntityMetadataRequest::Flag(_)
+            | EntityMetadataRequest::Other => None,
+        }
+    }
+
+    /// Hash the identifying info for this entity
+    pub fn hash_identifying(&self) -> u64 {
+        // Create a hasher with a static seed
+        let mut hasher = GxHasher::with_seed(1234);
+        // hash any required identifying info thats not metadata
+        hasher.write(self.name.as_bytes());
+        self.metadata.kind().hash(&mut hasher);
+        // hash our identifying metadata
+        self.metadata.hash_identifying(&mut hasher);
+        // get this entities identifying hash
+        hasher.finish()
+    }
 }
 
 /// The response from an entity creation
@@ -759,6 +983,8 @@ impl EntityRequest {
 pub struct EntityResponse {
     /// The ID of the created entity
     pub id: Uuid,
+    /// The name of this entity
+    pub name: String,
 }
 
 impl EntityResponse {
@@ -768,8 +994,11 @@ impl EntityResponse {
     ///
     /// * `id` - The ID of the created entity
     #[must_use]
-    pub fn new(id: Uuid) -> Self {
-        Self { id }
+    pub fn new(id: Uuid, name: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+        }
     }
 }
 
@@ -803,6 +1032,8 @@ pub struct EntityListOpts {
     pub tags: HashMap<String, Vec<String>>,
     /// Whether matching on tags should be case-insensitive
     pub tags_case_insensitive: bool,
+    /// The different kinds of entities to list
+    pub kinds: Vec<EntityKinds>,
 }
 
 impl Default for EntityListOpts {
@@ -817,6 +1048,7 @@ impl Default for EntityListOpts {
             groups: Vec::default(),
             tags: HashMap::default(),
             tags_case_insensitive: false,
+            kinds: Vec::default(),
         }
     }
 }
@@ -889,7 +1121,7 @@ impl EntityListOpts {
     /// * `groups` - The groups to restrict our search to
     #[must_use]
     pub fn groups<T: Into<String>>(mut self, groups: Vec<T>) -> Self {
-        // set the date to end listing entities at
+        // add the groups to restrict returned data too
         self.groups
             .extend(groups.into_iter().map(|group| group.into()));
         self
@@ -929,6 +1161,30 @@ impl EntityListOpts {
         self.tags_case_insensitive = true;
         self
     }
+
+    /// Limit what kinds of entities are returned
+    ///
+    /// # Arguments
+    ///
+    /// * `kind` - The kind of entities to restrict our list to
+    #[must_use]
+    pub fn kind(mut self, kind: EntityKinds) -> Self {
+        // add this kind to our option struct
+        self.kinds.push(kind);
+        self
+    }
+
+    /// Limit what kinds of entities are returned
+    ///
+    /// # Arguments
+    ///
+    /// * `kinds` - The kinds of entities to restrict our list to
+    #[must_use]
+    pub fn kinds(mut self, kinds: impl IntoIterator<Item = EntityKinds>) -> Self {
+        // add these entity kinds to our options
+        self.kinds.extend(kinds);
+        self
+    }
 }
 
 /// The params for listing entities
@@ -951,6 +1207,7 @@ pub struct EntityListParams {
     /// The max number of items to return in this response
     #[serde(default = "default_list_limit")]
     pub limit: usize,
+    /// The different kinds of entities to list
     #[serde(default = "default_entity_kinds")]
     pub kinds: Vec<EntityKinds>,
 }
@@ -1114,5 +1371,41 @@ impl EntityUpdate {
         // set our description form field
         let form = multipart_text!(form, "description", self.description);
         Ok(form)
+    }
+}
+
+/// The differnt kinds of parent info for entities
+pub enum EntityParentInfo {
+    /// The pid for a parent process in Windows
+    WindowsParentProcess(u64),
+}
+
+impl EntityParentInfo {
+    /// Get the type of sigma applies to  this parent info points to
+    pub fn sigma_applies_to(&self) -> SigmaRuleAppliesTo {
+        match self {
+            Self::WindowsParentProcess(_) => SigmaRuleAppliesTo::WindowsProcesses,
+        }
+    }
+
+    /// Get the kind of entity this parent info is for
+    pub fn entity_kind(&self) -> EntityKinds {
+        match self {
+            Self::WindowsParentProcess(_) => EntityKinds::WindowsProcess,
+        }
+    }
+
+    /// Check if an entity is the parent we are looking for
+    ///
+    /// # Arguments
+    ///
+    /// * `child` - The potential child entity request to check against
+    pub fn is_parent(&self, child: &EntityRequest) -> bool {
+        match (self, &child.metadata) {
+            (Self::WindowsParentProcess(ppid), EntityMetadataRequest::WindowsProcess(proc)) => {
+                proc.pid == *ppid
+            }
+            _ => false,
+        }
     }
 }

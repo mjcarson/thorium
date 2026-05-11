@@ -1,14 +1,15 @@
 //! A cache of pipeline trigger info
 
-use chrono::{prelude::*, Duration};
+use chrono::{Duration, prelude::*};
 use futures::stream::{self, StreamExt};
+use futures_locks::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use thorium::models::{
     Event, EventData, EventTrigger, Repo, Sample, ScrubbedUser, TagType, TriggerPotential,
 };
 use thorium::{Error, Thorium};
-use tracing::{event, instrument, Level};
+use tracing::{Level, event, instrument};
 use uuid::Uuid;
 
 pub type EventsVec<'a> = Vec<(Uuid, Vec<(&'a String, &'a String, &'a EventTrigger)>)>;
@@ -45,6 +46,7 @@ impl<'a> FilteredEvents<'a> {
 }
 
 /// The different triggers currently cached
+#[derive(Clone)]
 pub struct TriggerCache {
     /// The users we know about
     pub users: HashMap<String, ScrubbedUser>,
@@ -147,7 +149,7 @@ impl TriggerCache {
                 // check if any of these pipelines could potentially be triggered
                 for (pipeline, triggers) in pipeline_map {
                     // check all of this pipelines triggers
-                    for (_, trigger) in triggers {
+                    for trigger in triggers.values() {
                         // check if this triggers conditions could be potentially met
                         // This will filter out all true negative but triggers but
                         // could have false positives
@@ -258,7 +260,7 @@ impl DataCache {
         thorium: &Thorium,
         filtered: &FilteredEvents<'a>,
         event_cache: &HashMap<Uuid, Event>,
-        retry_ts: &mut Option<DateTime<Utc>>,
+        retry_ts: &Arc<RwLock<Option<DateTime<Utc>>>>,
     ) -> Result<(), Error> {
         // A set of futures for our data requests
         let mut futures = Vec::default();
@@ -290,11 +292,11 @@ impl DataCache {
                         error = error.to_string()
                     );
                     // set our retry timestamp for 3 minutes in the future if its not already set
-                    if retry_ts.is_none() {
+                    if retry_ts.read().await.is_none() {
                         // get a timestamp for 3 minutes in the future
                         let future_ts = Utc::now() + Duration::minutes(3);
                         // set the timestamp for when to retry these errors
-                        *retry_ts = Some(future_ts);
+                        *retry_ts.write().await = Some(future_ts);
                     }
                     // continue to the next future
                     continue;
@@ -380,6 +382,7 @@ impl DataCache {
                 }
             }
             (EventData::NewTags { .. }, EventTrigger::NewSample) => false,
+            (EventData::SigmaScannableResults { .. }, _) => false,
         }
     }
 

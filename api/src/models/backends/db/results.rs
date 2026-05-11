@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use crate::models::backends::OutputSupport;
 use crate::models::{
-    EntityKinds, Output, OutputDisplayType, OutputForm, OutputId, OutputIdRow, OutputKind,
-    OutputMap, OutputRow, ResultSearchEvent,
+    EntityKinds, Event, Output, OutputDisplayType, OutputForm, OutputId, OutputIdRow, OutputKey,
+    OutputKind, OutputMap, OutputRow, ResultSearchEvent, SigmaRuleAppliesTo, User,
 };
 use crate::utils::{ApiError, Shared, helpers};
 use crate::{internal_err, log_scylla_err, unauthorized};
@@ -25,7 +25,8 @@ use crate::{internal_err, log_scylla_err, unauthorized};
 /// * `shared` - Shared Thorium objects
 #[instrument(name = "db::results::create", skip(form, shared), err(Debug))]
 pub async fn create<O: OutputSupport>(
-    key: &str,
+    user: &User,
+    key: &OutputKey,
     form: &OutputForm<O>,
     shared: &Shared,
 ) -> Result<(), ApiError> {
@@ -33,8 +34,10 @@ pub async fn create<O: OutputSupport>(
     let kind = O::output_kind();
     // wrap our tool in a vec
     let tools = vec![form.tool.clone()];
+    // TODO does this need to be done here?
+    let key_str = key.clone().key_string();
     // get our previous results
-    let mut past = get(kind, &form.groups, key, &tools, true, shared).await?;
+    let mut past = get(kind, &form.groups, &key_str, &tools, true, shared).await?;
     // downselect to just this tools results
     let past = past.results.remove(&form.tool).unwrap_or_default();
     // get the current year and number of hours so far this year
@@ -77,7 +80,7 @@ pub async fn create<O: OutputSupport>(
                     &group,
                     year,
                     bucket,
-                    key,
+                    &key_str,
                     &form.tool,
                     &form.tool_version,
                     form.display_type,
@@ -91,16 +94,36 @@ pub async fn create<O: OutputSupport>(
     // if we have more then our max results stored then delete any past that
     if past.len() >= shared.config.thorium.retention.results {
         // prune any results in groups with more then 3 values
-        prune(kind, &form.groups, key, &past, shared).await?;
+        prune(kind, &form.groups, &key_str, &past, shared).await?;
     }
     // create an event since we've modified results
-    let event = ResultSearchEvent::modified::<O>(key.to_string(), form.groups.clone());
+    let event = ResultSearchEvent::modified::<O>(key_str, form.groups.clone());
     if let Err(err) = super::search::events::create(event, shared).await {
         return internal_err!(format!(
             "Failed to create result search event! {}",
             err.msg
                 .unwrap_or_else(|| "An unknown error occurred".to_string())
         ));
+    }
+    // downselect to only entity kinds that are scannable by sigma
+    let applies_to = form
+        .entities
+        .keys()
+        .filter_map(|kind| kind.to_sigma_applies_to())
+        .collect::<Vec<SigmaRuleAppliesTo>>();
+    // if this result had any scannable entities then create a sigma scanning event
+    if !applies_to.is_empty() {
+        // only create scan events if we found some
+        // create an event for these newly scannable sigma rules
+        let event = Event::sigma_scannable_results(
+            user,
+            key.clone(),
+            form.groups.clone(),
+            applies_to,
+            &form.tool,
+        );
+        // save our event
+        super::events::create(&event, shared).await?;
     }
     Ok(())
 }
