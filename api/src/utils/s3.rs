@@ -16,15 +16,38 @@ use generic_array::{GenericArray, typenum::U16};
 use md5::Md5;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
-use std::io::Write;
+use tokio::io::DuplexStream;
+use tokio_util::io::SyncIoBridge;
 use tracing::{Level, event, instrument};
 use uuid::Uuid;
 use zip::unstable::write::FileOptionsExt;
-use zip::write::ZipWriter;
+use zip::write::{SimpleFileOptions, ZipWriter};
 
 use super::{ApiError, Shared};
 use crate::models::ZipDownloadParams;
 use crate::{Conf, bad, unavailable};
+
+/// Check whether a boxed error was ultimately caused by a broken pipe
+///
+/// A broken pipe during a zip download means the client disconnected, which is
+/// routine for large downloads and should not be logged as a server error. The
+/// pipe error can surface either as a raw [`std::io::Error`] (from a direct
+/// write) or wrapped in a [`zip::result::ZipError::Io`] (from the zip writer).
+///
+/// # Arguments
+///
+/// * `err` - The error to inspect for a broken pipe cause
+fn is_broken_pipe(err: &(dyn std::error::Error + 'static)) -> bool {
+    // check if this is a raw io error caused by a broken pipe
+    if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+        return io_err.kind() == std::io::ErrorKind::BrokenPipe;
+    }
+    // check if this is a zip error wrapping a broken pipe io error
+    if let Some(zip::result::ZipError::Io(io_err)) = err.downcast_ref::<zip::result::ZipError>() {
+        return io_err.kind() == std::io::ErrorKind::BrokenPipe;
+    }
+    false
+}
 
 /// A tuple of hashes (sha256, sha1, md5)
 pub type Hashes = (String, String, String);
@@ -991,13 +1014,23 @@ impl S3Client {
         Ok(output)
     }
 
-    /// download a file from s3 and convert it to an encrypted zip
+    /// download a file from s3 and stream it to the user as an encrypted zip
     ///
-    /// This is not near as efficient as using CaRT and should not be used for large files.
+    /// Streams data end-to-end with constant memory usage regardless of file
+    /// size. Uses legacy ZipCrypto encryption so the resulting zip can be
+    /// opened by tools without AES support (such as macOS Archive Utility).
+    ///
+    /// Errors that occur before streaming begins (the S3 fetch) are returned as
+    /// an [`ApiError`]. Once the body has started streaming, any uncart/zip/IO
+    /// failure is only logged and truncates the stream, so the client receives
+    /// an incomplete, unreadable zip rather than an HTTP error.
     ///
     /// # Arguments
     ///
     /// * `path` - The path to an object in s3
+    /// * `sha256` - The sha256 used as the filename inside the zip
+    /// * `params` - Zip download parameters (password)
+    /// * `shared` - Shared Thorium objects
     #[instrument(name = "S3Client::download_as_zip", skip(self, shared), err(Debug))]
     pub async fn download_as_zip(
         &self,
@@ -1005,8 +1038,8 @@ impl S3Client {
         sha256: &str,
         params: ZipDownloadParams,
         shared: &Shared,
-    ) -> Result<Vec<u8>, ApiError> {
-        // start downloading this file and stream it to the user
+    ) -> Result<DuplexStream, ApiError> {
+        // start downloading this file from s3
         let body = self
             .client
             .get_object()
@@ -1015,33 +1048,64 @@ impl S3Client {
             .send()
             .await?
             .body;
-        // get the password to use
-        let password = params.get_password(shared).as_bytes();
-        // setup our zip options
-        let opts = zip::write::SimpleFileOptions::default().with_deprecated_encryption(password);
-        // build our writer
-        let mut writer = ZipWriter::new(std::io::Cursor::new(vec![]));
-        // start our file
-        writer.start_file(sha256, opts)?;
-        // build our uncart stream object
-        let mut uncart_stream = UncartStream::new(body.into_async_read());
-        // build a vector to store our entire file that defaults to 1 mebibyte in size
-        let mut uncarted = Vec::with_capacity(1_048_576);
-        // uncart the entire file
-        tokio::io::copy(&mut uncart_stream, &mut uncarted).await?;
-        // spawn this task in a tokio task and wait for it to complete
+        // get the password to use for zip encryption
+        let password = params.get_password(shared).clone();
+        // get this samples sha256 for the only entry in this encrypted zip
+        let entry_name = sha256.to_owned();
+        // create a duplex stream to pipe zip data from the blocking task to the response
+        let (read_half, write_half) = tokio::io::duplex(65_536);
+        // capture a runtime handle so our sync bridges can drive async I/O
+        let handle = tokio::runtime::Handle::current();
+        // spawn a blocking task to uncart and zip the file in a streaming fashion.
+        // this is fire-and-forget: if the client disconnects, read_half drops and the
+        // next write returns BrokenPipe, which ends the task, so the handle is safe to drop
         tokio::task::spawn_blocking(move || {
-            // zip this file
-            match writer.write_all(&uncarted) {
-                // get our zipped data
-                Ok(_) => match writer.finish() {
-                    Ok(zipped) => Ok(zipped.into_inner()),
-                    Err(err) => Err(ApiError::from(err)),
-                },
-                Err(err) => Err(ApiError::from(err)),
+            // run the streaming pipeline in a closure so we can capture any error via `?`
+            let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = (|| {
+                // bridge the async write half to a sync writer for the zip crate
+                let sync_writer = SyncIoBridge::new_with_handle(write_half, handle.clone());
+                // build a streaming zip writer that needs no seek and uses data descriptors
+                let mut zip_writer = ZipWriter::new_stream(sync_writer);
+                // use legacy ZipCrypto encryption for broad compatibility (e.g. macOS) and
+                // enable zip64 so files larger than 4 GiB are supported
+                let opts = SimpleFileOptions::default()
+                    .with_deprecated_encryption(password.as_bytes())
+                    .large_file(true);
+                // start our zip entry using the sha256 as the filename
+                zip_writer.start_file(&entry_name, opts)?;
+                // build our uncart stream to decrypt and decompress the carted file
+                let uncart_stream = UncartStream::new(body.into_async_read());
+                // bridge the async uncart stream to a sync reader for the zip crate
+                let mut sync_uncart = SyncIoBridge::new_with_handle(uncart_stream, handle);
+                // stream uncarted data into the zip writer in large chunks
+                let mut buf = vec![0u8; 262_144];
+                // keep reading until there's no more data to uncart and zip
+                loop {
+                    // read the next N bytes from our uncart stream
+                    let n = std::io::Read::read(&mut sync_uncart, &mut buf)?;
+                    // check if we have no more data to read
+                    if n == 0 {
+                        // we didn't get any data to uncart so break
+                        break;
+                    }
+                    // write the new uncarted data to our zip
+                    std::io::Write::write_all(&mut zip_writer, &buf[..n])?;
+                }
+                // finalize the zip archive (writes the central directory)
+                zip_writer.finish()?;
+                Ok(())
+            })();
+            // log any failure; a broken pipe just means the client hung up mid-download
+            // (routine for large files), so only log genuine failures at error level
+            if let Err(err) = result {
+                if is_broken_pipe(err.as_ref()) {
+                    event!(Level::DEBUG, sha256 = %entry_name, "zip download client disconnected");
+                } else {
+                    event!(Level::ERROR, sha256 = %entry_name, error = ?err, "failed to stream zip download");
+                }
             }
-        })
-        .await?
+        });
+        Ok(read_half)
     }
 
     /// deletes a file from s3

@@ -439,12 +439,6 @@ impl From<tokio::task::JoinError> for ApiError {
     }
 }
 
-impl From<zip::result::ZipError> for ApiError {
-    fn from(error: zip::result::ZipError) -> Self {
-        bad_internal!(format!("Failed to zip file: {:#?}", error))
-    }
-}
-
 impl From<std::net::AddrParseError> for ApiError {
     fn from(error: std::net::AddrParseError) -> Self {
         bad_internal!(format!("Error parsing IP address: {error}"))

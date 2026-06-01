@@ -199,8 +199,11 @@ async fn download_as_zip(
     Path(sha256): Path<String>,
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // check if we have access to this sample and download it if we do
-    Sample::download_as_zip(&user, sha256, params, &state.shared).await
+    // authorize and start streaming the encrypted zip for this sample
+    let stream = Sample::download_as_zip(&user, sha256, params, &state.shared).await?;
+    // wrap the duplex stream in a streamable response body
+    let body = AsyncReadBody::new(stream);
+    Ok(body)
 }
 
 /// Updates a submission for a specific sample

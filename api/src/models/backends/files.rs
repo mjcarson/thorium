@@ -346,6 +346,7 @@ impl Sample {
         sha256: String,
         shared: &Shared,
     ) -> Result<ByteStream, ApiError> {
+        // make sure that this user can see this sample
         Sample::authorize(user, &vec![sha256.clone()], shared).await?;
         // get the s3 id for this object
         let s3_id = db::s3::get_s3_id(S3Objects::File, &sha256, shared).await?;
@@ -353,14 +354,13 @@ impl Sample {
         shared.s3.files.download(&s3_id.to_string()).await
     }
 
-    /// Download an object by sha256 as an encrypted zip
-    ///
-    /// This is not near as efficient as using CaRT and should not be used for large files.
+    /// Download an object by sha256 as a streaming encrypted zip
     ///
     /// # Arguments
     ///
     /// * `user` - The user that is getting this sample
     /// * `sha256` - The sha256 of the sample to get
+    /// * `params` - Zip download parameters (password)
     /// * `shared` - Shared objects in Thorium
     #[instrument(name = "Sample::download_as_zip", skip(user, shared), err(Debug))]
     pub async fn download_as_zip(
@@ -368,11 +368,12 @@ impl Sample {
         sha256: String,
         params: ZipDownloadParams,
         shared: &Shared,
-    ) -> Result<Vec<u8>, ApiError> {
+    ) -> Result<tokio::io::DuplexStream, ApiError> {
+        // make sure that this user can see this sample
         Sample::authorize(user, &vec![sha256.clone()], shared).await?;
         // get the s3 id for this object
         let s3_id = db::s3::get_s3_id(S3Objects::File, &sha256, shared).await?;
-        // this sample exists and we have access to it so download it
+        // download and stream this file as an encrypted zip
         shared
             .s3
             .files
