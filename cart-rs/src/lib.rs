@@ -28,7 +28,7 @@
 //! let password: GenericArray<u8, U16> =
 //!     GenericArray::clone_from_slice(&"SecretCornIsBest".as_bytes()[..16]);
 //! // build our cart stream
-//! let mut cart_stream = CartStream::new(BufReader::new(source), &password)?;
+//! let mut cart_stream = CartStream::builder(&password, BufReader::new(source)).build_v2()?;
 //! // open a file to cart to
 //! let mut output = OpenOptions::new()
 //!     .read(true)
@@ -89,7 +89,7 @@
 //! # let password: GenericArray<u8, U16> =
 //! #     GenericArray::clone_from_slice(&"SecretCornIsBest".as_bytes()[..16]);
 //! # // build our cart streamer
-//! # let mut cart = CartStreamManual::new(&password, 16384)?;
+//! # let mut cart = CartStreamManual::builder(&password, 16384).build_v1()?;
 //! # // Have a file to write our carted data to
 //! # let mut dest = File::create("/tmp/CartedPotato").await?;
 //! # // wrap our open carted file handle in a BufReader
@@ -174,7 +174,7 @@
 //! let password: GenericArray<u8, U16> =
 //!     GenericArray::clone_from_slice(&"SecretCornIsBest".as_bytes()[..16]);
 //! // build our cart streamer
-//! let mut cart = CartStreamManual::new(&password, 16384)?;
+//! let mut cart = CartStreamManual::builder(&password, 16384).build_v1()?;
 //! // Have a file to write our carted data to
 //! let mut dest = File::create("/tmp/CartedSquash").await?;
 //! // wrap our open carted file handle in a BufReader
@@ -237,143 +237,179 @@
 //! #    exec().await.unwrap()
 //! # })
 //! ```
+use aes_gcm::{AeadInPlace, Aes128Gcm};
 use bytes::{Buf, Bytes};
-use crypto::rc4::Rc4;
-use crypto::symmetriccipher::SynchronousStreamCipher;
-use flate2::{Compress, Compression, FlushCompress, Status};
+use flate2::{Compress, Decompress, FlushCompress, FlushDecompress, Status};
 use futures_core::ready;
 use generic_array::{ArrayLength, GenericArray};
-use miniz_oxide::inflate::stream::InflateState;
-use miniz_oxide::{MZError, MZFlush, MZStatus};
 use rc4::{KeyInit, StreamCipher};
 use std::convert::TryFrom;
-use std::io::prelude::*;
 use std::io::ErrorKind;
+use std::io::prelude::*;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncBufRead, AsyncRead, ReadBuf};
+use zstd::stream::raw::Operation;
 
 mod errors;
 mod libs;
 
 pub use errors::Error;
+pub use flate2::Compression;
 pub use libs::{footer, footer::Footer, header, header::Header};
 
-/// Packs a Cart file using streaming
-#[pin_project::pin_project]
-pub struct CartStream<R: AsyncBufRead, T: ArrayLength<u8>> {
-    /// The input file stream to cart
-    #[pin]
-    pub input: R,
-    /// The key used for encryption
-    key: GenericArray<u8, T>,
-    /// The zlib compressor to use
+/// Recommended buffer capacity for `BufReader`/`BufWriter` wrapping cart I/O.
+///
+/// Matches the V2 segment size and internal decryption buffer, so each
+/// `poll_fill_buf` / `poll_write` can transfer a full segment in one call
+/// instead of many 8 KiB default-sized calls.
+pub const CART_IO_BUF_SIZE: usize = 262_144;
+/// The default segment size for V2 (256 KiB)
+pub const DEFAULT_SEGMENT_SIZE: u32 = 262_144;
+/// The static GCM nonce used by V2. CaRT stores the key in plaintext in the
+/// header, so there is no security benefit to a random nonce and so a fun easter egg string
+/// about mcarson's dog named Fliffy is used.
+pub static STATIC_NONCE: [u8; 12] = [70, 108, 105, 102, 102, 121, 73, 115, 71, 111, 111, 100];
+
+/// The CaRT format version
+///
+/// Version 1 is the official format while version 2 is an unofficial version that
+/// only Thorium supports right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum CartVersion {
+    /// RC4 encryption + zlib compression
+    V1,
+    /// AES-128-GCM encryption + zstd compression
+    V2,
+}
+
+impl std::str::FromStr for CartVersion {
+    type Err = &'static str;
+    /// Cast a str to an `CartVersion`
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - The sting to convert to a version
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "V1" | "v1" => Ok(CartVersion::V1),
+            "V2" | "v2" => Ok(CartVersion::V1),
+            _ => Err("expected `V1` or `V2`"),
+        }
+    }
+}
+
+/// Version-specific cart behaviour. Implemented by `CartStreamV1` and `CartStreamV2`.
+///
+/// Each implementor owns all compressor + cipher state for its version and
+/// provides the three operations that `CartStream` dispatches to:
+///
+/// * `write_header` – serialize the version-specific header bytes
+/// * `do_poll_read` – compress and encrypt one round of input data
+/// * `is_finished`  – whether the compressor has flushed all output
+pub trait CartVersionSupport {
+    /// Write the version-specific `CaRT` header into `buf`, returning the
+    /// number of bytes written.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The encryption key (stored in the header)
+    /// * `buf` - Destination buffer (must be large enough for the header)
+    fn write_header(&self, key: &[u8], buf: &mut [u8]) -> Result<usize, Error>;
+
+    /// Compress and encrypt one round of input, writing the result into `buf`.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The pinned input reader
+    /// * `cx`    - The async task context
+    /// * `buf`   - The output read buffer
+    fn do_poll_read<R: AsyncBufRead>(
+        &mut self,
+        input: &mut Pin<&mut R>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>>;
+
+    /// Returns `true` once the compressor has been fully flushed and all
+    /// encrypted output has been delivered.
+    fn is_finished(&self) -> bool;
+}
+
+/// Version 1 cart implementation: RC4 stream cipher with zlib compression.
+///
+/// Data flows through: input → zlib compress → RC4 encrypt → output.
+/// The entire compressed+encrypted stream is written contiguously between the
+/// header and footer with no framing.
+pub struct CartStreamV1<T: ArrayLength<u8>> {
+    /// The zlib compressor
     zlib: Compress,
-    /// The rc4 encryptor to encrypt our data with
+    /// The RC4 stream cipher
     rc4: rc4::Rc4<T>,
-    /// Signals that the header has been written
-    header_written: bool,
-    /// Signals that the file has been completely carted and the footer has been appended
-    footer_written: bool,
-    /// Signals that the input has been exhausted and all data has been written to the output
+    /// Whether the zlib compressor has reached `StreamEnd`
     finished: bool,
 }
 
-impl<R: AsyncBufRead, T: ArrayLength<u8>> CartStream<R, T> {
-    /// Create a new cart stream to cart a file
+impl<T: ArrayLength<u8>> CartStreamV1<T> {
+    /// Create a new V1 cart stream with the given key and compression level.
     ///
     /// # Arguments
     ///
-    /// * `input` - A reader for the file to cart
-    /// * `key` - The 16 byte key to use for encryption
-    pub fn new(input: R, key: &GenericArray<u8, T>) -> Result<Self, Error> {
-        // check that the given key is valid
-        Header::validate_key(key)?;
-        // build the buffer to store data ready to be compressed, decrypted, and written
-        // build our compressor
-        let zlib = Compress::new(Compression::default(), true);
-        // build our rc4 encryptor
-        let rc4 = rc4::Rc4::new(key);
-        let cart = CartStream {
-            input,
-            key: key.clone(),
-            zlib,
-            rc4,
-            header_written: false,
-            footer_written: false,
+    /// * `key`         - The 16-byte RC4 key
+    /// * `compression` - The zlib compression level to use
+    fn new(key: &GenericArray<u8, T>, compression: Compression) -> Self {
+        CartStreamV1 {
+            zlib: Compress::new(compression, true),
+            rc4: rc4::Rc4::new(key),
             finished: false,
-        };
-        Ok(cart)
+        }
     }
+}
 
-    /// Write the `CaRT` header to the internal read buffer, returning the number of bytes written
+impl<T: ArrayLength<u8>> CartVersionSupport for CartStreamV1<T> {
+    /// Write a cart version 1 header
     ///
     /// # Arguments
     ///
-    /// * `buf` - The internal buffer to write carted data to
-    fn write_header(self: Pin<&mut Self>, buf: &mut ReadBuf<'_>) -> Result<usize, std::io::Error> {
-        // write the header if it hasn't been written already
-        let this = self.project();
-        let output = buf.initialize_unfilled();
-        if let Err(err) = Header::write(this.key, output) {
-            return Err(std::io::Error::new(ErrorKind::InvalidData, err));
-        }
-        *this.header_written = true;
+    /// * `key` - The encryption key used
+    /// * `buf` - The buffer to write our header into
+    fn write_header(&self, key: &[u8], buf: &mut [u8]) -> Result<usize, Error> {
+        Header::write(CartVersion::V1, key, buf)?;
         Ok(header::HEADER_LEN)
     }
 
-    /// Write the `CaRT` footer to the internal read buffer, returning the number of bytes written
+    /// Read and compress/encrypt data
     ///
     /// # Arguments
     ///
-    /// * `buf` - The internal buffer to write carted data to
-    fn write_footer(self: Pin<&mut Self>, buf: &mut ReadBuf<'_>) -> Result<usize, std::io::Error> {
-        let this = self.project();
-        let output = buf.initialize_unfilled();
-        if let Err(err) = Footer::write(output) {
-            return Err(std::io::Error::new(ErrorKind::InvalidData, err));
-        }
-        // signal the footer has been written and the file is complete
-        *this.footer_written = true;
-        Ok(footer::FOOTER_LEN)
-    }
-
-    /// Try to read from our stream and cart any data to the internal read buffer
-    ///
-    /// # Arguments
-    ///
-    /// * `cx` - The current context
-    /// * `buf` - The internal buffer to write carted data to
-    fn do_poll_read(
-        self: Pin<&mut Self>,
+    /// * `input` - The reader to read from
+    /// * `cx` - The context for this reader
+    /// * `buf` - The buffer to write compressed/encrypted data into
+    fn do_poll_read<R: AsyncBufRead>(
+        &mut self,
+        input: &mut Pin<&mut R>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        // project our struct
-        let mut this = self.project();
-        // get the total number of bytes output by compressor before compressing this round
-        let old_total_out = this.zlib.total_out();
-        // get a reference to the next unfilled chunk of the internal read buffer
+        // get the total number of bytes output by compressor before this round
+        let old_total_out = self.zlib.total_out();
+        // get a reference to the next unfilled chunk of the output buffer
         let output = buf.initialize_unfilled();
-        // ingest and compress data until the compressor flushes data to the output buffer
+        // ingest and compress data until the compressor flushes output
         'compress: loop {
             // read in the next chunk of bytes
-            let chunk = ready!(this.input.as_mut().poll_fill_buf(cx))?;
+            let chunk = ready!(input.as_mut().poll_fill_buf(cx))?;
             let flush = if chunk.is_empty() {
-                // if the input is exhausted, signal the compressor to just
-                // flush data from its internal buffer
+                // input exhausted — flush the compressor's internal buffer
                 FlushCompress::Finish
             } else {
                 FlushCompress::None
             };
-            let old_total_in = this.zlib.total_in();
+            let old_total_in = self.zlib.total_in();
             // compress the data and write it to the output buffer
-            // Note: when using "FlushCompress::None", the compressor decides when to flush data from
-            //       its internal buffer to the output buffer, meaning this call could 1) only consume data
-            //       from the input for compression on subsequent calls, 2) only flush compressed data to
-            //       the output without consuming any data from the input, or 3) both consume input and
-            //       flush compressed data to the output; all 3 possibilities are accounted for
-            match this.zlib.compress(chunk, output, flush) {
+            match self.zlib.compress(chunk, output, flush) {
                 Ok(status) => match status {
                     Status::Ok => (),
                     Status::BufError => {
@@ -383,40 +419,514 @@ impl<R: AsyncBufRead, T: ArrayLength<u8>> CartStream<R, T> {
                         )));
                     }
                     Status::StreamEnd => {
-                        // signal that the carting process has finished and exit the loop
-                        *this.finished = true;
+                        self.finished = true;
                         break 'compress;
                     }
                 },
                 Err(err) => return Poll::Ready(Err(std::io::Error::new(ErrorKind::Other, err))),
             };
-            // calculate the number of bytes consumed in compression
-            let bytes_in = (this.zlib.total_in() - old_total_in) as usize;
-            // mark bytes as consumed from the input
-            this.input.as_mut().consume(bytes_in);
-            if this.zlib.total_out() != old_total_out {
-                // exit the loop if any compressed data was written to the output buffer
+            // calculate and consume the number of input bytes eaten
+            let bytes_in = (self.zlib.total_in() - old_total_in) as usize;
+            input.as_mut().consume(bytes_in);
+            if self.zlib.total_out() != old_total_out {
+                // compressor produced output — exit the loop
                 break 'compress;
             }
         }
-        // calculate the number of bytes that were output by the compressor
-        let compressed_out = (this.zlib.total_out() - old_total_out) as usize;
-        // encrypt the compressed data
-        this.rc4.apply_keystream(&mut output[..compressed_out]);
-        // advance the internal buffer by the number of bytes written
+        // calculate the number of compressed bytes produced
+        let compressed_out = (self.zlib.total_out() - old_total_out) as usize;
+        // encrypt the compressed data in-place
+        self.rc4.apply_keystream(&mut output[..compressed_out]);
+        // advance the output buffer by the number of bytes written
         buf.advance(compressed_out);
         Poll::Ready(Ok(()))
     }
+
+    /// Returns `true` once the zlib compressor has reached `StreamEnd` and
+    /// all encrypted output has been delivered.
+    fn is_finished(&self) -> bool {
+        self.finished
+    }
 }
 
-impl<R: AsyncBufRead, T: ArrayLength<u8>> AsyncRead for CartStream<R, T> {
-    /// Perform a poll for data, compressing, encrypting, and writing
-    /// any available data to the internal read buffer
+/// Version 2 cart implementation: AES-128-GCM authenticated encryption with
+/// zstd compression.
+///
+/// Unlike V1's contiguous stream, V2 uses **segment-based encryption**: input
+/// is compressed into fixed-size segments, each encrypted as a single AES-GCM
+/// operation with a 16-byte authentication tag. The output between header and
+/// footer is a sequence of `[u32 LE length][ciphertext+tag]` segments.
+///
+/// Per-segment nonces are derived from a random base nonce stored in the header:
+/// `nonce[0..8] = random`, `nonce[8..12] = segment_counter.to_be_bytes()`.
+pub struct CartStreamV2 {
+    /// The zstd streaming compressor
+    zstd: zstd::stream::raw::Encoder<'static>,
+    /// The AES-128-GCM cipher (immutable — GCM uses &self for encrypt)
+    cipher: Aes128Gcm,
+    /// Counter incremented for each encrypted segment (used in nonce derivation)
+    segment_counter: u32,
+    /// Accumulates compressed plaintext for the current segment
+    segment_buf: Vec<u8>,
+    /// Holds the length-prefixed encrypted segment ready to be drained to the reader
+    output_buf: Vec<u8>,
+    /// Current drain position within `output_buf`
+    output_pos: usize,
+    /// Maximum compressed plaintext bytes per segment before encryption
+    segment_size: usize,
+    /// Whether the zstd compressor is in finish mode (input exhausted)
+    zstd_finishing: bool,
+    /// Whether the zstd compressor has fully flushed all output
+    zstd_done: bool,
+    /// Whether the final segment has been encrypted
+    all_encrypted: bool,
+    /// Whether all encrypted output has been drained
+    finished: bool,
+}
+
+impl CartStreamV2 {
+    /// Create a new V2 cart stream.
     ///
     /// # Arguments
     ///
-    /// * `cx` - The current context
-    /// * `buf` - The internal read buffer storing output carted data
+    /// * `key`          - The 16-byte AES key (as a raw slice)
+    /// * `level`        - The zstd compression level
+    /// * `segment_size` - Maximum compressed bytes per segment
+    fn new(key: &[u8], level: i32, segment_size: usize) -> Result<Self, Error> {
+        // build the zstd streaming compressor at the requested level
+        let zstd = zstd::stream::raw::Encoder::new(level)
+            .map_err(|e| Error::new(format!("zstd encoder init failed: {e}")))?;
+        // build the AES-128-GCM cipher from the key
+        let key_bytes = aes_gcm::Key::<Aes128Gcm>::from_slice(key);
+        let cipher = <Aes128Gcm as aes_gcm::KeyInit>::new(key_bytes);
+        Ok(CartStreamV2 {
+            zstd,
+            cipher,
+            segment_counter: 0,
+            segment_buf: Vec::with_capacity(segment_size),
+            output_buf: Vec::with_capacity(segment_size + 4 + 16),
+            output_pos: 0,
+            segment_size,
+            zstd_finishing: false,
+            zstd_done: false,
+            all_encrypted: false,
+            finished: false,
+        })
+    }
+
+    /// Derive the GCM nonce for the current segment counter.
+    ///
+    /// Uses the static nonce as a base and overwrites the last 4 bytes with
+    /// the big-endian segment counter.
+    fn current_nonce(&self) -> aes_gcm::Nonce<generic_array::typenum::U12> {
+        let mut n = STATIC_NONCE;
+        n[8..12].copy_from_slice(&self.segment_counter.to_be_bytes());
+        GenericArray::clone_from_slice(&n)
+    }
+}
+
+impl CartVersionSupport for CartStreamV2 {
+    /// Write a cart version 2 header
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The encryption key used
+    /// * `buf` - The buffer to write our header into
+    fn write_header(&self, key: &[u8], buf: &mut [u8]) -> Result<usize, Error> {
+        Header::write(CartVersion::V2, key, buf)?;
+        Ok(header::HEADER_LEN)
+    }
+
+    /// Read, compress (zstd), and encrypt (AES-GCM) data in segments.
+    ///
+    /// Compressed data is accumulated into `segment_buf` until it reaches the
+    /// configured segment size. Each full segment is encrypted as a single
+    /// AES-GCM operation and written as `[u32 LE len][ciphertext][tag]`.
+    ///
+    /// When the caller's ReadBuf is large enough, the encrypted segment is
+    /// written directly to it, bypassing the intermediate `output_buf`.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The pinned input reader
+    /// * `cx`    - The async task context
+    /// * `buf`   - The output read buffer
+    fn do_poll_read<R: AsyncBufRead>(
+        &mut self,
+        input: &mut Pin<&mut R>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        // Phase 1: drain any pending encrypted output from a previous round
+        if self.output_pos < self.output_buf.len() {
+            // get the undrained portion of our staged output
+            let available = &self.output_buf[self.output_pos..];
+            // get a reference to the caller's output buffer
+            let dest = buf.initialize_unfilled();
+            // copy as much as fits into the caller's buffer
+            let to_copy = std::cmp::min(available.len(), dest.len());
+            dest[..to_copy].copy_from_slice(&available[..to_copy]);
+            buf.advance(to_copy);
+            // advance our drain position
+            self.output_pos += to_copy;
+            // if we've drained everything, reset and check if we're done
+            if self.output_pos == self.output_buf.len() {
+                self.output_buf.clear();
+                self.output_pos = 0;
+                if self.all_encrypted {
+                    self.finished = true;
+                }
+            }
+            return Poll::Ready(Ok(()));
+        }
+        // Phase 2: compress input into the segment buffer, writing directly
+        // into spare capacity to avoid zeroing memory zstd overwrites
+        if !self.zstd_finishing {
+            loop {
+                // read in the next chunk of input bytes
+                let chunk = ready!(input.as_mut().poll_fill_buf(cx))?;
+                if chunk.is_empty() {
+                    // input exhausted — switch to flushing mode
+                    self.zstd_finishing = true;
+                    break;
+                }
+                // make room in the segment buffer for compressed output
+                let old_len = self.segment_buf.len();
+                let space = self.segment_size.saturating_sub(old_len).max(64);
+                self.segment_buf.reserve(space);
+                // safety: we set_len to create writable space, then truncate
+                // to the actual bytes written by run_on_buffers
+                unsafe { self.segment_buf.set_len(old_len + space) };
+                // compress this chunk of input into the segment buffer
+                let status = self
+                    .zstd
+                    .run_on_buffers(chunk, &mut self.segment_buf[old_len..])
+                    .map_err(|e| std::io::Error::new(ErrorKind::Other, e))?;
+                // truncate to the actual number of compressed bytes written
+                self.segment_buf.truncate(old_len + status.bytes_written);
+                // mark the consumed input bytes
+                input.as_mut().consume(status.bytes_read);
+                if self.segment_buf.len() >= self.segment_size {
+                    // segment buffer is full — ready to encrypt
+                    break;
+                }
+            }
+        }
+        // Phase 3: flush the zstd compressor if input is exhausted
+        if self.zstd_finishing && !self.zstd_done {
+            loop {
+                // make room for more flushed output
+                let old_len = self.segment_buf.len();
+                let space = self.segment_size.saturating_sub(old_len).max(256);
+                self.segment_buf.reserve(space);
+                unsafe { self.segment_buf.set_len(old_len + space) };
+                // flush compressed data from the zstd encoder's internal buffer
+                let mut out_buf =
+                    zstd::stream::raw::OutBuffer::around(&mut self.segment_buf[old_len..]);
+                let remaining = self
+                    .zstd
+                    .finish(&mut out_buf, true)
+                    .map_err(|e| std::io::Error::new(ErrorKind::Other, e))?;
+                // truncate to the actual bytes flushed
+                let written = out_buf.pos();
+                self.segment_buf.truncate(old_len + written);
+                if remaining == 0 {
+                    // encoder fully flushed
+                    self.zstd_done = true;
+                    break;
+                }
+                if self.segment_buf.len() >= self.segment_size {
+                    // segment is full — encrypt it now, flush the rest next round
+                    break;
+                }
+            }
+        }
+        // Phase 4: encrypt the segment when ready, using detached tag to
+        // avoid extending the Vec with the 16-byte GCM tag
+        let should_encrypt = !self.segment_buf.is_empty()
+            && (self.segment_buf.len() >= self.segment_size || self.zstd_done);
+        if should_encrypt {
+            // derive the per-segment nonce
+            let nonce = self.current_nonce();
+            // encrypt the segment in-place, getting the 16-byte tag separately
+            let tag = self
+                .cipher
+                .encrypt_in_place_detached(&nonce, b"", &mut self.segment_buf)
+                .map_err(|_| std::io::Error::new(ErrorKind::Other, "AES-GCM encryption failed"))?;
+            // calculate the total ciphertext length (encrypted data + tag)
+            let ciphertext_len = (self.segment_buf.len() + 16) as u32;
+            // advance the segment counter for the next nonce
+            self.segment_counter += 1;
+            // mark all segments as encrypted if the compressor is done
+            if self.zstd_done {
+                self.all_encrypted = true;
+            }
+            // try to write directly to ReadBuf when it's large enough,
+            // skipping the intermediate output_buf entirely
+            let dest = buf.initialize_unfilled();
+            let total_needed = 4 + self.segment_buf.len() + 16;
+            if dest.len() >= total_needed {
+                // fast path: write [len][ciphertext][tag] straight to the caller
+                dest[..4].copy_from_slice(&ciphertext_len.to_le_bytes());
+                dest[4..4 + self.segment_buf.len()].copy_from_slice(&self.segment_buf);
+                dest[4 + self.segment_buf.len()..total_needed].copy_from_slice(tag.as_slice());
+                buf.advance(total_needed);
+                self.segment_buf.clear();
+                if self.all_encrypted {
+                    self.finished = true;
+                }
+            } else {
+                // slow path: stage in output_buf for multi-poll draining
+                self.output_buf.clear();
+                // write the 4-byte length prefix
+                self.output_buf
+                    .extend_from_slice(&ciphertext_len.to_le_bytes());
+                // write the encrypted data
+                self.output_buf.append(&mut self.segment_buf);
+                // write the 16-byte GCM authentication tag
+                self.output_buf.extend_from_slice(tag.as_slice());
+                self.output_pos = 0;
+                // drain what fits into the caller's buffer
+                let to_copy = std::cmp::min(self.output_buf.len(), dest.len());
+                dest[..to_copy].copy_from_slice(&self.output_buf[..to_copy]);
+                buf.advance(to_copy);
+                self.output_pos = to_copy;
+                // check if we drained everything in one go
+                if self.output_pos == self.output_buf.len() {
+                    self.output_buf.clear();
+                    self.output_pos = 0;
+                    if self.all_encrypted {
+                        self.finished = true;
+                    }
+                }
+            }
+            return Poll::Ready(Ok(()));
+        }
+
+        Poll::Ready(Ok(()))
+    }
+
+    /// Returns `true` once all segments have been encrypted and their output
+    /// has been fully drained.
+    fn is_finished(&self) -> bool {
+        self.finished
+    }
+}
+
+/// Builder for constructing a `CartStream` with configurable compression/encryption.
+///
+/// Use `build()` or `build_v2()` for a V2 stream (AES-GCM + zstd, the default),
+/// or `build_v1()` for a V1 stream (RC4 + zlib).
+///
+/// Currently version 2 is **not** official and as such is only recognized by Thorium
+/// and other tools that use cart-rs.
+///
+/// # Examples
+///
+/// ```
+/// // use CartStream directly instead of the builder type
+/// use cart_rs::CartStream;
+/// use generic_array::{typenum::U16, GenericArray};
+///
+/// # tokio_test::block_on(async {
+/// # let input = std::io::Cursor::new([0u8; 32]);
+/// // have a cart password to use
+/// let key: GenericArray<u8, U16> =
+///     GenericArray::clone_from_slice(&"SecretCornIsBest".as_bytes()[..16]);
+/// // build a version 1 cart stream
+/// let stream = CartStream::builder(&key, input)
+///     .compression_level(6)
+///     .build_v1()?;
+/// # let input = std::io::Cursor::new([0u8; 32]);
+/// // build a version 2 cart stream
+/// let stream = CartStream::builder(&key, input)
+///     .segment_size(262_144)
+///     .build_v2()?;
+/// # Ok::<(), cart_rs::Error>(())
+/// # }).unwrap()
+/// ```
+pub struct CartStreamBuilder<'a, T: ArrayLength<u8>, R: AsyncBufRead> {
+    /// The key used for encryption (stored in the header)
+    key: &'a GenericArray<u8, T>,
+    /// The input file stream to cart
+    pub input: R,
+    /// The zlib compression level for V1 (0–9)
+    compression_level: Option<i32>,
+    /// The zstd compression level for V2 (typically 1–22, default 3)
+    zstd_level: Option<i32>,
+    /// The segment size to set for version 2
+    segment_size: Option<u32>,
+}
+
+impl<'a, T: ArrayLength<u8>, R: AsyncBufRead> CartStreamBuilder<'a, T, R> {
+    /// Create a new builder with the given encryption key.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to encrypt this data with
+    /// * `input` - The input stream to cart
+    pub fn new(key: &'a GenericArray<u8, T>, input: R) -> Self {
+        Self {
+            key,
+            input,
+            compression_level: None,
+            zstd_level: None,
+            segment_size: None,
+        }
+    }
+
+    /// Set the zlib compression level for V1 (0–9, ignored for V2).
+    ///
+    /// # Arguments
+    ///
+    /// * `level` - The zlib compression level (0 = no compression, 9 = max)
+    pub fn compression_level(mut self, level: i32) -> Self {
+        self.compression_level = Some(level);
+        self
+    }
+
+    /// Set the zstd compression level for V2 (typically 1–22, default 3).
+    ///
+    /// Lower levels are faster with slightly larger output. Level 1 is a
+    /// good choice when throughput matters more than compression ratio.
+    /// Ignored for V1.
+    ///
+    /// # Arguments
+    ///
+    /// * `level` - The zstd compression level (1 = fastest, 22 = max compression)
+    pub fn zstd_level(mut self, level: i32) -> Self {
+        self.zstd_level = Some(level);
+        self
+    }
+
+    /// Set the segment size for V2 encryption (ignored for V1).
+    ///
+    /// Each segment of compressed data is encrypted as a single AES-GCM
+    /// operation. Defaults to 256 KiB.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - The maximum number of compressed bytes per segment
+    pub fn segment_size(mut self, size: u32) -> Self {
+        self.segment_size = Some(size);
+        self
+    }
+
+    /// Build a V1 cart stream (RC4 + zlib).
+    pub fn build_v1(self) -> Result<CartStream<T, R, CartStreamV1<T>>, Error> {
+        Header::validate_key(self.key)?;
+        let compression = match self.compression_level {
+            Some(level) => Compression::new(level as u32),
+            None => Compression::default(),
+        };
+        Ok(CartStream {
+            key: self.key.clone(),
+            input: self.input,
+            internal: CartStreamV1::new(self.key, compression),
+            header_written: false,
+            footer_written: false,
+        })
+    }
+
+    /// Build a V2 cart stream (AES-GCM + zstd). This is the default.
+    pub fn build_v2(self) -> Result<CartStream<T, R, CartStreamV2>, Error> {
+        Header::validate_key(self.key)?;
+        let level = self.zstd_level.unwrap_or(3);
+        let segment_size = self.segment_size.unwrap_or(DEFAULT_SEGMENT_SIZE) as usize;
+        let internal = CartStreamV2::new(self.key.as_slice(), level, segment_size)?;
+        Ok(CartStream {
+            key: self.key.clone(),
+            input: self.input,
+            internal,
+            header_written: false,
+            footer_written: false,
+        })
+    }
+
+    /// Build a cart stream using the default version (V2).
+    pub fn build(self) -> Result<CartStream<T, R, CartStreamV2>, Error> {
+        self.build_v2()
+    }
+}
+
+/// Packs a Cart file using streaming.
+///
+/// Generic over:
+/// * `R` – the async input reader
+/// * `T` – the encryption key length (always `U16` in practice)
+/// * `V` – the version implementation (`CartStreamV1` or `CartStreamV2`)
+///
+/// The version parameter `V` is monomorphized at compile time for zero-cost
+/// dispatch. Use `CartStream::new()` for V1 or `CartStreamBuilder` for either.
+#[pin_project::pin_project]
+pub struct CartStream<T: ArrayLength<u8>, R: AsyncBufRead, V: CartVersionSupport> {
+    /// The input file stream to cart
+    #[pin]
+    pub input: R,
+    /// The key used for encryption (stored in the header)
+    key: GenericArray<u8, T>,
+    /// Version-specific compressor + cipher state
+    internal: V,
+    /// Signals that the header has been written
+    header_written: bool,
+    /// Signals that the footer has been written (stream complete)
+    footer_written: bool,
+}
+
+/// The builder creation doesn't actually use the cart version generic so
+/// just default to CartStreamV2
+impl<T: ArrayLength<u8>, R: AsyncBufRead> CartStream<T, R, CartStreamV2> {
+    /// Create a new builder for configuring and constructing a `CartStream`.
+    ///
+    /// # Arguments
+    ///
+    /// * `key`   - The 16-byte key to use when encrypting data
+    /// * `input` - A reader for the file to cart
+    pub fn builder(key: &GenericArray<u8, T>, input: R) -> CartStreamBuilder<'_, T, R> {
+        CartStreamBuilder::new(key, input)
+    }
+}
+
+impl<T: ArrayLength<u8>, R: AsyncBufRead, V: CartVersionSupport> CartStream<T, R, V> {
+    /// Write the `CaRT` header to the output buffer.
+    ///
+    /// Delegates to the version-specific implementation to write the correct
+    /// header format.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - The output read buffer to write the header into
+    fn write_header(self: Pin<&mut Self>, buf: &mut ReadBuf<'_>) -> Result<usize, std::io::Error> {
+        let this = self.project();
+        let output = buf.initialize_unfilled();
+        let header_len = this
+            .internal
+            .write_header(this.key, output)
+            .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err))?;
+        *this.header_written = true;
+        Ok(header_len)
+    }
+
+    /// Write the `CaRT` footer to the output buffer.
+    ///
+    /// The footer format is the same for all versions.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - The output read buffer to write the footer into
+    fn write_footer(self: Pin<&mut Self>, buf: &mut ReadBuf<'_>) -> Result<usize, std::io::Error> {
+        let this = self.project();
+        let output = buf.initialize_unfilled();
+        Footer::write(output).map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err))?;
+        *this.footer_written = true;
+        Ok(footer::FOOTER_LEN)
+    }
+}
+
+impl<T: ArrayLength<u8>, R: AsyncBufRead, V: CartVersionSupport> AsyncRead for CartStream<T, R, V> {
+    /// Poll for data, compressing and encrypting any available input.
+    ///
+    /// The output sequence is: header → compressed+encrypted data → footer.
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -426,513 +936,1562 @@ impl<R: AsyncBufRead, T: ArrayLength<u8>> AsyncRead for CartStream<R, T> {
             // write the header if it hasn't been written
             match self.write_header(buf) {
                 Ok(bytes_written) => {
-                    // advance the buffer by the number of bytes written
                     buf.advance(bytes_written);
                     Poll::Ready(Ok(()))
                 }
                 Err(err) => Poll::Ready(Err(err)),
             }
-        } else if !self.footer_written && self.finished {
-            // write the footer if it hasn't been written and our input is exhausted
+        } else if self.internal.is_finished() && !self.footer_written {
+            // write the footer once the version impl has finished
             match self.write_footer(buf) {
                 Ok(bytes_written) => {
-                    // advance the buffer by the number of bytes written
                     buf.advance(bytes_written);
                     Poll::Ready(Ok(()))
                 }
                 Err(err) => Poll::Ready(Err(err)),
             }
         } else if self.footer_written {
-            // return immediately (signalling completion) if the footer was already written
+            // signal completion
             Poll::Ready(Ok(()))
         } else {
-            // if the header has been written and we have more input,
-            // attempt to read, compress, and encrypt more data
-            self.do_poll_read(cx, buf)
+            // delegate to the version-specific compress+encrypt logic
+            let mut this = self.project();
+            this.internal.do_poll_read(&mut this.input, cx, buf)
         }
     }
 }
 
-/// Unpacks a Cart file using streaming
+/// Version 1 uncart state: RC4 stream cipher with zlib decompression.
 ///
-/// This Cart file cannot have any comments for this to work.
+/// Owns its own decryption buffer since V1 uses a contiguous encrypted stream
+/// that is decrypted in chunks.
+struct UncartStreamV1 {
+    /// The RC4 decryptor built from the key in the header
+    rc4: rc4::Rc4<generic_array::typenum::U16>,
+    /// The zlib decompressor
+    zlib: Decompress,
+    /// Buffer holding decrypted-but-still-compressed data
+    decrypted: Vec<u8>,
+    /// Start offset within the decrypted buffer for decompression
+    decrypt_start: usize,
+    /// End offset within the decrypted buffer for decompression
+    decrypt_end: usize,
+}
+
+impl UncartStreamV1 {
+    /// The size of the internal buffer storing decrypted data
+    const DECRYPTED_BUF_SIZE: usize = 262_144;
+
+    /// Build a V1 uncart state from a parsed header.
+    ///
+    /// # Arguments
+    ///
+    /// * `hdr` - The parsed CaRT header containing the RC4 key
+    fn from_header(hdr: &Header) -> Self {
+        let key = GenericArray::from_slice(&hdr.key);
+        UncartStreamV1 {
+            rc4: rc4::Rc4::new(key),
+            zlib: Decompress::new(true),
+            decrypted: vec![0; Self::DECRYPTED_BUF_SIZE],
+            decrypt_start: 0,
+            decrypt_end: 0,
+        }
+    }
+
+    /// Read, decrypt, decompress, and output one round of V1 data.
+    ///
+    /// # Arguments
+    ///
+    /// * `cart`                    - The pinned cart input reader
+    /// * `decompressed`           - Shared decompression output buffer
+    /// * `decompressed_remaining` - Bytes remaining in the decompressed buffer
+    /// * `decompressed_consumed`  - Bytes already copied from the decompressed buffer
+    /// * `cx`                     - The async task context
+    /// * `buf`                    - The output read buffer
+    fn do_poll_read<R: AsyncBufRead>(
+        &mut self,
+        cart: Pin<&mut R>,
+        decompressed: &mut [u8],
+        decompressed_remaining: &mut usize,
+        decompressed_consumed: &mut usize,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let output = buf.initialize_unfilled();
+        let mut cart = cart;
+        let mut returned = 0;
+        let mut local_remaining = *decompressed_remaining;
+        let mut local_consumed = *decompressed_consumed;
+        // track whether further polling could cause data loss
+        let mut write_hole = false;
+        'decrypt_and_decompress: loop {
+            if *decompressed_remaining == 0 || local_remaining == 0 {
+                // need more decrypted data to decompress
+                if self.decrypt_start == self.decrypt_end {
+                    // read and decrypt the next chunk from the input
+                    let raw = ready!(cart.as_mut().poll_fill_buf(cx))?;
+                    if raw.is_empty() {
+                        return Poll::Ready(Ok(()));
+                    }
+                    let decompressable = std::cmp::min(raw.len(), Self::DECRYPTED_BUF_SIZE);
+                    let decrypt_output = &mut self.decrypted[..decompressable];
+                    decrypt_output.copy_from_slice(&raw[..decompressable]);
+                    self.rc4.apply_keystream(decrypt_output);
+                    cart.as_mut().consume(decompressable);
+                    self.decrypt_end = decompressable;
+                    self.decrypt_start = 0;
+                    *decompressed_consumed = 0;
+                }
+                // decompress the decrypted data
+                let dec_slice = &self.decrypted[self.decrypt_start..self.decrypt_end];
+                let old_total_in = self.zlib.total_in();
+                let old_total_out = self.zlib.total_out();
+                let status = self
+                    .zlib
+                    .decompress(dec_slice, decompressed, FlushDecompress::None);
+                let bytes_consumed = (self.zlib.total_in() - old_total_in) as usize;
+                let bytes_written = (self.zlib.total_out() - old_total_out) as usize;
+                self.decrypt_start += bytes_consumed;
+                if status.is_err() {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "CaRT file cannot be decompressed because data is missing/corrupted",
+                    )));
+                }
+                // copy as much decompressed data as fits into the output buffer
+                let decompress_end = std::cmp::min(output.len() - returned, bytes_written);
+                output[returned..returned + decompress_end]
+                    .copy_from_slice(&decompressed[..decompress_end]);
+                local_remaining = bytes_written - decompress_end;
+                local_consumed = decompress_end;
+                returned += decompress_end;
+                if returned == output.len() || write_hole || bytes_written < output.len() {
+                    break 'decrypt_and_decompress;
+                }
+            } else {
+                // drain remaining decompressed data from a previous round
+                let decompress_end = std::cmp::min(output.len() - returned, local_remaining);
+                output[returned..returned + decompress_end].copy_from_slice(
+                    &decompressed[local_consumed..local_consumed + decompress_end],
+                );
+                local_remaining -= decompress_end;
+                local_consumed += decompress_end;
+                returned += decompress_end;
+                if returned == output.len() {
+                    break 'decrypt_and_decompress;
+                }
+                write_hole = true;
+            }
+        }
+        *decompressed_remaining = local_remaining;
+        *decompressed_consumed = local_consumed;
+        buf.advance(returned);
+        Poll::Ready(Ok(()))
+    }
+}
+
+/// Version 2 uncart state: AES-128-GCM authenticated decryption with zstd
+/// decompression.
+///
+/// Reads length-prefixed encrypted segments from the input, decrypts each with
+/// AES-GCM (verifying the authentication tag), then decompresses with zstd.
+struct UncartStreamV2 {
+    /// The AES-128-GCM cipher
+    cipher: Aes128Gcm,
+    /// The zstd streaming decompressor
+    zstd: zstd::stream::raw::Decoder<'static>,
+    /// The 12-byte base nonce (static — CaRT doesn't require nonce secrecy)
+    base_nonce: [u8; 12],
+    /// Counter tracking which segment we're decrypting
+    segment_counter: u32,
+    /// Buffer accumulating the ciphertext+tag for the current segment
+    segment_buf: Vec<u8>,
+    /// Expected total ciphertext+tag length for the current segment, or None
+    /// if we haven't yet read the 4-byte length prefix
+    expected_len: Option<u32>,
+    /// Buffer for reading the 4-byte length prefix across poll boundaries
+    length_buf: [u8; 4],
+    /// How many bytes of the length prefix have been read so far
+    length_pos: usize,
+    /// Holds decrypted compressed data after AES-GCM decryption, before
+    /// decompression
+    decrypted_buf: Vec<u8>,
+    /// Current read position within `decrypted_buf`
+    decrypted_pos: usize,
+}
+
+impl UncartStreamV2 {
+    /// Build a V2 uncart state from a parsed header.
+    ///
+    /// # Arguments
+    ///
+    /// * `hdr` - The parsed CaRT V2 header containing key, nonce, and segment size
+    fn from_header(hdr: &Header) -> Result<Self, std::io::Error> {
+        // build the AES-128-GCM cipher from the key in the header
+        let key_bytes = aes_gcm::Key::<Aes128Gcm>::from_slice(&hdr.key);
+        let cipher = <Aes128Gcm as aes_gcm::KeyInit>::new(key_bytes);
+        // use the default segment size for pre-allocating buffers
+        let segment_size = DEFAULT_SEGMENT_SIZE as usize;
+        // build the zstd streaming decompressor
+        let zstd = zstd::stream::raw::Decoder::new()
+            .map_err(|e| std::io::Error::new(ErrorKind::Other, e))?;
+        Ok(UncartStreamV2 {
+            cipher,
+            zstd,
+            base_nonce: STATIC_NONCE,
+            segment_counter: 0,
+            segment_buf: Vec::with_capacity(segment_size + 16),
+            expected_len: None,
+            length_buf: [0u8; 4],
+            length_pos: 0,
+            decrypted_buf: Vec::new(),
+            decrypted_pos: 0,
+        })
+    }
+
+    /// Derive the GCM nonce for the current segment counter
+    fn current_nonce(&self) -> aes_gcm::Nonce<generic_array::typenum::U12> {
+        let mut n = self.base_nonce;
+        n[8..12].copy_from_slice(&self.segment_counter.to_be_bytes());
+        GenericArray::clone_from_slice(&n)
+    }
+
+    /// Read, decrypt, decompress, and output one round of V2 data.
+    ///
+    /// # Arguments
+    ///
+    /// * `cart`                    - The pinned cart input reader
+    /// * `decompressed`           - Shared decompression output buffer
+    /// * `decompressed_remaining` - Bytes remaining in the decompressed buffer
+    /// * `decompressed_consumed`  - Bytes already copied from the decompressed buffer
+    /// * `cx`                     - The async task context
+    /// * `buf`                    - The output read buffer
+    fn do_poll_read<R: AsyncBufRead>(
+        &mut self,
+        cart: Pin<&mut R>,
+        decompressed: &mut [u8],
+        decompressed_remaining: &mut usize,
+        decompressed_consumed: &mut usize,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let output = buf.initialize_unfilled();
+        let mut cart = cart;
+        // Phase 1: output any remaining decompressed data from a previous round
+        if *decompressed_remaining > 0 {
+            // copy as much leftover decompressed data as fits into the output
+            let avail = std::cmp::min(*decompressed_remaining, output.len());
+            output[..avail].copy_from_slice(
+                &decompressed[*decompressed_consumed..*decompressed_consumed + avail],
+            );
+            // update the remaining/consumed tracking
+            *decompressed_remaining -= avail;
+            *decompressed_consumed += avail;
+            buf.advance(avail);
+            return Poll::Ready(Ok(()));
+        }
+        // Phase 2: decompress more from the decrypted segment buffer
+        if self.decrypted_pos < self.decrypted_buf.len() {
+            // get the undecompressed portion of the decrypted segment
+            let input_slice = &self.decrypted_buf[self.decrypted_pos..];
+            // decompress into the shared decompression buffer
+            let status = self
+                .zstd
+                .run_on_buffers(input_slice, decompressed)
+                .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
+            // advance our read position in the decrypted buffer
+            self.decrypted_pos += status.bytes_read;
+            // if we've consumed all decrypted data, free the buffer
+            if self.decrypted_pos == self.decrypted_buf.len() {
+                self.decrypted_buf.clear();
+                self.decrypted_pos = 0;
+            }
+            // copy as much decompressed output as fits into the caller's buffer
+            let avail = std::cmp::min(status.bytes_written, output.len());
+            output[..avail].copy_from_slice(&decompressed[..avail]);
+            // track any leftover for the next poll
+            *decompressed_remaining = status.bytes_written - avail;
+            *decompressed_consumed = avail;
+            buf.advance(avail);
+            return Poll::Ready(Ok(()));
+        }
+        // Phase 3: read the 4-byte segment length prefix
+        if self.expected_len.is_none() {
+            // accumulate the 4-byte prefix across poll boundaries
+            while self.length_pos < 4 {
+                let raw = ready!(cart.as_mut().poll_fill_buf(cx))?;
+                if raw.is_empty() {
+                    if self.length_pos == 0 {
+                        // no more segments — stream is done
+                        return Poll::Ready(Ok(()));
+                    }
+                    return Poll::Ready(Err(std::io::Error::new(
+                        ErrorKind::UnexpectedEof,
+                        "Truncated segment length prefix",
+                    )));
+                }
+                // read as many prefix bytes as available
+                let need = 4 - self.length_pos;
+                let take = std::cmp::min(need, raw.len());
+                self.length_buf[self.length_pos..self.length_pos + take]
+                    .copy_from_slice(&raw[..take]);
+                self.length_pos += take;
+                cart.as_mut().consume(take);
+            }
+            // check if this is the footer magic ("TRAC") rather than a segment
+            if &self.length_buf[..] == footer::MAGIC_NUM {
+                return Poll::Ready(Ok(()));
+            }
+            // parse the length and prepare to accumulate the segment
+            let len = u32::from_le_bytes(self.length_buf);
+            self.expected_len = Some(len);
+            self.length_pos = 0;
+            self.segment_buf.clear();
+            self.segment_buf.reserve(len as usize);
+        }
+        // Phase 4 + 5: read, accumulate, and decrypt the segment.
+        // When the BufReader already has the full segment buffered we
+        // decrypt directly from its buffer into decrypted_buf, avoiding
+        // an intermediate copy through segment_buf.
+        // get the expected segment length (ciphertext + 16-byte tag)
+        let need = self.expected_len.unwrap() as usize;
+        if need < 16 {
+            return Poll::Ready(Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "Encrypted segment too short for GCM tag",
+            )));
+        }
+        // derive the nonce for this segment
+        let nonce = self.current_nonce();
+        // try the fast path only when we haven't accumulated anything yet: if the
+        // whole segment is already sitting in the BufReader we can decrypt straight
+        // out of its buffer without copying through segment_buf
+        if self.segment_buf.is_empty() {
+            // try the fast path: peek to see if the full segment is already buffered
+            let raw = ready!(cart.as_mut().poll_fill_buf(cx))?;
+            if raw.is_empty() {
+                return Poll::Ready(Err(std::io::Error::new(
+                    ErrorKind::UnexpectedEof,
+                    "Truncated encrypted segment",
+                )));
+            }
+            if raw.len() >= need {
+                // fast path: the entire segment is in the BufReader's buffer
+                // split the ciphertext from the trailing 16-byte GCM tag
+                let ciphertext_len = need - 16;
+                let tag = aes_gcm::Tag::from_slice(&raw[ciphertext_len..need]);
+                // copy the ciphertext into decrypted_buf and decrypt in-place
+                self.decrypted_buf.clear();
+                self.decrypted_buf.extend_from_slice(&raw[..ciphertext_len]);
+                self.cipher
+                    .decrypt_in_place_detached(&nonce, b"", &mut self.decrypted_buf, tag)
+                    .map_err(|_| {
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "AES-GCM decryption/authentication failed",
+                        )
+                    })?;
+                // consume the segment from the input reader
+                cart.as_mut().consume(need);
+                // advance to the next segment
+                self.segment_counter += 1;
+                self.expected_len = None;
+                self.decrypted_pos = 0;
+            } else {
+                // not enough data in one buffer — start accumulating into segment_buf
+                // partial: copy what's available to start accumulating, then fall
+                // through to the accumulation loop below to finish this segment in
+                // this same poll (returning Ok with no output here would look like
+                // EOF to the caller)
+                let take = std::cmp::min(need, raw.len());
+                self.segment_buf.extend_from_slice(&raw[..take]);
+                cart.as_mut().consume(take);
+            }
+        }
+        // if the fast path didn't fully decrypt the segment, accumulate the rest
+        // (possibly across multiple polls) and then decrypt from segment_buf
+        if self.expected_len.is_some() {
+            // keep reading until we have the full ciphertext + tag
+            while self.segment_buf.len() < need {
+                let raw = ready!(cart.as_mut().poll_fill_buf(cx))?;
+                if raw.is_empty() {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        ErrorKind::UnexpectedEof,
+                        "Truncated encrypted segment",
+                    )));
+                }
+                // copy as much of the segment as is available
+                let remaining = need - self.segment_buf.len();
+                let take = std::cmp::min(remaining, raw.len());
+                self.segment_buf.extend_from_slice(&raw[..take]);
+                cart.as_mut().consume(take);
+            }
+            // extract the 16-byte GCM tag from the end of the accumulated buffer
+            let ciphertext_len = need - 16;
+            let tag = aes_gcm::Tag::clone_from_slice(&self.segment_buf[ciphertext_len..need]);
+            // truncate to just the ciphertext (without the tag)
+            self.segment_buf.truncate(ciphertext_len);
+            // decrypt the ciphertext in-place, verifying the tag
+            self.cipher
+                .decrypt_in_place_detached(&nonce, b"", &mut self.segment_buf, &tag)
+                .map_err(|_| {
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "AES-GCM decryption/authentication failed",
+                    )
+                })?;
+            // move decrypted data to the decompression input buffer
+            std::mem::swap(&mut self.decrypted_buf, &mut self.segment_buf);
+            self.segment_buf.clear();
+            // advance to the next segment
+            self.segment_counter += 1;
+            self.expected_len = None;
+            self.decrypted_pos = 0;
+        }
+        // decompress the first chunk of the newly decrypted segment
+        let input_slice = &self.decrypted_buf[..];
+        let status = self
+            .zstd
+            .run_on_buffers(input_slice, decompressed)
+            .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
+        // advance the read position in the decrypted buffer
+        self.decrypted_pos = status.bytes_read;
+        // if all decrypted data was consumed, free the buffer
+        if self.decrypted_pos == self.decrypted_buf.len() {
+            self.decrypted_buf.clear();
+            self.decrypted_pos = 0;
+        }
+        // copy as much decompressed output as fits into the caller's buffer
+        let avail = std::cmp::min(status.bytes_written, output.len());
+        output[..avail].copy_from_slice(&decompressed[..avail]);
+        // track any leftover for the next poll
+        *decompressed_remaining = status.bytes_written - avail;
+        *decompressed_consumed = avail;
+        buf.advance(avail);
+        Poll::Ready(Ok(()))
+    }
+}
+
+/// Internal enum for version dispatch in `UncartStream`.
+///
+/// Unlike `CartStream` which is monomorphized at compile time, `UncartStream`
+/// must detect the version at runtime from the file header. The enum holds the
+/// version-specific struct after header parsing.
+enum UncartInternal {
+    /// Header not yet parsed
+    Pending,
+    /// V1: RC4 + zlib
+    Version1(UncartStreamV1),
+    /// V2: AES-GCM + zstd
+    Version2(UncartStreamV2),
+}
+
+/// Unpacks a Cart file using streaming.
+///
+/// Automatically detects V1 (RC4+zlib) and V2 (AES-GCM+zstd) formats from the
+/// header. This Cart file cannot have any comments for this to work.
 #[pin_project::pin_project]
 pub struct UncartStream<R: AsyncBufRead> {
     /// The carted stream to read from
     #[pin]
     cart: R,
-    /// The buffer to store decrypted but still compressed data
-    decrypted: Vec<u8>,
-    /// Where to start reading data to decompress from the decrypted buffer
-    decrypt_start: usize,
-    /// Where to end reading data to decompress from the decrypted buffer
-    decrypt_end: usize,
-    /// The buffer to store decompressed, finished data ready to be written to the read buffer
+    /// Shared buffer for decompressed output staging
     decompressed: Vec<u8>,
-    /// The rc4 decryptor to use for this file
-    rc4: Option<Rc4>,
-    /// The amount of decompressed bytes from the decompressed buffer yet to be written
-    /// to the read buffer
+    /// Version-specific decryptor + decompressor state
+    internal: UncartInternal,
+    /// Bytes remaining in the decompressed buffer to be copied to the caller
     decompressed_remaining: usize,
-    /// The number of decompressed bytes from the decompressed buffer already written
-    /// to the read buffer
+    /// Bytes already consumed from the decompressed buffer
     decompressed_consumed: usize,
-    /// The zlib decompressor to use
-    zlib: Box<InflateState>,
-    /// Whether the inflater has said it is done yet
-    inflater_done: bool,
 }
 
 impl<R: AsyncBufRead> UncartStream<R> {
-    /// The size of the internal buffer storing decrypted data
-    const DECRYPTED_BUF_SIZE: usize = 65536;
-    /// The size of the internal buffer storing decompressed data
-    const DECOMPRESSED_BUF_SIZE: usize = 131_072;
+    /// The size of the shared decompression output buffer
+    const DECOMPRESSED_BUF_SIZE: usize = 524_288;
 
-    /// Create a new uncart stream to uncart a file with no comments
+    /// Create a new uncart stream to uncart a file with no comments.
     ///
-    /// Using this to uncart a file with comments will likely fail and should not be done.
+    /// Using this to uncart a file with comments will likely fail and should
+    /// not be done.
     ///
     /// # Arguments
     ///
     /// * `cart` - A reader for the file to uncart
     pub fn new(cart: R) -> Self {
-        // build buffers to store decrypted+compressed and decompressed data
-        let decrypted = vec![0; Self::DECRYPTED_BUF_SIZE];
-        let decompressed = vec![0; Self::DECOMPRESSED_BUF_SIZE];
         UncartStream {
             cart,
-            decrypted,
-            decrypt_start: 0,
-            decrypt_end: 0,
-            decompressed,
-            rc4: None,
+            decompressed: vec![0; Self::DECOMPRESSED_BUF_SIZE],
+            internal: UncartInternal::Pending,
             decompressed_remaining: 0,
             decompressed_consumed: 0,
-            zlib: InflateState::new_boxed_with_window_bits(15),
-            inflater_done: false,
         }
     }
 
-    /// Try to read from our stream and uncart any data to the internal read buffer
+    /// Parse the header from the first chunk and build the version-specific
+    /// internal state.
     ///
     /// # Arguments
     ///
-    /// * `cx` - The current context
-    /// * `buf` - The internal read buffer to read uncarted data to
-    fn do_poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        // get a reference to our output buffer
-        let output = buf.initialize_unfilled();
-        // pin our struct
-        let mut this = self.project();
-        // track the number of bytes we have returned this time
-        let mut returned = 0;
-        // copy decompressed remaining/consumed bytes counts locally so we are reentrant safe
-        let mut local_remaining = *this.decompressed_remaining;
-        let mut local_consumed = *this.decompressed_consumed;
-        // track whether failing to get more data would cause us to lose data
-        let mut write_hole = false;
-        // keep reading until we have uncarted all input data or have filled our output buffer
-        'decrypt_and_decompress: loop {
-            // determine if we have more data to decompress still
-            if local_remaining == 0 {
-                // if we don't already have decrypted data to decompress then get more
-                if this.decrypt_start == this.decrypt_end {
-                    // determine if this is our first read by checking if the decryptor has been built
-                    let first_read = this.rc4.is_none();
-                    // read in and decrypt the next chunk from the input
-                    let bytes_read = ready!(Self::read_and_decrypt(
-                        &mut this.cart,
-                        this.decrypted,
-                        this.rc4,
-                        cx
-                    ))?;
-                    // check if we are actually done uncarting this data
-                    if bytes_read == 0 {
-                        return Poll::Ready(Ok(()));
-                    }
-                    // mark bytes from the input CaRT as consumed
-                    this.cart.as_mut().consume(bytes_read);
-                    // set the end point to read from the decrypted buffer
-                    *this.decrypt_end = if first_read {
-                        // if this was the first read, subtract the length of the CaRT header
-                        bytes_read - header::HEADER_LEN
-                    } else {
-                        bytes_read
-                    };
-                    // reset the decompression start position in the decrypted buffer
-                    *this.decrypt_start = 0;
-                    // reset the counter of decompressed bytes consumed
-                    *this.decompressed_consumed = 0;
-                }
-                // select the decrypted slice to decompress
-                let decrypted = &this.decrypted[*this.decrypt_start..*this.decrypt_end];
-                // decompress our decrypted data
-                let decompress_result = miniz_oxide::inflate::stream::inflate(
-                    this.zlib,
-                    decrypted,
-                    this.decompressed,
-                    MZFlush::None,
-                );
-                // increment the decompress start point by the number of bytes consumed from the decrypted buffer
-                *this.decrypt_start += decompress_result.bytes_consumed;
-                match decompress_result.status {
-                    // we didn't run into any problems inflating that chunk
-                    Ok(MZStatus::Ok) => (),
-                    // we have finished inflating our compressed data
-                    Ok(MZStatus::StreamEnd) => {
-                        // our inflator is only done if we have consumed all of our decompressed data
-                        *this.inflater_done = true;
-                    }
-                    // we have reached a point where inflation cannot continue without a pre-set dictionary
-                    Ok(MZStatus::NeedDict) => {
-                        return Poll::Ready(Err(std::io::Error::new(
-                            ErrorKind::InvalidData,
-                            "CaRT file cannot be decompressed because a pre-set dictionary was not provided",
-                        )));
-                    }
-                    // handle errors
-                    Err(MZError::Data | MZError::Buf) => {
-                        return Poll::Ready(Err(std::io::Error::new(
-                            ErrorKind::InvalidData,
-                            "CaRT file cannot be decompressed because data is missing/corrupted",
-                        )));
-                    }
-                    _ => {
-                        return Poll::Ready(Err(std::io::Error::new(
-                            ErrorKind::InvalidData,
-                            "An unknown error occurred while decompressing the carted data",
-                        )));
-                    }
-                }
-                // cap the end point to copy from the decompress buffer to the space left in the output buffer
-                let decompress_end =
-                    std::cmp::min(output.len() - returned, decompress_result.bytes_written);
-                // get the slice of decompressed data to read into our output buffer
-                let decompressed = &this.decompressed[..decompress_end];
-                // get the slice of data to write new output data to
-                let target = &mut output[returned..returned + decompress_end];
-                // copy our readable data to our output slice
-                target.copy_from_slice(decompressed);
-                // update the number of bytes we have ready to return
-                local_remaining = decompress_result.bytes_written - decompress_end;
-                // update the number of bytes we have consumed
-                local_consumed = decompressed.len();
-                returned += decompress_end;
-                // if we have filled our output buffer or polling for data could cause data loss then return
-                if returned == output.len()
-                    || write_hole
-                    || decompress_result.bytes_written < output.len()
-                {
-                    break 'decrypt_and_decompress;
-                }
-            } else {
-                // we still have decompressed data remaining so just write that;
-                // cap the end point to copy from the decompress buffer to the space left in the output buffer
-                let decompress_end = std::cmp::min(output.len() - returned, local_remaining);
-                // get the slice of decompressed data to read into our output buffer
-                let decompressed =
-                    &this.decompressed[local_consumed..local_consumed + decompress_end];
-                // get the slice of data to write new output data to
-                let target = &mut output[returned..returned + decompress_end];
-                // copy our readable data to our output slice
-                target.copy_from_slice(decompressed);
-                // update the amount of decompressed bytes we have remaining
-                local_remaining -= decompressed.len();
-                // track the local number of already decompressed bytes we have consumed
-                local_consumed += decompressed.len();
-                // update the number of bytes we have ready to return
-                returned += target.len();
-                // if we have filled our output buffer then return
-                if returned == output.len() {
-                    break 'decrypt_and_decompress;
-                }
-                // set our write hole since further polling could cause data loss
-                write_hole = true;
-            }
-        }
-        // persist remaining/consumed decompressed bytes count for next poll
-        *this.decompressed_remaining = local_remaining;
-        *this.decompressed_consumed = local_consumed;
-        // advance the output buffer
-        buf.advance(returned);
-        // only return Okay if we have data to return or if our inflater is done
-        if *this.inflater_done || returned != 0 {
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
-    }
-
-    /// Read and decrypt data from the input buffer and store the result in the internal
-    /// compressed buffer; returns the offset at which to start decompressing in the buffer the number of bytes
-    /// that were read, the offset at which to start decompressing from the
-    ///
-    /// # Arguments
-    ///
-    /// * `cart` - The cart reader to read from
-    /// * `decrypted` - The buffer to store decrypted data in
-    /// * `rc4` - The RC4 decryptor that may or may not have been created yet
-    fn read_and_decrypt(
-        cart: &mut Pin<&mut R>,
-        decrypted: &mut [u8],
-        rc4: &mut Option<Rc4>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::io::Result<usize>> {
-        // read in data from the input CaRT file
-        let raw = ready!(cart.as_mut().poll_fill_buf(cx))?;
-        if raw.is_empty() {
-            if rc4.is_none() {
-                // if this is our first read (the decryptor hasn't yet been built),
-                // the file is empty so return an error
-                return Poll::Ready(Err(std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "Input file is empty!",
-                )));
-            }
-            // if this isn't our first read, the input is completely exhausted, so return
-            return Poll::Ready(Ok(0));
-        }
-        // get our rc4 decryptor or create it if it doesn't exist
-        let (rc4, decrypt_input, consumed) = match rc4 {
-            // we have already built an rc4 decryptor so just use that
-            Some(rc4) => {
-                let decompressable = std::cmp::min(raw.len(), Self::DECRYPTED_BUF_SIZE);
-                (rc4, &raw[..decompressable], decompressable)
-            }
-            None => {
-                // build a decryptor from the decryption key contained in the first chunk
-                // if one hasn't been created and store it for subsequent calls
-                match Self::build_decryptor(raw) {
-                    Ok(rc4_built) => {
-                        let _ = rc4.insert(rc4_built);
-                    }
-                    Err(err) => {
-                        return Poll::Ready(Err(err));
-                    }
-                }
-                // update the number of bytes that are decompressable (subtracting the size of the header)
-                let decompressable =
-                    std::cmp::min(raw.len() - header::HEADER_LEN, Self::DECRYPTED_BUF_SIZE);
-                // get a new slice of data that doesn't contain our header and is sized to our target buff
-                let decrypt_input = &raw[header::HEADER_LEN..decompressable + header::HEADER_LEN];
-                // return our rc4 encryptor and the bytes to decrypt
-                (
-                    rc4.as_mut().unwrap(),
-                    decrypt_input,
-                    decompressable + header::HEADER_LEN,
-                )
-            }
-        };
-        // select a slice the exact length of the input for the decrypt output
-        let decrypt_output = &mut decrypted[..decrypt_input.len()];
-        // decrypt this chunk of input data
-        rc4.process(decrypt_input, decrypt_output);
-        // return the number of bytes that were read in
-        Poll::Ready(Ok(consumed))
-    }
-
-    fn build_decryptor(first_chunk: &[u8]) -> Result<Rc4, std::io::Error> {
-        // if we haven't gotten enough bytes for the header yet then just skip to the next loop without consuming
+    /// * `first_chunk` - The first bytes of the cart file (must contain the full header)
+    fn build_internal(first_chunk: &[u8]) -> Result<(UncartInternal, usize), std::io::Error> {
+        // make sure we have enough bytes for the header
         if first_chunk.len() < header::HEADER_LEN {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidData,
                 "Invalid CaRT file! CaRT header is malformed or missing.",
             ));
         }
-        // try to read in our header
-        let header = match Header::get(&first_chunk[..header::HEADER_LEN]) {
-            Ok(header) => header,
-            Err(err) => {
-                return Err(std::io::Error::new(ErrorKind::InvalidData, err));
+        // parse the header to determine the version and extract the key
+        let hdr = Header::get(&first_chunk[..header::HEADER_LEN])
+            .map_err(|e| std::io::Error::new(ErrorKind::InvalidData, e))?;
+        // build the version-specific internal state
+        match hdr.version {
+            CartVersion::V1 => {
+                let v1 = UncartStreamV1::from_header(&hdr);
+                Ok((UncartInternal::Version1(v1), header::HEADER_LEN))
             }
-        };
-        // build our rc4 decryptor
-        Ok(Rc4::new(&header.key))
+            CartVersion::V2 => {
+                let v2 = UncartStreamV2::from_header(&hdr)?;
+                Ok((UncartInternal::Version2(v2), header::HEADER_LEN))
+            }
+        }
     }
 }
 
 impl<R: AsyncBufRead> AsyncRead for UncartStream<R> {
-    /// Poll to see if there is any uncarted data available
+    /// Poll to see if there is any uncarted data available.
     ///
-    /// # Arguments
-    ///
-    /// * `cx` - The current context
-    /// * `buf` - The internal buffer to store available uncarted data
+    /// On the first call, the header is parsed and the version-specific
+    /// decryptor is initialized. Subsequent calls delegate to the version
+    /// struct's `do_poll_read`.
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        // check if our read buf is empty
         if buf.remaining() == 0 {
             return Poll::Ready(Ok(()));
         }
-        // try to read more data
-        self.do_poll_read(cx, buf)
+        // parse the header on the first read, then fall through to data processing
+        {
+            let mut this = self.as_mut().project();
+            if matches!(this.internal, UncartInternal::Pending) {
+                let raw = ready!(this.cart.as_mut().poll_fill_buf(cx))?;
+                if raw.is_empty() {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "Input file is empty!",
+                    )));
+                }
+                let (built, hlen) = Self::build_internal(raw)?;
+                *this.internal = built;
+                this.cart.as_mut().consume(hlen);
+            }
+        }
+        // delegate to the version-specific handler
+        let this = self.project();
+        match this.internal {
+            UncartInternal::Pending => unreachable!(),
+            UncartInternal::Version1(v1) => v1.do_poll_read(
+                this.cart,
+                this.decompressed,
+                this.decompressed_remaining,
+                this.decompressed_consumed,
+                cx,
+                buf,
+            ),
+            UncartInternal::Version2(v2) => v2.do_poll_read(
+                this.cart,
+                this.decompressed,
+                this.decompressed_remaining,
+                this.decompressed_consumed,
+                cx,
+                buf,
+            ),
+        }
     }
 }
 
-/// Packs files using the Cart format manually
+/// Version-specific manual cart behaviour. Implemented by `CartStreamManualV1`
+/// and `CartStreamManualV2`.
 ///
-/// This allows users to cart files on streams of data that do not implement
-/// `AsyncRead` and instead are passed in as a stream of `Bytes`.
-pub struct CartStreamManual<T: ArrayLength<u8>> {
-    /// The index to start newly carted data at
-    skip: usize,
-    /// The next buffer to process after our current one is consumed
-    on_deck: Option<Bytes>,
-    /// The current buffer to procress
-    current: Option<Bytes>,
-    /// The zlib compressor to use
-    zlib: Compress,
-    /// The rc4 encryptor to encrypt our data with
-    rc4: rc4::Rc4<T>,
-    /// The vector to store our compressed and encrypted data
-    output: Vec<u8>,
-}
-
-impl<T: ArrayLength<u8>> CartStreamManual<T> {
-    /// Create a new manual cart stream buffer
+/// Each implementor owns all compressor + cipher state, the output buffer, and
+/// the on-deck/current input buffer management. `CartStreamManual<V>`
+/// delegates every public method to these.
+pub trait CartManualVersionSupport {
+    /// Queue the next buffer of raw bytes and process the previous one.
     ///
-    /// On the first write to the buffer start writing after the header.
+    /// Always keeps one buffer in reserve to ensure the final write is handled
+    /// correctly by `finish`.
     ///
     /// # Arguments
     ///
-    /// * `key` - The key to use when encrypting this data
-    /// * `len` - The size of the buffer to allocate
-    pub fn new(key: &GenericArray<u8, T>, len: usize) -> Result<Self, Error> {
-        // pre allocate a new output buffer
-        let output = Header::new_buffer(key, len + 768_432)?;
-        //build our compressor
-        let zlib = Compress::new(Compression::default(), true);
-        // build our rc4 encryptor
+    /// * `raw` - The raw bytes to add to the cart stream
+    fn next_bytes(&mut self, raw: Bytes) -> Result<bool, Error>;
+
+    /// Continue processing the current input buffer.
+    ///
+    /// Returns `true` if there is more data to process from this buffer.
+    fn process(&mut self) -> Result<bool, Error>;
+
+    /// Get the number of carted bytes ready to be read.
+    fn ready(&self) -> usize;
+
+    /// Get a slice of the currently available carted bytes.
+    fn carted_bytes(&self) -> &[u8];
+
+    /// Mark all currently available carted bytes as consumed.
+    ///
+    /// After this call, `ready()` returns 0 and the internal write position
+    /// is reset so new carted data will be written from the start of the
+    /// output buffer.
+    fn consume(&mut self);
+
+    /// Flush all remaining data and append the CaRT footer.
+    ///
+    /// Processes the last buffered input, flushes the compressor, encrypts
+    /// any remaining data, and writes the footer. Returns a slice containing
+    /// the final carted bytes (including footer).
+    fn finish(&mut self) -> Result<&[u8], Error>;
+}
+
+/// V1 manual cart: RC4 stream cipher with zlib compression.
+///
+/// Compresses and encrypts data directly into a pre-allocated output buffer.
+/// The header is written at construction time; data is appended after it.
+pub struct CartStreamManualV1<T: ArrayLength<u8>> {
+    /// Write position in the output buffer
+    skip: usize,
+    /// The next buffer to process after the current one is consumed
+    on_deck: Option<Bytes>,
+    /// The current buffer being processed
+    current: Option<Bytes>,
+    /// The zlib compressor
+    zlib: Compress,
+    /// The RC4 stream cipher
+    rc4: rc4::Rc4<T>,
+    /// Pre-allocated output buffer (header already written at the front)
+    output: Vec<u8>,
+}
+
+impl<T: ArrayLength<u8>> CartStreamManualV1<T> {
+    /// Create a new V1 manual cart stream.
+    ///
+    /// # Arguments
+    ///
+    /// * `key`         - The 16-byte RC4 key
+    /// * `len`         - The size of the data buffer to allocate (on top of the header)
+    /// * `compression` - The zlib compression level to use
+    fn new(key: &GenericArray<u8, T>, len: usize, compression: Compression) -> Result<Self, Error> {
+        // pre-allocate the output buffer with the V1 header at the front
+        let mut output = vec![0u8; header::HEADER_LEN + len + 768_432];
+        // write the CaRT V1 header to the start of the output buffer
+        Header::write(CartVersion::V1, key, &mut output[..header::HEADER_LEN])?;
+        // setup our zlib compressor
+        let zlib = Compress::new(compression, true);
+        // setup our rc4 encrypto
         let rc4 = rc4::Rc4::new(key);
-        let cart = CartStreamManual {
-            // the first pack round will start after the header
+        // build a cart streamer
+        Ok(CartStreamManualV1 {
             skip: header::HEADER_LEN,
             on_deck: None,
             current: None,
             zlib,
             rc4,
             output,
-        };
-        Ok(cart)
+        })
     }
 
-    /// process some bytes
+    /// Compress and encrypt the current input buffer into the output buffer.
     ///
-    /// Returns true if we have more data to cart from this buffer.
-    ///
-    /// # Arguments
-    ///
-    /// * `flush` - The flush setting to use
+    /// Returns `true` if the input buffer still has data remaining.
     fn cart_bytes(&mut self, flush: FlushCompress) -> Result<bool, Error> {
-        // get our current buffer
         let Some(buff) = self.current.as_mut() else {
             return Ok(false);
         };
-        // if our output buffer is full then just tell the user we have more data to cart
         if self.skip == self.output.len() {
             return Ok(true);
         }
-        // get the old number of bytes that went in and out of our compressor
         let old_total = self.zlib.total_out();
         let old_in = self.zlib.total_in();
-        // compress this input block
         let status = self
             .zlib
             .compress(&buff[..], &mut self.output[self.skip..], flush)
             .unwrap();
-        // return an error if a failed status was returned
         if status == Status::BufError {
             return Err(Error::new("Zip Compression Buffer Error".to_owned()));
         }
-        // get the total number of bytes that were compressed in this loop
         let zipped = usize::try_from(self.zlib.total_out() - old_total)?;
-        // get the index to stop encrypting at
         let zip_end = self.skip + zipped;
-        // encrypt our compressed data
+        // encrypt the compressed data in-place
         self.rc4
             .apply_keystream(&mut self.output[self.skip..zip_end]);
-        // update our skip value
         self.skip += zipped;
-        // determine how many bytes were consumed from our input
         let consumed = self.zlib.total_in() - old_in;
-        // advance our buffer
         buff.advance(consumed as usize);
         Ok(buff.has_remaining())
     }
+}
 
-    /// Add the next buffer to cart and start processing our new current buffer
-    ///
-    /// If you are using the reader method above then you do not need to call this.
-    ///
-    /// # Arguments
-    ///
-    /// * `raw` - The raw bytes to add
-    pub fn next_bytes(&mut self, raw: Bytes) -> Result<bool, Error> {
-        // always keep one buffer in hold to ensure we can do the final write correctly
+impl<T: ArrayLength<u8>> CartManualVersionSupport for CartStreamManualV1<T> {
+    fn next_bytes(&mut self, raw: Bytes) -> Result<bool, Error> {
         if let Some(old) = self.on_deck.replace(raw) {
-            // set this buffer as our current buffer
             self.current = Some(old);
-            // process our old bytes
             self.cart_bytes(FlushCompress::Partial)
         } else {
             Ok(false)
         }
     }
 
-    /// Process the next chunk of bytes in a current buffer
-    pub fn process(&mut self) -> Result<bool, Error> {
-        // process more bytes in our current buffer
+    fn process(&mut self) -> Result<bool, Error> {
         self.cart_bytes(FlushCompress::Partial)
     }
 
-    /// Get the number of carted bytes that are ready to be read
-    pub fn ready(&self) -> usize {
+    fn ready(&self) -> usize {
         self.skip
     }
 
-    /// Get a slice to the currently carted bytes
-    pub fn carted_bytes(&self) -> &[u8] {
+    fn carted_bytes(&self) -> &[u8] {
         &self.output[..self.skip]
     }
 
-    /// Consume our currently carted bytes
-    pub fn consume(&mut self) {
+    fn consume(&mut self) {
         self.skip = 0;
     }
 
-    /// Finish packing this file and write the CART footer
-    pub fn finish(&mut self) -> Result<&[u8], Error> {
-        // get our last buffer
+    fn finish(&mut self) -> Result<&[u8], Error> {
         let Some(buff) = self.on_deck.take() else {
             return Err(Error::FinishBeforeData);
         };
-        // update our current buffer
         self.current = Some(buff);
-        // process our old bytes
         self.cart_bytes(FlushCompress::Finish)?;
-        // determine if we need to extend our output buffer
+        // ensure enough room for the footer
         if self.skip + footer::FOOTER_LEN > self.output.capacity() {
-            // extend our buffer by the length of the footer
             self.output.try_reserve_exact(footer::FOOTER_LEN)?;
-            // initialize our output buffer to zeros
             self.output.extend((0..footer::FOOTER_LEN).map(|_| 0));
         }
-        // get a reference to the correct position to write our footer at
         let mut footer_buf = &mut self.output[self.skip..self.skip + footer::FOOTER_LEN];
-        // zero our footer out
         unsafe {
             std::ptr::write_bytes(footer_buf.as_mut_ptr(), 0, footer_buf.len());
         }
-        // write the final 4 bytes of our footer
         footer_buf.write_all(footer::MAGIC_NUM)?;
         Ok(&self.output[..self.skip + footer::FOOTER_LEN])
+    }
+}
+
+/// V2 manual cart: AES-128-GCM authenticated encryption with zstd compression.
+///
+/// Compresses input into fixed-size segments, encrypts each with AES-GCM, and
+/// writes `[u32 LE ciphertext+tag len][ciphertext+tag]` segments to the output
+/// buffer. The header is written at construction time.
+pub struct CartStreamManualV2 {
+    /// Write position in the output buffer
+    skip: usize,
+    /// The next buffer to process after the current one is consumed
+    on_deck: Option<Bytes>,
+    /// The current buffer being processed
+    current: Option<Bytes>,
+    /// The zstd streaming compressor
+    zstd: zstd::stream::raw::Encoder<'static>,
+    /// The AES-128-GCM cipher
+    cipher: Aes128Gcm,
+    /// Counter for per-segment nonce derivation
+    segment_counter: u32,
+    /// Accumulates compressed plaintext for the current segment
+    segment_buf: Vec<u8>,
+    /// Maximum compressed plaintext bytes per segment before encryption
+    segment_size: usize,
+    /// Pre-allocated output buffer (header already written at the front)
+    output: Vec<u8>,
+}
+
+impl CartStreamManualV2 {
+    /// Create a new V2 manual cart stream.
+    ///
+    /// # Arguments
+    ///
+    /// * `key`          - The 16-byte AES key (as a raw slice)
+    /// * `len`          - The size of the data buffer to allocate
+    /// * `level`        - The zstd compression level
+    /// * `segment_size` - Maximum compressed bytes per segment
+    fn new(key: &[u8], len: usize, level: i32, segment_size: usize) -> Result<Self, Error> {
+        // validate the key before allocating anything
+        Header::validate_key(key)?;
+        // pre-allocate the output buffer with the V2 header at the front
+        let mut output = vec![0u8; header::HEADER_LEN + len + 768_432];
+        // write the CaRT V2 header to the start of the output buffer
+        Header::write(CartVersion::V2, key, &mut output[..header::HEADER_LEN])?;
+        // build the zstd streaming compressor at the requested level
+        let zstd = zstd::stream::raw::Encoder::new(level)
+            .map_err(|e| Error::new(format!("zstd encoder init failed: {e}")))?;
+        // build the AES-128-GCM cipher from the key
+        let key_bytes = aes_gcm::Key::<Aes128Gcm>::from_slice(key);
+        let cipher = <Aes128Gcm as aes_gcm::KeyInit>::new(key_bytes);
+        Ok(CartStreamManualV2 {
+            skip: header::HEADER_LEN,
+            on_deck: None,
+            current: None,
+            zstd,
+            cipher,
+            segment_counter: 0,
+            segment_buf: Vec::with_capacity(segment_size),
+            segment_size,
+            output,
+        })
+    }
+
+    /// Derive the GCM nonce for the current segment counter.
+    fn current_nonce(&self) -> aes_gcm::Nonce<generic_array::typenum::U12> {
+        let mut n = STATIC_NONCE;
+        n[8..12].copy_from_slice(&self.segment_counter.to_be_bytes());
+        GenericArray::clone_from_slice(&n)
+    }
+
+    /// Encrypt the current segment buffer and append it to the output,
+    /// using detached tag to avoid extending segment_buf.
+    ///
+    /// Writes `[u32 LE ciphertext+tag len][ciphertext][tag]` to `output[skip..]`.
+    fn flush_segment(&mut self) -> Result<(), Error> {
+        // nothing to encrypt if the segment buffer is empty
+        if self.segment_buf.is_empty() {
+            return Ok(());
+        }
+        // derive the per-segment nonce
+        let nonce = self.current_nonce();
+        // encrypt the segment in-place, getting the 16-byte tag separately
+        let tag = self
+            .cipher
+            .encrypt_in_place_detached(&nonce, b"", &mut self.segment_buf)
+            .map_err(|_| Error::new("AES-GCM encryption failed"))?;
+        // ensure the output buffer has room for [len][ciphertext][tag]
+        let needed = 4 + self.segment_buf.len() + 16;
+        if self.skip + needed > self.output.len() {
+            self.output.resize(self.skip + needed, 0);
+        }
+        // write the 4-byte length prefix (ciphertext + tag size)
+        let ciphertext_len = (self.segment_buf.len() + 16) as u32;
+        self.output[self.skip..self.skip + 4].copy_from_slice(&ciphertext_len.to_le_bytes());
+        self.skip += 4;
+        // write the encrypted ciphertext
+        self.output[self.skip..self.skip + self.segment_buf.len()]
+            .copy_from_slice(&self.segment_buf);
+        self.skip += self.segment_buf.len();
+        // write the 16-byte GCM authentication tag
+        self.output[self.skip..self.skip + 16].copy_from_slice(tag.as_slice());
+        self.skip += 16;
+        // clear the segment buffer for the next segment
+        self.segment_buf.clear();
+        // advance the segment counter for the next nonce
+        self.segment_counter += 1;
+        Ok(())
+    }
+
+    /// Compress the current input buffer into the segment buffer, flushing
+    /// encrypted segments to output as they fill up. Writes into spare
+    /// capacity to avoid zeroing memory zstd overwrites.
+    ///
+    /// Returns `true` if the input buffer still has data remaining.
+    fn cart_bytes(&mut self) -> Result<bool, Error> {
+        // get the current input buffer, or return false if none
+        let Some(buff) = self.current.as_mut() else {
+            return Ok(false);
+        };
+        // make room in the segment buffer for compressed output
+        let old_len = self.segment_buf.len();
+        let space = self.segment_size.saturating_sub(old_len).max(64);
+        self.segment_buf.reserve(space);
+        // safety: we set_len to create writable space, then truncate
+        // to the actual bytes written by run_on_buffers
+        unsafe { self.segment_buf.set_len(old_len + space) };
+        // compress this chunk of input into the segment buffer
+        let status = self
+            .zstd
+            .run_on_buffers(&buff[..], &mut self.segment_buf[old_len..])
+            .map_err(|e| Error::new(format!("zstd compression failed: {e}")))?;
+        // truncate to the actual number of compressed bytes written
+        self.segment_buf.truncate(old_len + status.bytes_written);
+        // advance the input buffer past consumed bytes
+        buff.advance(status.bytes_read);
+        let has_remaining = buff.has_remaining();
+        // encrypt and flush the segment if it's full
+        if self.segment_buf.len() >= self.segment_size {
+            self.flush_segment()?;
+        }
+        Ok(has_remaining)
+    }
+}
+
+impl CartManualVersionSupport for CartStreamManualV2 {
+    fn next_bytes(&mut self, raw: Bytes) -> Result<bool, Error> {
+        // keep one buffer in reserve; process the previous one
+        if let Some(old) = self.on_deck.replace(raw) {
+            // set the previously queued buffer as current and compress it
+            self.current = Some(old);
+            self.cart_bytes()
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn process(&mut self) -> Result<bool, Error> {
+        // continue compressing the current input buffer
+        self.cart_bytes()
+    }
+
+    fn ready(&self) -> usize {
+        self.skip
+    }
+
+    fn carted_bytes(&self) -> &[u8] {
+        &self.output[..self.skip]
+    }
+
+    fn consume(&mut self) {
+        self.skip = 0;
+    }
+
+    fn finish(&mut self) -> Result<&[u8], Error> {
+        // get the last buffered input
+        let Some(buff) = self.on_deck.take() else {
+            return Err(Error::FinishBeforeData);
+        };
+        // set it as current and compress all remaining input
+        self.current = Some(buff);
+        while self.cart_bytes()? {}
+        // flush the zstd encoder's internal buffers
+        loop {
+            // make room for more flushed output
+            let old_len = self.segment_buf.len();
+            let space = self.segment_size.saturating_sub(old_len).max(256);
+            self.segment_buf.reserve(space);
+            unsafe { self.segment_buf.set_len(old_len + space) };
+            // flush compressed data from the encoder
+            let mut out_buf =
+                zstd::stream::raw::OutBuffer::around(&mut self.segment_buf[old_len..]);
+            let remaining = self
+                .zstd
+                .finish(&mut out_buf, true)
+                .map_err(|e| Error::new(format!("zstd finish failed: {e}")))?;
+            // truncate to the actual bytes flushed
+            let written = out_buf.pos();
+            self.segment_buf.truncate(old_len + written);
+            // encrypt and flush if the segment is full
+            if self.segment_buf.len() >= self.segment_size {
+                self.flush_segment()?;
+            }
+            if remaining == 0 {
+                // encoder fully flushed
+                break;
+            }
+        }
+        // encrypt and flush the final (possibly partial) segment
+        self.flush_segment()?;
+        // ensure enough room for the footer
+        if self.skip + footer::FOOTER_LEN > self.output.len() {
+            self.output.resize(self.skip + footer::FOOTER_LEN, 0);
+        }
+        // zero out the footer region
+        let mut footer_buf = &mut self.output[self.skip..self.skip + footer::FOOTER_LEN];
+        unsafe {
+            std::ptr::write_bytes(footer_buf.as_mut_ptr(), 0, footer_buf.len());
+        }
+        // write the CaRT footer magic number
+        footer_buf.write_all(footer::MAGIC_NUM)?;
+        Ok(&self.output[..self.skip + footer::FOOTER_LEN])
+    }
+}
+
+/// Builder for constructing a `CartStreamManual` with configurable version.
+///
+/// Use `build()` or `build_v2()` for a V2 stream (AES-GCM + zstd, the default),
+/// or `build_v1()` for a V1 stream (RC4 + zlib).
+pub struct CartStreamManualBuilder<'a, T: ArrayLength<u8>> {
+    /// The encryption key
+    key: &'a GenericArray<u8, T>,
+    /// The size of the data buffer to allocate
+    buf_len: usize,
+    /// The zlib compression level for V1 (0–9)
+    compression_level: Option<i32>,
+    /// The zstd compression level for V2 (typically 1–22, default 3)
+    zstd_level: Option<i32>,
+    /// Segment size override for V2
+    segment_size: Option<u32>,
+}
+
+impl<'a, T: ArrayLength<u8>> CartStreamManualBuilder<'a, T> {
+    /// Create a new builder.
+    ///
+    /// # Arguments
+    ///
+    /// * `key`     - The 16-byte encryption key
+    /// * `buf_len` - The size of the output data buffer to allocate
+    pub fn new(key: &'a GenericArray<u8, T>, buf_len: usize) -> Self {
+        Self {
+            key,
+            buf_len,
+            compression_level: None,
+            zstd_level: None,
+            segment_size: None,
+        }
+    }
+
+    /// Set the zlib compression level for V1 (0–9, ignored for V2).
+    ///
+    /// # Arguments
+    ///
+    /// * `level` - The zlib compression level (0 = no compression, 9 = max)
+    pub fn compression_level(mut self, level: i32) -> Self {
+        self.compression_level = Some(level);
+        self
+    }
+
+    /// Set the zstd compression level for V2 (typically 1–22, default 3).
+    ///
+    /// Lower levels are faster with slightly larger output. Level 1 is a
+    /// good choice when throughput matters more than compression ratio.
+    /// Ignored for V1.
+    ///
+    /// # Arguments
+    ///
+    /// * `level` - The zstd compression level (1 = fastest, 22 = max compression)
+    pub fn zstd_level(mut self, level: i32) -> Self {
+        self.zstd_level = Some(level);
+        self
+    }
+
+    /// Set the segment size for V2 encryption (ignored for V1).
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - The maximum number of compressed bytes per segment
+    pub fn segment_size(mut self, size: u32) -> Self {
+        self.segment_size = Some(size);
+        self
+    }
+
+    /// Build a V1 manual cart stream (RC4 + zlib).
+    pub fn build_v1(self) -> Result<CartStreamManual<CartStreamManualV1<T>>, Error> {
+        let compression = match self.compression_level {
+            Some(level) => Compression::new(level as u32),
+            None => Compression::default(),
+        };
+        let internal = CartStreamManualV1::new(self.key, self.buf_len, compression)?;
+        Ok(CartStreamManual { internal })
+    }
+
+    /// Build a V2 manual cart stream (AES-GCM + zstd). This is the default.
+    pub fn build_v2(self) -> Result<CartStreamManual<CartStreamManualV2>, Error> {
+        let level = self.zstd_level.unwrap_or(3);
+        let segment_size = self.segment_size.unwrap_or(DEFAULT_SEGMENT_SIZE) as usize;
+        let internal =
+            CartStreamManualV2::new(self.key.as_slice(), self.buf_len, level, segment_size)?;
+        Ok(CartStreamManual { internal })
+    }
+
+    /// Build a manual cart stream using the default version (V2).
+    pub fn build(self) -> Result<CartStreamManual<CartStreamManualV2>, Error> {
+        self.build_v2()
+    }
+}
+
+/// Packs files using the Cart format manually.
+///
+/// This allows users to cart files on streams of data that do not implement
+/// `AsyncRead` and instead are passed in as a stream of `Bytes`.
+///
+/// Generic over `V` (the version implementation) for zero-cost dispatch.
+/// Use `CartStreamManual::builder()` to select version and options.
+pub struct CartStreamManual<V: CartManualVersionSupport = CartStreamManualV2> {
+    /// Version-specific compressor + cipher state
+    internal: V,
+}
+
+/// Builder entry point — available without specifying a version type.
+impl CartStreamManual {
+    /// Create a builder for configuring version and compression.
+    ///
+    /// # Arguments
+    ///
+    /// * `key`     - The 16-byte encryption key
+    /// * `buf_len` - The size of the output data buffer to allocate
+    pub fn builder<'a, T: ArrayLength<u8>>(
+        key: &'a GenericArray<u8, T>,
+        buf_len: usize,
+    ) -> CartStreamManualBuilder<'a, T> {
+        CartStreamManualBuilder::new(key, buf_len)
+    }
+}
+
+/// Public API — delegates to the version-specific implementation.
+impl<V: CartManualVersionSupport> CartStreamManual<V> {
+    /// Add the next buffer to cart and start processing the previous one.
+    ///
+    /// Returns `true` if there is more data to process from the current buffer.
+    ///
+    /// # Arguments
+    ///
+    /// * `raw` - The raw bytes to add
+    pub fn next_bytes(&mut self, raw: Bytes) -> Result<bool, Error> {
+        self.internal.next_bytes(raw)
+    }
+
+    /// Process the next chunk of bytes in the current buffer.
+    ///
+    /// Returns `true` if there is more data to process.
+    pub fn process(&mut self) -> Result<bool, Error> {
+        self.internal.process()
+    }
+
+    /// Get the number of carted bytes that are ready to be read.
+    pub fn ready(&self) -> usize {
+        self.internal.ready()
+    }
+
+    /// Get a slice to the currently carted bytes.
+    pub fn carted_bytes(&self) -> &[u8] {
+        self.internal.carted_bytes()
+    }
+
+    /// Consume our currently carted bytes.
+    ///
+    /// Resets the internal write position so new carted data will overwrite
+    /// the consumed output. Call this after writing `carted_bytes()` to disk
+    /// or network.
+    pub fn consume(&mut self) {
+        self.internal.consume();
+    }
+
+    /// Finish packing this file and write the CaRT footer.
+    ///
+    /// Processes the last buffered input, flushes the compressor, encrypts
+    /// any remaining data, and appends the footer. Returns a slice containing
+    /// the final carted bytes including the footer.
+    pub fn finish(&mut self) -> Result<&[u8], Error> {
+        self.internal.finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use generic_array::typenum::U16;
+    use std::io::Cursor;
+    use tokio::io::{AsyncReadExt, BufReader};
+
+    fn make_key() -> GenericArray<u8, U16> {
+        GenericArray::clone_from_slice(b"SecretCornIsBest")
+    }
+
+    async fn round_trip_v1(data: &[u8]) -> Vec<u8> {
+        let key = make_key();
+        let cursor = Cursor::new(data);
+        let stream = CartStream::builder(&key, cursor).build_v1().unwrap();
+        let mut carted = Vec::new();
+        let mut reader = BufReader::new(stream);
+        reader.read_to_end(&mut carted).await.unwrap();
+
+        let cursor = Cursor::new(&carted);
+        let mut uncart = UncartStream::new(cursor);
+        let mut output = Vec::new();
+        uncart.read_to_end(&mut output).await.unwrap();
+        output
+    }
+
+    async fn round_trip_v2(data: &[u8]) -> Vec<u8> {
+        let key = make_key();
+        let cursor = Cursor::new(data);
+        let stream = CartStreamBuilder::new(&key, cursor).build_v2().unwrap();
+        let mut carted = Vec::new();
+        let mut reader = BufReader::new(stream);
+        reader.read_to_end(&mut carted).await.unwrap();
+
+        let cursor = Cursor::new(&carted);
+        let mut uncart = UncartStream::new(cursor);
+        let mut output = Vec::new();
+        uncart.read_to_end(&mut output).await.unwrap();
+        output
+    }
+
+    #[tokio::test]
+    async fn v1_round_trip_small() {
+        let data = b"ImMalware";
+        let result = round_trip_v1(data).await;
+        assert_eq!(result, data);
+    }
+
+    #[tokio::test]
+    async fn v1_round_trip_medium() {
+        let data: Vec<u8> = (0..65_536).map(|i| (i % 251) as u8).collect();
+        let result = round_trip_v1(&data).await;
+        assert_eq!(result, data);
+    }
+
+    #[tokio::test]
+    async fn v1_round_trip_large() {
+        let data: Vec<u8> = (0..10 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+        let result = round_trip_v1(&data).await;
+        assert_eq!(result, data);
+    }
+
+    #[tokio::test]
+    async fn v2_round_trip_small() {
+        let data = b"ImMalware";
+        let result = round_trip_v2(data).await;
+        assert_eq!(result, data);
+    }
+
+    #[tokio::test]
+    async fn v2_round_trip_1_byte() {
+        let data = b"X";
+        let result = round_trip_v2(data).await;
+        assert_eq!(result, data);
+    }
+
+    #[tokio::test]
+    async fn v2_round_trip_16_bytes() {
+        let data = b"0123456789abcdef";
+        let result = round_trip_v2(data).await;
+        assert_eq!(result, data);
+    }
+
+    #[tokio::test]
+    async fn v2_round_trip_medium() {
+        let data: Vec<u8> = (0..65_536).map(|i| (i % 251) as u8).collect();
+        let result = round_trip_v2(&data).await;
+        assert_eq!(result, data);
+    }
+
+    #[tokio::test]
+    async fn v2_round_trip_one_segment() {
+        let data: Vec<u8> = (0..262_144).map(|i| (i % 251) as u8).collect();
+        let result = round_trip_v2(&data).await;
+        assert_eq!(result, data);
+    }
+
+    #[tokio::test]
+    async fn v2_round_trip_two_segments() {
+        let data: Vec<u8> = (0..262_145).map(|i| (i % 251) as u8).collect();
+        let result = round_trip_v2(&data).await;
+        assert_eq!(result, data);
+    }
+
+    #[tokio::test]
+    async fn v2_round_trip_large() {
+        let data: Vec<u8> = (0..10 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+        let result = round_trip_v2(&data).await;
+        assert_eq!(result, data);
+    }
+
+    #[tokio::test]
+    async fn v1_builder_round_trip() {
+        let key = make_key();
+        let data = b"BuilderV1Test";
+        let cursor = Cursor::new(data.as_slice());
+        let stream = CartStreamBuilder::new(&key, cursor).build_v1().unwrap();
+        let mut carted = Vec::new();
+        BufReader::new(stream)
+            .read_to_end(&mut carted)
+            .await
+            .unwrap();
+        let cursor = Cursor::new(&carted);
+        let mut uncart = UncartStream::new(cursor);
+        let mut output = Vec::new();
+        uncart.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data);
+    }
+
+    #[tokio::test]
+    async fn v2_builder_default_is_v2() {
+        let key = make_key();
+        let data = b"DefaultV2Test";
+        let cursor = Cursor::new(data.as_slice());
+        let stream = CartStreamBuilder::new(&key, cursor).build_v2().unwrap();
+        let mut carted = Vec::new();
+        BufReader::new(stream)
+            .read_to_end(&mut carted)
+            .await
+            .unwrap();
+
+        // Verify the header says version 2
+        assert_eq!(&carted[0..4], b"CART");
+        assert_eq!(u16::from_le_bytes([carted[4], carted[5]]), 2);
+
+        let cursor = Cursor::new(&carted);
+        let mut uncart = UncartStream::new(cursor);
+        let mut output = Vec::new();
+        uncart.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data);
+    }
+
+    #[tokio::test]
+    async fn v2_custom_segment_size() {
+        let key = make_key();
+        let data: Vec<u8> = (0..100_000).map(|i| (i % 251) as u8).collect();
+        let cursor = Cursor::new(data.as_slice());
+        let stream = CartStreamBuilder::new(&key, cursor)
+            .segment_size(1024)
+            .build_v2()
+            .unwrap();
+        let mut carted = Vec::new();
+        BufReader::new(stream)
+            .read_to_end(&mut carted)
+            .await
+            .unwrap();
+        let cursor = Cursor::new(&carted);
+        let mut uncart = UncartStream::new(cursor);
+        let mut output = Vec::new();
+        uncart.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data);
+    }
+
+    #[tokio::test]
+    async fn v1_carted_auto_detected() {
+        let key = make_key();
+        let data = b"V1AutoDetect";
+        let cursor = Cursor::new(data.as_slice());
+        let stream = CartStream::builder(&key, cursor).build_v1().unwrap();
+        let mut carted = Vec::new();
+        BufReader::new(stream)
+            .read_to_end(&mut carted)
+            .await
+            .unwrap();
+        // Verify V1 header
+        assert_eq!(u16::from_le_bytes([carted[4], carted[5]]), 1);
+        // UncartStream auto-detects V1
+        let cursor = Cursor::new(&carted);
+        let mut uncart = UncartStream::new(cursor);
+        let mut output = Vec::new();
+        uncart.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data);
+    }
+
+    #[test]
+    fn header_v1_parse() {
+        let key = b"SecretCornIsBest";
+        let mut buf = [0u8; 38];
+        Header::write(CartVersion::V1, key, &mut buf).unwrap();
+        let hdr = Header::get(&buf).unwrap();
+        assert_eq!(hdr.version, CartVersion::V1);
+        assert_eq!(hdr.key, key);
+    }
+
+    #[test]
+    fn header_v2_parse() {
+        let key = b"SecretCornIsBest";
+        let mut buf = [0u8; 38];
+        Header::write(CartVersion::V2, key, &mut buf).unwrap();
+        let hdr = Header::get(&buf).unwrap();
+        assert_eq!(hdr.version, CartVersion::V2);
+        assert_eq!(hdr.key, key);
+    }
+
+    #[test]
+    fn header_write_sets_correct_version_bytes() {
+        let key = b"SecretCornIsBest";
+
+        // V1: Header::write must set version bytes to 1
+        let mut v1_buf = [0u8; 38];
+        Header::write(CartVersion::V1, key, &mut v1_buf).unwrap();
+        let v1_version = u16::from_le_bytes([v1_buf[4], v1_buf[5]]);
+        assert_eq!(v1_version, 1, "Header::write(V1, ..) must write version 1");
+
+        // V2: Header::write must set version bytes to 2
+        let mut v2_buf = [0u8; 38];
+        Header::write(CartVersion::V2, key, &mut v2_buf).unwrap();
+        let v2_version = u16::from_le_bytes([v2_buf[4], v2_buf[5]]);
+        assert_eq!(v2_version, 2, "Header::write(V2, ..) must write version 2");
+        // both must start with the CART magic number
+        assert_eq!(&v1_buf[..4], b"CART");
+        assert_eq!(&v2_buf[..4], b"CART");
+        // the header format is identical aside from the version bytes
+        assert_eq!(&v1_buf[6..], &v2_buf[6..]);
+    }
+
+    #[tokio::test]
+    async fn cart_stream_v1_writes_version_1_header() {
+        let key = make_key();
+        let cursor = Cursor::new(b"test".as_slice());
+        let stream = CartStream::builder(&key, cursor).build_v1().unwrap();
+        let mut carted = Vec::new();
+        BufReader::new(stream)
+            .read_to_end(&mut carted)
+            .await
+            .unwrap();
+        assert_eq!(&carted[..4], b"CART");
+        assert_eq!(
+            u16::from_le_bytes([carted[4], carted[5]]),
+            1,
+            "CartStream::new must produce a version 1 header"
+        );
+    }
+
+    #[tokio::test]
+    async fn cart_stream_v2_writes_version_2_header() {
+        let key = make_key();
+        let cursor = Cursor::new(b"test".as_slice());
+        let stream = CartStreamBuilder::new(&key, cursor).build_v2().unwrap();
+        let mut carted = Vec::new();
+        BufReader::new(stream)
+            .read_to_end(&mut carted)
+            .await
+            .unwrap();
+        assert_eq!(&carted[..4], b"CART");
+        assert_eq!(
+            u16::from_le_bytes([carted[4], carted[5]]),
+            2,
+            "CartStreamBuilder::build must produce a version 2 header"
+        );
+    }
+
+    /// Helper: cart data using manual V1, return carted bytes
+    fn manual_cart_v1(data: &[u8]) -> Vec<u8> {
+        let key = make_key();
+        let chunk_size = 32_768;
+        let mut cart = CartStreamManual::builder(&key, chunk_size)
+            .build_v1()
+            .unwrap();
+        let mut output = Vec::new();
+        for chunk in data.chunks(chunk_size) {
+            let bytes = Bytes::copy_from_slice(chunk);
+            if cart.next_bytes(bytes).unwrap() {
+                while cart.process().unwrap() {
+                    if cart.ready() >= chunk_size {
+                        output.extend_from_slice(cart.carted_bytes());
+                        cart.consume();
+                    }
+                }
+            }
+        }
+        output.extend_from_slice(cart.finish().unwrap());
+        output
+    }
+
+    /// Helper: cart data using manual V2, return carted bytes
+    fn manual_cart_v2(data: &[u8]) -> Vec<u8> {
+        let key = make_key();
+        let chunk_size = 32_768;
+        let mut cart = CartStreamManual::builder(&key, chunk_size)
+            .build_v2()
+            .unwrap();
+        let mut output = Vec::new();
+        for chunk in data.chunks(chunk_size) {
+            let bytes = Bytes::copy_from_slice(chunk);
+            if cart.next_bytes(bytes).unwrap() {
+                while cart.process().unwrap() {
+                    if cart.ready() >= chunk_size {
+                        output.extend_from_slice(cart.carted_bytes());
+                        cart.consume();
+                    }
+                }
+            }
+        }
+        output.extend_from_slice(cart.finish().unwrap());
+        output
+    }
+
+    #[tokio::test]
+    async fn v1_manual_round_trip() {
+        let data: Vec<u8> = (0..65_536).map(|i| (i % 251) as u8).collect();
+        let carted = manual_cart_v1(&data);
+        let cursor = Cursor::new(&carted);
+        let mut uncart = UncartStream::new(cursor);
+        let mut output = Vec::new();
+        uncart.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data);
+    }
+
+    #[tokio::test]
+    async fn v2_manual_round_trip_small() {
+        let data = b"ManualV2Test";
+        let carted = manual_cart_v2(data);
+        let cursor = Cursor::new(&carted);
+        let mut uncart = UncartStream::new(cursor);
+        let mut output = Vec::new();
+        uncart.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data);
+    }
+
+    #[tokio::test]
+    async fn v2_manual_round_trip_large() {
+        let data: Vec<u8> = (0..10 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+        let carted = manual_cart_v2(&data);
+        let cursor = Cursor::new(&carted);
+        let mut uncart = UncartStream::new(cursor);
+        let mut output = Vec::new();
+        uncart.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data);
+    }
+
+    #[tokio::test]
+    async fn v2_manual_builder_default() {
+        let key = make_key();
+        let data = b"ManualBuilderDefault";
+        let chunk_size = 32_768;
+        let mut cart = CartStreamManual::builder(&key, chunk_size).build().unwrap();
+        let mut output = Vec::new();
+        for chunk in data.chunks(chunk_size) {
+            let bytes = Bytes::copy_from_slice(chunk);
+            if cart.next_bytes(bytes).unwrap() {
+                while cart.process().unwrap() {
+                    if cart.ready() >= chunk_size {
+                        output.extend_from_slice(cart.carted_bytes());
+                        cart.consume();
+                    }
+                }
+            }
+        }
+        output.extend_from_slice(cart.finish().unwrap());
+        // verify the header says V2
+        assert_eq!(u16::from_le_bytes([output[4], output[5]]), 2);
+        // uncart and verify round-trip
+        let cursor = Cursor::new(&output);
+        let mut uncart = UncartStream::new(cursor);
+        let mut result = Vec::new();
+        uncart.read_to_end(&mut result).await.unwrap();
+        assert_eq!(result, data);
+    }
+
+    #[test]
+    fn header_unsupported_version() {
+        let mut buf = [0u8; 38];
+        Header::write(CartVersion::V1, b"SecretCornIsBest", &mut buf).unwrap();
+        buf[4] = 3; // change version to 3
+        buf[5] = 0;
+        let err = Header::get(&buf).unwrap_err();
+        assert!(matches!(err, Error::UnsupportedVersion(3)));
+    }
+
+    /// Regression test: when the underlying reader hands back a segment in
+    /// chunks smaller than the whole segment, `UncartStream` must keep reading
+    /// rather than returning a zero-byte read (which the caller would treat as
+    /// EOF, exiting immediately with no data). A bare `Cursor` returns its whole
+    /// slice at once and never exercises this path, so we wrap the carted bytes
+    /// in a tiny-capacity `BufReader` to force chunked `poll_fill_buf` returns.
+    #[tokio::test]
+    async fn v2_uncart_chunked_reader() {
+        let key = make_key();
+        // generate ~1 MiB of incompressible pseudo-random data via a simple LCG so
+        // the carted segment stays large (compressible data would shrink to a tiny
+        // segment that fits in one buffer fill and never exercise the chunked path)
+        let mut state: u32 = 0x1234_5678;
+        let data: Vec<u8> = (0..1024 * 1024)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 24) as u8
+            })
+            .collect();
+        let cursor = Cursor::new(data.as_slice());
+        let stream = CartStreamBuilder::new(&key, cursor).build_v2().unwrap();
+        let mut carted = Vec::new();
+        BufReader::new(stream)
+            .read_to_end(&mut carted)
+            .await
+            .unwrap();
+        // uncart through a 512-byte BufReader so each segment spans many fills
+        let reader = BufReader::with_capacity(512, Cursor::new(&carted));
+        let mut uncart = UncartStream::new(reader);
+        let mut output = Vec::new();
+        uncart.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data);
     }
 }

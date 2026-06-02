@@ -1,26 +1,40 @@
 [package]
 name = "cart-rs"
-version = "1.2.5"
+version = "2.0.0"
 description = "A cart library that can cart/uncart data in a high performance streaming fashion"
 readme = "README.md"
 license-file = "../LICENSE"
 authors = { workspace = true }
 edition = { workspace = true }
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-rust-crypto = "^0.2"
 tokio = { version = "1.45", features = ["full", "fs", "io-util"] }
-bincode = "2.0"
-flate2 = "1"
-miniz_oxide = "0.8"
 rc4 = "0.1"
+aes-gcm = { version = "0.10", features = ["aes"] }
+zstd = "0.13"
 generic-array = "0.14"
 bytes = "1.10"
 futures-core = "0.3"
 pin-project = "1.1"
+strum = { version = "0.27", features = ["derive"] }
+
+# serde support
+serde = { version = "1", features = ["derive"], optional = true }
+
+# schema support
+schemars = { version = "1.0.4", optional = true }
+
+# zlib-ng compilation on mac is being difficult right now so for the time being
+# just disable it on macos builds
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+flate2 = { version = "1", features = ["zlib-ng"], default-features = false }
+[target.'cfg(target_os = "macos")'.dependencies]
+flate2 = "1"
+
+[dev-dependencies]
 tokio-test = "0.4"
-futures-util = "0.3"
-tokio-util = { version = "0.7", features = ["io"] }
-futures-task = "0.3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "cart_benchmarks"
+harness = false

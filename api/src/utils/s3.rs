@@ -10,7 +10,7 @@ use aws_sdk_s3::{
 use axum::extract::multipart::Field;
 use base64::Engine as _;
 use bytes::{BytesMut, buf::Buf};
-use cart_rs::{CartStreamManual, UncartStream};
+use cart_rs::{CartManualVersionSupport, CartStreamManual, CartVersion, UncartStream};
 use data_encoding::HEXLOWER;
 use generic_array::{GenericArray, typenum::U16};
 use md5::Md5;
@@ -109,42 +109,49 @@ impl S3 {
         let files = S3Client::new(
             &config.thorium.files.bucket,
             &config.thorium.files.password,
+            config.thorium.files.cart_version,
             &config.thorium.s3,
         );
         let results = S3Client::new(
             &config.thorium.results.bucket,
-            // these aren't password protected so just use the files password
+            // these aren't password protected so just use the files password/cart version
             &config.thorium.files.password,
+            config.thorium.files.cart_version,
             &config.thorium.s3,
         );
         let ephemeral = S3Client::new(
             &config.thorium.ephemeral.bucket,
-            // these aren't password protected so just use the files password
+            // these aren't password protected so just use the files password/cart version
             &config.thorium.files.password,
+            config.thorium.files.cart_version,
             &config.thorium.s3,
         );
         let reaction_cache = S3Client::new(
             &config.thorium.reaction_cache.bucket,
             &config.thorium.reaction_cache.password,
+            config.thorium.reaction_cache.cart_version,
             &config.thorium.s3,
         );
         let attachments = S3Client::new(
             &config.thorium.attachments.bucket,
-            // these aren't password protected so just use the files password
+            // these aren't password protected so just use the files password/cart version
             &config.thorium.files.password,
+            config.thorium.files.cart_version,
             &config.thorium.s3,
         );
         let repos = S3Client::new(
             &config.thorium.repos.bucket,
-            // these aren't password protected so just use the files password
+            // these aren't password protected so just use the files password/cart version
             &config.thorium.files.password,
+            config.thorium.files.cart_version,
             &config.thorium.s3,
         );
         // build all of the graphics s3 clients
         let graphics = S3Client::new(
             &config.thorium.graphics.bucket,
-            // these aren't password protected so just use the files password
+            // these aren't password protected so just use the files password/cart version
             &config.thorium.files.password,
+            config.thorium.files.cart_version,
             &config.thorium.s3,
         );
         S3 {
@@ -164,6 +171,8 @@ pub struct S3Client {
     pub bucket: String,
     /// The password used to encrypt files
     password: GenericArray<u8, U16>,
+    /// The version of cart to use
+    cart_version: CartVersion,
     /// The test aws sdk s3 client
     pub client: Client,
 }
@@ -173,9 +182,17 @@ impl S3Client {
     ///
     /// # Arguments
     ///
-    /// * `config` - Thorium config options
+    /// * `bucket` - The name of the bucket to upload/download data to/from
+    /// * `password` - The password to use when carting data
+    /// * `cart_version` - The version of cart to use
+    /// * `conf` - Thorium s3 config options
     #[must_use]
-    pub fn new(bucket: &str, password: &str, conf: &crate::conf::S3) -> Self {
+    pub fn new(
+        bucket: &str,
+        password: &str,
+        cart_version: CartVersion,
+        conf: &crate::conf::S3,
+    ) -> Self {
         // build our generic array
         let gen_array: GenericArray<u8, U16> =
             GenericArray::clone_from_slice(&password.as_bytes()[..16]);
@@ -199,6 +216,7 @@ impl S3Client {
         S3Client {
             bucket: bucket.to_owned(),
             password: gen_array,
+            cart_version,
             client,
         }
     }
@@ -291,17 +309,16 @@ impl S3Client {
     /// * `field` - The field to stream to s3
     #[instrument(
         name = "S3Client::hash_cart_and_stream_helper",
-        skip(self, field),
+        skip(self, field, cart),
         err(Debug)
     )]
-    async fn hash_cart_and_stream_helper<'a>(
+    async fn hash_cart_and_stream_helper<'a, V: CartManualVersionSupport>(
         &self,
         path: &str,
         upload_id: &str,
         mut field: Field<'a>,
+        mut cart: CartStreamManual<V>,
     ) -> Result<StandardHashes, ApiError> {
-        // init our cart streamer and hashers
-        let mut cart = CartStreamManual::new(&self.password, 7_242_880)?;
         let mut hashers = StandardHashers::default();
         // track what part number we are on
         let mut part_num = 1;
@@ -413,11 +430,25 @@ impl S3Client {
             Some(upload_id) => upload_id,
             None => return unavailable!("Failed to get multipart upload ID".to_owned()),
         };
-        // cart and stream this file to s3
-        match self
-            .hash_cart_and_stream_helper(&path, upload_id, field)
-            .await
-        {
+        // hash, cart, and stream this file to s3 using the correct version of cart
+        let hash_result = match self.cart_version {
+            CartVersion::V1 => {
+                // init our cart streamer
+                let cart = CartStreamManual::builder(&self.password, 7_242_880).build_v1()?;
+                // cart, hash, and stream this file to s3 using version 1 of cart
+                self.hash_cart_and_stream_helper(&path, upload_id, field, cart)
+                    .await
+            }
+            CartVersion::V2 => {
+                // init our cart streamer
+                let cart = CartStreamManual::builder(&self.password, 7_242_880).build_v2()?;
+                // cart, hash, and stream this file to s3 using version 1 of cart
+                self.hash_cart_and_stream_helper(&path, upload_id, field, cart)
+                    .await
+            }
+        };
+        // check if our streaming cart, hash, upload failed or not
+        match hash_result {
             Ok(hashes) => Ok(hashes),
             Err(error) => {
                 // abort this multipart upload
@@ -443,17 +474,17 @@ impl S3Client {
     /// * `field` - The field to stream to s3
     #[instrument(
         name = "S3Client::sha256_cart_and_stream_helper",
-        skip(self, field),
+        skip(self, field, cart),
         err(Debug)
     )]
-    async fn sha256_cart_and_stream_helper<'a>(
+    async fn sha256_cart_and_stream_helper<'a, V: CartManualVersionSupport>(
         &self,
         path: &str,
         upload_id: &str,
         mut field: Field<'a>,
+        mut cart: CartStreamManual<V>,
     ) -> Result<String, ApiError> {
         // init our cart streamer and hashers
-        let mut cart = CartStreamManual::new(&self.password, 7_242_880)?;
         let mut sha256 = Sha256::new();
         // track what part number we are on
         let mut part_num = 1;
@@ -570,11 +601,25 @@ impl S3Client {
             Some(upload_id) => upload_id,
             None => return unavailable!("Failed to get multipart upload ID".to_owned()),
         };
+        // sha256, cart and stream this file to s3 using the correct version of cart
+        let sha256_result = match self.cart_version {
+            CartVersion::V1 => {
+                // init our cart streamer
+                let cart = CartStreamManual::builder(&self.password, 7_242_880).build_v1()?;
+                // cart, sha256, and stream this file to s3 using version 1 of cart
+                self.sha256_cart_and_stream_helper(&path, upload_id, field, cart)
+                    .await
+            }
+            CartVersion::V2 => {
+                // init our cart streamer
+                let cart = CartStreamManual::builder(&self.password, 7_242_880).build_v2()?;
+                // cart, sha256, and stream this file to s3 using version 1 of cart
+                self.sha256_cart_and_stream_helper(&path, upload_id, field, cart)
+                    .await
+            }
+        };
         // cart and stream this file to s3
-        match self
-            .sha256_cart_and_stream_helper(&path, upload_id, field)
-            .await
-        {
+        match sha256_result {
             Ok(sha256) => Ok(sha256),
             Err(error) => {
                 // abort this multipart upload
@@ -600,17 +645,16 @@ impl S3Client {
     /// * `field` - The field to stream to s3
     #[instrument(
         name = "S3Client::cart_and_stream_helper",
-        skip(self, field),
+        skip(self, field, cart),
         err(Debug)
     )]
-    async fn cart_and_stream_helper<'a>(
+    async fn cart_and_stream_helper<'a, V: CartManualVersionSupport>(
         &self,
         path: &str,
         upload_id: &str,
         mut field: Field<'a>,
+        mut cart: CartStreamManual<V>,
     ) -> Result<(), ApiError> {
-        // init our cart streamer and hashers
-        let mut cart = CartStreamManual::new(&self.password, 7_242_880)?;
         // track what part number we are on
         let mut part_num = 1;
         // keep a list of parts we have uploaded
@@ -719,8 +763,25 @@ impl S3Client {
             Some(upload_id) => upload_id,
             None => return unavailable!("Failed to get multipart upload ID".to_owned()),
         };
+        // cart, and stream this file to s3 using the correct version of cart
+        let cart_result = match self.cart_version {
+            CartVersion::V1 => {
+                // init our cart streamer
+                let cart = CartStreamManual::builder(&self.password, 7_242_880).build_v1()?;
+                // cart and stream this file to s3 using version 1 of cart
+                self.cart_and_stream_helper(&path, upload_id, field, cart)
+                    .await
+            }
+            CartVersion::V2 => {
+                // init our cart streamer
+                let cart = CartStreamManual::builder(&self.password, 7_242_880).build_v2()?;
+                // cart and stream this file to s3 using version 1 of cart
+                self.cart_and_stream_helper(&path, upload_id, field, cart)
+                    .await
+            }
+        };
         // cart and stream this file to s3
-        match self.cart_and_stream_helper(&path, upload_id, field).await {
+        match cart_result {
             Ok(()) => Ok(()),
             Err(error) => {
                 // abort this multipart upload
@@ -1159,8 +1220,9 @@ impl GraphicsS3Client {
         // build all of the graphics s3 clients
         let client = S3Client::new(
             &config.thorium.graphics.bucket,
-            // these aren't password protected so just use the files password
+            // these aren't password protected so just use the files password/cart version
             &config.thorium.files.password,
+            config.thorium.files.cart_version,
             &config.thorium.s3,
         );
         Self { client }

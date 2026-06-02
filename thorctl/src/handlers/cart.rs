@@ -1,4 +1,4 @@
-use cart_rs::CartStream;
+use cart_rs::{CartStream, CartVersion};
 use generic_array::{GenericArray, typenum::U16};
 use regex::RegexSet;
 use std::{
@@ -77,6 +77,38 @@ pub async fn handle(args: &Args, cmd: &Cart) -> Result<(), Error> {
     Ok(())
 }
 
+/// Helps cart a file with the correct version of cart
+///
+/// # Arguments
+///
+/// * `cmd` - The cart command including user options
+/// * `password` - The password used to encrypt the cart file
+/// * `input` - The file to cart
+/// * `output_cart` - The file to write our carted data into
+async fn cart_path_helper(
+    cmd: &Arc<Cart>,
+    password: &Arc<GenericArray<u8, U16>>,
+    input: File,
+    output_cart: &mut File,
+) -> Result<(), Error> {
+    // cart this file with the correct version
+    match cmd.version {
+        CartVersion::V1 => {
+            // build our cart streamer
+            let mut cart = CartStream::builder(password, BufStream::new(input)).build_v1()?;
+            // cart this file
+            tokio::io::copy(&mut cart, output_cart).await?;
+        }
+        CartVersion::V2 => {
+            // build our cart streamer
+            let mut cart = CartStream::builder(password, BufStream::new(input)).build_v2()?;
+            // cart this file
+            tokio::io::copy(&mut cart, output_cart).await?;
+        }
+    };
+    Ok(())
+}
+
 /// Cart the file at the given path
 ///
 /// Returns the path to the carted file or an error on failure
@@ -119,9 +151,9 @@ async fn cart_path(
         .truncate(true)
         .open(&out_path)
         .await?;
-    // create a stream to cart the file and copy the stream's contents to the output path
-    let mut cart_stream = CartStream::new(BufStream::new(input), &password)?;
-    if let Err(err) = tokio::io::copy(&mut cart_stream, &mut output_cart).await {
+    //// create a stream to cart the file and copy the stream's contents to the output path
+    //let mut cart_stream = CartStream::new(BufStream::new(input), &password)?;
+    if let Err(err) = cart_path_helper(&cmd, &password, input, &mut output_cart).await {
         // if an error occurred while carting, delete the output file and return the error
         drop(output_cart);
         tokio::fs::remove_file(&out_path).await?;

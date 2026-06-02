@@ -96,10 +96,12 @@ impl Footer {
         let end = &raw[raw.len() - 28..];
         // make sure the magic numbers match carts magic number
         if end[..4] == *MAGIC_NUM {
-            // setup a bincode config
-            let config = bincode::config::standard();
             // extract the length of the optional footer
-            let (opt_len, _) = bincode::decode_from_slice(&end[20..], config)?;
+            let opt_len = u64::from_le_bytes(
+                end[20..28]
+                    .try_into()
+                    .map_err(|_| Error::new("Invalid footer: insufficient bytes for opt_len"))?,
+            ) as usize;
             return Ok(Footer { opt_len });
         }
         Err(Error::new(

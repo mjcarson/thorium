@@ -9,16 +9,16 @@ pub enum Error {
     Generic(String),
     /// An error from performing some IO
     IO(std::io::Error),
-    /// An error from deserializing binary data
-    BincodeDecode(bincode::error::DecodeError),
-    /// An error from serializing binary data
-    BincodeEncode(bincode::error::EncodeError),
     /// An error from converting an integer
     TryFromInt(TryFromIntError),
     /// An error from reserving more space for data
     TryReserve(TryReserveError),
     /// Finish was called before any data was specified
     FinishBeforeData,
+    /// Unsupported CaRT version
+    UnsupportedVersion(u16),
+    /// An AES-GCM encryption/decryption error
+    AesGcm,
 }
 
 impl Error {
@@ -40,11 +40,11 @@ impl std::fmt::Display for Error {
         match self {
             Error::Generic(msg) => write!(fmt, "Generic: {msg}"),
             Error::IO(err) => write!(fmt, "IO: {err}"),
-            Error::BincodeDecode(err) => write!(fmt, "BincodeDecode: {err}"),
-            Error::BincodeEncode(err) => write!(fmt, "BincodeEncode: {err}"),
             Error::TryFromInt(err) => write!(fmt, "TryFromInt: {err}"),
             Error::TryReserve(err) => write!(fmt, "TryReserve: {err}"),
             Error::FinishBeforeData => write!(fmt, "FinishBeforeData"),
+            Error::UnsupportedVersion(v) => write!(fmt, "Unsupported CaRT version: {v}"),
+            Error::AesGcm => write!(fmt, "AES-GCM encryption/decryption error"),
         }
     }
 }
@@ -52,18 +52,6 @@ impl std::fmt::Display for Error {
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
         Error::IO(error)
-    }
-}
-
-impl From<bincode::error::DecodeError> for Error {
-    fn from(error: bincode::error::DecodeError) -> Self {
-        Error::BincodeDecode(error)
-    }
-}
-
-impl From<bincode::error::EncodeError> for Error {
-    fn from(error: bincode::error::EncodeError) -> Self {
-        Error::BincodeEncode(error)
     }
 }
 

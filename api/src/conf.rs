@@ -1,5 +1,6 @@
 //! The shared config for Thorium
 use bytesize::ByteSize;
+use cart_rs::CartVersion;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
@@ -1666,6 +1667,11 @@ fn default_files_bucket() -> String {
     "thorium-files".to_owned()
 }
 
+/// Helps serde default to cart version 2
+fn default_cart_version() -> CartVersion {
+    CartVersion::V2
+}
+
 /// Helps serde default the files earliest to 01/01/2010
 fn default_files_earliest() -> i64 {
     1_262_332_800
@@ -1685,6 +1691,9 @@ pub struct Files {
     /// The bucket to write carted files too
     #[serde(default = "default_files_bucket")]
     pub bucket: String,
+    /// The version of cart to use
+    #[serde(default = "default_cart_version")]
+    pub cart_version: CartVersion,
     /// The earliest date a file will have a submission date for as a unix epoch
     #[serde(default = "default_files_earliest")]
     pub earliest: i64,
@@ -1698,6 +1707,7 @@ impl Default for Files {
         Files {
             password: default_files_password(),
             bucket: default_files_bucket(),
+            cart_version: default_cart_version(),
             earliest: default_files_earliest(),
             partition_size: default_files_partition_size(),
         }
@@ -1783,6 +1793,9 @@ pub struct ReactionCache {
     /// The bucket to write extras files to
     #[serde(default = "default_reaction_cache_bucket")]
     pub bucket: String,
+    /// The version of cart to use
+    #[serde(default = "default_cart_version")]
+    pub cart_version: CartVersion,
 }
 
 impl Default for ReactionCache {
@@ -1790,6 +1803,7 @@ impl Default for ReactionCache {
         ReactionCache {
             password: default_reaction_cache_password(),
             bucket: default_reaction_cache_bucket(),
+            cart_version: default_cart_version(),
         }
     }
 }

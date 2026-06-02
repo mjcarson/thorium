@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use cart_rs::CartVersion;
 use clap::Parser;
 
 /// Provide a default output directory
@@ -31,6 +32,9 @@ pub struct Cart {
     /// The output directory to save the carted file(s) to
     #[clap(short, long, default_value = default_output_path().into_os_string(), conflicts_with = "in_place")]
     pub output: PathBuf,
+    /// The version of cart to use (v1 - rc4/zlib, v2 - aes/zstd)
+    #[clap(short, long, default_value = "V2")]
+    pub version: CartVersion,
     /// Preserve the file structure of the targets rather than placing output files together in one directory.
     /// For example, a target of "/my/dir" and an output directory of "./output" will create an output in
     /// "./output/my/dir", including all subdirectories within "/my/dir".
