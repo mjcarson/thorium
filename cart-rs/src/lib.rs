@@ -293,9 +293,10 @@ impl std::str::FromStr for CartVersion {
     ///
     /// * `s` - The sting to convert to a version
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // match either casing for each supported version
         match s {
             "V1" | "v1" => Ok(CartVersion::V1),
-            "V2" | "v2" => Ok(CartVersion::V1),
+            "V2" | "v2" => Ok(CartVersion::V2),
             _ => Err("expected `V1` or `V2`"),
         }
     }
@@ -361,7 +362,9 @@ impl<T: ArrayLength<u8>> CartStreamV1<T> {
     /// * `compression` - The zlib compression level to use
     fn new(key: &GenericArray<u8, T>, compression: Compression) -> Self {
         CartStreamV1 {
+            // setup our zlib compressor at the requested level
             zlib: Compress::new(compression, true),
+            // setup our rc4 encryptor from the key
             rc4: rc4::Rc4::new(key),
             finished: false,
         }
@@ -466,8 +469,14 @@ pub struct CartStreamV2 {
     cipher: Aes128Gcm,
     /// Counter incremented for each encrypted segment (used in nonce derivation)
     segment_counter: u32,
-    /// Accumulates compressed plaintext for the current segment
+    /// Fixed-size scratch buffer holding the current segment's compressed bytes.
+    ///
+    /// Allocated once and zero-initialized so zstd always writes into already
+    /// initialized memory (no `unsafe` and no per-chunk re-zeroing). Only the
+    /// first `segment_len` bytes are valid compressed data.
     segment_buf: Vec<u8>,
+    /// Number of valid compressed bytes currently held in `segment_buf`
+    segment_len: usize,
     /// Holds the length-prefixed encrypted segment ready to be drained to the reader
     output_buf: Vec<u8>,
     /// Current drain position within `output_buf`
@@ -499,11 +508,16 @@ impl CartStreamV2 {
         // build the AES-128-GCM cipher from the key
         let key_bytes = aes_gcm::Key::<Aes128Gcm>::from_slice(key);
         let cipher = <Aes128Gcm as aes_gcm::KeyInit>::new(key_bytes);
+        // zero-initialize the segment scratch buffer once up front so zstd
+        // always writes into initialized memory; a 256-byte floor keeps a tiny
+        // configured segment size from starving the encoder of output space
+        let scratch = segment_size.max(256);
         Ok(CartStreamV2 {
             zstd,
             cipher,
             segment_counter: 0,
-            segment_buf: Vec::with_capacity(segment_size),
+            segment_buf: vec![0u8; scratch],
+            segment_len: 0,
             output_buf: Vec::with_capacity(segment_size + 4 + 16),
             output_pos: 0,
             segment_size,
@@ -539,12 +553,57 @@ impl CartVersionSupport for CartStreamV2 {
 
     /// Read, compress (zstd), and encrypt (AES-GCM) data in segments.
     ///
-    /// Compressed data is accumulated into `segment_buf` until it reaches the
-    /// configured segment size. Each full segment is encrypted as a single
-    /// AES-GCM operation and written as `[u32 LE len][ciphertext][tag]`.
+    /// # Output format
     ///
-    /// When the caller's ReadBuf is large enough, the encrypted segment is
-    /// written directly to it, bypassing the intermediate `output_buf`.
+    /// The V2 body produced between the header and footer is a sequence of
+    /// length-prefixed, authenticated segments:
+    ///
+    /// ```text
+    /// [u32 LE len][ciphertext ... ][16-byte GCM tag]   (repeated per segment)
+    /// ```
+    ///
+    /// Input is first compressed with zstd, then each completed segment of
+    /// compressed data is encrypted with a single AES-GCM operation.
+    ///
+    /// # General flow
+    ///
+    /// Each call makes at most one phase of forward progress and then returns.
+    /// The work is split across four private helpers:
+    ///
+    /// 1. [`drain_output_buf`](Self::drain_output_buf) - flush any encrypted
+    ///    bytes left over from a previous call into the caller's buffer.
+    /// 2. [`poll_compress_input`](Self::poll_compress_input) - read input and
+    ///    compress it into the current segment until the segment fills or the
+    ///    input is exhausted.
+    /// 3. [`flush_compressor`](Self::flush_compressor) - once the input is
+    ///    exhausted, drain the zstd encoder's internal buffers.
+    /// 4. [`encrypt_and_emit`](Self::encrypt_and_emit) - encrypt the finished
+    ///    segment and write it to the caller (or stage it for later draining).
+    ///
+    /// # Re-entrancy / async contract
+    ///
+    /// This method is polled repeatedly by [`AsyncRead::poll_read`]. It either
+    /// returns `Ready(Ok(()))` having written some bytes (or having made
+    /// internal progress), or propagates `Poll::Pending` from
+    /// `poll_compress_input` via `ready!` when the input reader has no data
+    /// available yet. All progress state (`segment_counter`, `zstd_finishing`,
+    /// `zstd_done`, `all_encrypted`, `segment_buf`, `output_buf`/`output_pos`)
+    /// lives on `self` and persists between calls so the next poll resumes
+    /// exactly where this one left off. Completion is signalled separately via
+    /// [`is_finished`](Self::is_finished).
+    ///
+    /// # Fast vs slow emit path
+    ///
+    /// When the caller's `ReadBuf` has room for a whole segment, it is written
+    /// straight into it. Otherwise the segment is staged in `output_buf` and
+    /// drained across subsequent polls by `drain_output_buf`.
+    ///
+    /// # Buffering
+    ///
+    /// `segment_buf` is a fixed-size, zero-initialized scratch buffer; the write
+    /// cursor `segment_len` tracks how many compressed bytes are valid. zstd
+    /// always writes into already-initialized memory, so this method contains no
+    /// `unsafe` code and never re-zeroes the buffer between chunks.
     ///
     /// # Arguments
     ///
@@ -559,150 +618,24 @@ impl CartVersionSupport for CartStreamV2 {
     ) -> Poll<std::io::Result<()>> {
         // Phase 1: drain any pending encrypted output from a previous round
         if self.output_pos < self.output_buf.len() {
-            // get the undrained portion of our staged output
-            let available = &self.output_buf[self.output_pos..];
-            // get a reference to the caller's output buffer
-            let dest = buf.initialize_unfilled();
-            // copy as much as fits into the caller's buffer
-            let to_copy = std::cmp::min(available.len(), dest.len());
-            dest[..to_copy].copy_from_slice(&available[..to_copy]);
-            buf.advance(to_copy);
-            // advance our drain position
-            self.output_pos += to_copy;
-            // if we've drained everything, reset and check if we're done
-            if self.output_pos == self.output_buf.len() {
-                self.output_buf.clear();
-                self.output_pos = 0;
-                if self.all_encrypted {
-                    self.finished = true;
-                }
-            }
+            self.drain_output_buf(buf);
             return Poll::Ready(Ok(()));
         }
-        // Phase 2: compress input into the segment buffer, writing directly
-        // into spare capacity to avoid zeroing memory zstd overwrites
+        // Phase 2: compress input into the current segment until it fills or
+        // the input is exhausted (propagating Pending if the reader stalls)
         if !self.zstd_finishing {
-            loop {
-                // read in the next chunk of input bytes
-                let chunk = ready!(input.as_mut().poll_fill_buf(cx))?;
-                if chunk.is_empty() {
-                    // input exhausted — switch to flushing mode
-                    self.zstd_finishing = true;
-                    break;
-                }
-                // make room in the segment buffer for compressed output
-                let old_len = self.segment_buf.len();
-                let space = self.segment_size.saturating_sub(old_len).max(64);
-                self.segment_buf.reserve(space);
-                // safety: we set_len to create writable space, then truncate
-                // to the actual bytes written by run_on_buffers
-                unsafe { self.segment_buf.set_len(old_len + space) };
-                // compress this chunk of input into the segment buffer
-                let status = self
-                    .zstd
-                    .run_on_buffers(chunk, &mut self.segment_buf[old_len..])
-                    .map_err(|e| std::io::Error::new(ErrorKind::Other, e))?;
-                // truncate to the actual number of compressed bytes written
-                self.segment_buf.truncate(old_len + status.bytes_written);
-                // mark the consumed input bytes
-                input.as_mut().consume(status.bytes_read);
-                if self.segment_buf.len() >= self.segment_size {
-                    // segment buffer is full — ready to encrypt
-                    break;
-                }
-            }
+            ready!(self.poll_compress_input(input, cx))?;
         }
-        // Phase 3: flush the zstd compressor if input is exhausted
+        // Phase 3: once the input is exhausted, flush the zstd encoder
         if self.zstd_finishing && !self.zstd_done {
-            loop {
-                // make room for more flushed output
-                let old_len = self.segment_buf.len();
-                let space = self.segment_size.saturating_sub(old_len).max(256);
-                self.segment_buf.reserve(space);
-                unsafe { self.segment_buf.set_len(old_len + space) };
-                // flush compressed data from the zstd encoder's internal buffer
-                let mut out_buf =
-                    zstd::stream::raw::OutBuffer::around(&mut self.segment_buf[old_len..]);
-                let remaining = self
-                    .zstd
-                    .finish(&mut out_buf, true)
-                    .map_err(|e| std::io::Error::new(ErrorKind::Other, e))?;
-                // truncate to the actual bytes flushed
-                let written = out_buf.pos();
-                self.segment_buf.truncate(old_len + written);
-                if remaining == 0 {
-                    // encoder fully flushed
-                    self.zstd_done = true;
-                    break;
-                }
-                if self.segment_buf.len() >= self.segment_size {
-                    // segment is full — encrypt it now, flush the rest next round
-                    break;
-                }
-            }
+            self.flush_compressor()?;
         }
-        // Phase 4: encrypt the segment when ready, using detached tag to
-        // avoid extending the Vec with the 16-byte GCM tag
-        let should_encrypt = !self.segment_buf.is_empty()
-            && (self.segment_buf.len() >= self.segment_size || self.zstd_done);
-        if should_encrypt {
-            // derive the per-segment nonce
-            let nonce = self.current_nonce();
-            // encrypt the segment in-place, getting the 16-byte tag separately
-            let tag = self
-                .cipher
-                .encrypt_in_place_detached(&nonce, b"", &mut self.segment_buf)
-                .map_err(|_| std::io::Error::new(ErrorKind::Other, "AES-GCM encryption failed"))?;
-            // calculate the total ciphertext length (encrypted data + tag)
-            let ciphertext_len = (self.segment_buf.len() + 16) as u32;
-            // advance the segment counter for the next nonce
-            self.segment_counter += 1;
-            // mark all segments as encrypted if the compressor is done
-            if self.zstd_done {
-                self.all_encrypted = true;
-            }
-            // try to write directly to ReadBuf when it's large enough,
-            // skipping the intermediate output_buf entirely
-            let dest = buf.initialize_unfilled();
-            let total_needed = 4 + self.segment_buf.len() + 16;
-            if dest.len() >= total_needed {
-                // fast path: write [len][ciphertext][tag] straight to the caller
-                dest[..4].copy_from_slice(&ciphertext_len.to_le_bytes());
-                dest[4..4 + self.segment_buf.len()].copy_from_slice(&self.segment_buf);
-                dest[4 + self.segment_buf.len()..total_needed].copy_from_slice(tag.as_slice());
-                buf.advance(total_needed);
-                self.segment_buf.clear();
-                if self.all_encrypted {
-                    self.finished = true;
-                }
-            } else {
-                // slow path: stage in output_buf for multi-poll draining
-                self.output_buf.clear();
-                // write the 4-byte length prefix
-                self.output_buf
-                    .extend_from_slice(&ciphertext_len.to_le_bytes());
-                // write the encrypted data
-                self.output_buf.append(&mut self.segment_buf);
-                // write the 16-byte GCM authentication tag
-                self.output_buf.extend_from_slice(tag.as_slice());
-                self.output_pos = 0;
-                // drain what fits into the caller's buffer
-                let to_copy = std::cmp::min(self.output_buf.len(), dest.len());
-                dest[..to_copy].copy_from_slice(&self.output_buf[..to_copy]);
-                buf.advance(to_copy);
-                self.output_pos = to_copy;
-                // check if we drained everything in one go
-                if self.output_pos == self.output_buf.len() {
-                    self.output_buf.clear();
-                    self.output_pos = 0;
-                    if self.all_encrypted {
-                        self.finished = true;
-                    }
-                }
-            }
-            return Poll::Ready(Ok(()));
+        // Phase 4: encrypt the finished segment and emit it to the caller
+        let segment_ready =
+            self.segment_len > 0 && (self.segment_len >= self.segment_size || self.zstd_done);
+        if segment_ready {
+            self.encrypt_and_emit(buf)?;
         }
-
         Poll::Ready(Ok(()))
     }
 
@@ -710,6 +643,178 @@ impl CartVersionSupport for CartStreamV2 {
     /// has been fully drained.
     fn is_finished(&self) -> bool {
         self.finished
+    }
+}
+
+impl CartStreamV2 {
+    /// Drain staged encrypted output into the caller's read buffer.
+    ///
+    /// Copies as much of `output_buf[output_pos..]` as fits into `buf`,
+    /// advancing `output_pos`. Once the staged output is fully drained the
+    /// buffer is reset and, if the final segment has already been encrypted,
+    /// the stream is marked finished.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - The output read buffer to copy staged bytes into
+    fn drain_output_buf(&mut self, buf: &mut ReadBuf<'_>) {
+        // get the undrained portion of our staged output
+        let available = &self.output_buf[self.output_pos..];
+        // get a reference to the caller's output buffer
+        let dest = buf.initialize_unfilled();
+        // copy as much as fits into the caller's buffer
+        let to_copy = std::cmp::min(available.len(), dest.len());
+        dest[..to_copy].copy_from_slice(&available[..to_copy]);
+        buf.advance(to_copy);
+        // advance our drain position
+        self.output_pos += to_copy;
+        // if we've drained everything, reset and check if we're done
+        if self.output_pos == self.output_buf.len() {
+            self.output_buf.clear();
+            self.output_pos = 0;
+            if self.all_encrypted {
+                self.finished = true;
+            }
+        }
+    }
+
+    /// Read input and compress it into the current segment buffer.
+    ///
+    /// Loops reading chunks from `input` and compressing them into
+    /// `segment_buf` until the segment reaches `segment_size` or the input is
+    /// exhausted (in which case `zstd_finishing` is set so the caller moves on
+    /// to flushing). Returns `Poll::Pending` (via `ready!`) when the reader has
+    /// no data available yet.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The pinned input reader
+    /// * `cx`    - The async task context
+    fn poll_compress_input<R: AsyncBufRead>(
+        &mut self,
+        input: &mut Pin<&mut R>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        // loop until we have enough for one segment or there is no more data to read
+        loop {
+            // read in the next chunk of input bytes
+            let chunk = ready!(input.as_mut().poll_fill_buf(cx))?;
+            if chunk.is_empty() {
+                // input exhausted — switch to flushing mode
+                self.zstd_finishing = true;
+                break;
+            }
+            // compress this chunk into the already-initialized spare region of
+            // the segment buffer, starting at the current write cursor
+            let status = self
+                .zstd
+                .run_on_buffers(chunk, &mut self.segment_buf[self.segment_len..])
+                .map_err(|e| std::io::Error::new(ErrorKind::Other, e))?;
+            // advance the write cursor by the compressed bytes produced
+            self.segment_len += status.bytes_written;
+            // mark the consumed input bytes
+            input.as_mut().consume(status.bytes_read);
+            if self.segment_len >= self.segment_size {
+                // segment buffer is full — ready to encrypt
+                break;
+            }
+        }
+        Poll::Ready(Ok(()))
+    }
+
+    /// Flush the zstd encoder's internal buffers after input is exhausted.
+    ///
+    /// Repeatedly drives `zstd.finish` into `segment_buf` until the encoder
+    /// reports no remaining data (setting `zstd_done`) or the segment fills (in
+    /// which case the remaining output is flushed on a later call, after the
+    /// full segment has been encrypted and emitted).
+    fn flush_compressor(&mut self) -> std::io::Result<()> {
+        // loop until there is no more data or we have a full segment
+        loop {
+            // flush compressed data into the already-initialized spare region of
+            // the segment buffer, starting at the current write cursor
+            let mut out_buf =
+                zstd::stream::raw::OutBuffer::around(&mut self.segment_buf[self.segment_len..]);
+            let remaining = self
+                .zstd
+                .finish(&mut out_buf, true)
+                .map_err(|e| std::io::Error::new(ErrorKind::Other, e))?;
+            // advance the write cursor by the bytes flushed
+            self.segment_len += out_buf.pos();
+            if remaining == 0 {
+                // encoder fully flushed
+                self.zstd_done = true;
+                break;
+            }
+            if self.segment_len >= self.segment_size {
+                // segment is full — encrypt it now, flush the rest next round
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Encrypt the current segment and emit it to the caller's buffer.
+    ///
+    /// Encrypts `segment_buf` in place with a per-segment AES-GCM nonce (using
+    /// a detached tag to avoid growing the Vec by the 16-byte tag), then writes
+    /// `[u32 LE len][ciphertext][tag]` either straight into `buf` (when it has
+    /// room) or staged into `output_buf` for draining across later polls.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - The output read buffer to emit the encrypted segment into
+    fn encrypt_and_emit(&mut self, buf: &mut ReadBuf<'_>) -> std::io::Result<()> {
+        // number of valid compressed bytes accumulated in this segment
+        let len = self.segment_len;
+        // derive the per-segment nonce
+        let nonce = self.current_nonce();
+        // encrypt only the valid region in-place (not the zeroed scratch tail),
+        // getting the 16-byte tag separately
+        let tag = self
+            .cipher
+            .encrypt_in_place_detached(&nonce, b"", &mut self.segment_buf[..len])
+            .map_err(|_| std::io::Error::new(ErrorKind::Other, "AES-GCM encryption failed"))?;
+        // calculate the total ciphertext length (encrypted data + tag)
+        let ciphertext_len = (len + 16) as u32;
+        // advance the segment counter for the next nonce
+        self.segment_counter += 1;
+        // mark all segments as encrypted if the compressor is done
+        if self.zstd_done {
+            self.all_encrypted = true;
+        }
+        // try to write directly to ReadBuf when it's large enough,
+        // skipping the intermediate output_buf entirely
+        let dest = buf.initialize_unfilled();
+        let total_needed = 4 + len + 16;
+        if dest.len() >= total_needed {
+            // fast path: write [len][ciphertext][tag] straight to the caller
+            dest[..4].copy_from_slice(&ciphertext_len.to_le_bytes());
+            dest[4..4 + len].copy_from_slice(&self.segment_buf[..len]);
+            dest[4 + len..total_needed].copy_from_slice(tag.as_slice());
+            buf.advance(total_needed);
+            // reset the write cursor; the scratch buffer stays allocated/initialized
+            self.segment_len = 0;
+            if self.all_encrypted {
+                self.finished = true;
+            }
+        } else {
+            // slow path: stage in output_buf for multi-poll draining
+            self.output_buf.clear();
+            // write the 4-byte length prefix
+            self.output_buf
+                .extend_from_slice(&ciphertext_len.to_le_bytes());
+            // write the encrypted data (the valid region only)
+            self.output_buf.extend_from_slice(&self.segment_buf[..len]);
+            // write the 16-byte GCM authentication tag
+            self.output_buf.extend_from_slice(tag.as_slice());
+            self.output_pos = 0;
+            // reset the write cursor; the scratch buffer stays allocated/initialized
+            self.segment_len = 0;
+            // drain what fits into the caller's buffer (and finish if fully drained)
+            self.drain_output_buf(buf);
+        }
+        Ok(())
     }
 }
 
@@ -766,6 +871,7 @@ impl<'a, T: ArrayLength<u8>, R: AsyncBufRead> CartStreamBuilder<'a, T, R> {
     /// * `key` - The key to encrypt this data with
     /// * `input` - The input stream to cart
     pub fn new(key: &'a GenericArray<u8, T>, input: R) -> Self {
+        // start with no overrides; defaults are applied at build time
         Self {
             key,
             input,
@@ -814,11 +920,14 @@ impl<'a, T: ArrayLength<u8>, R: AsyncBufRead> CartStreamBuilder<'a, T, R> {
 
     /// Build a V1 cart stream (RC4 + zlib).
     pub fn build_v1(self) -> Result<CartStream<T, R, CartStreamV1<T>>, Error> {
+        // make sure the user is using a valid key
         Header::validate_key(self.key)?;
+        // use the configured zlib level or fall back to the default
         let compression = match self.compression_level {
             Some(level) => Compression::new(level as u32),
             None => Compression::default(),
         };
+        // build the stream with V1 internal state
         Ok(CartStream {
             key: self.key.clone(),
             input: self.input,
@@ -830,10 +939,15 @@ impl<'a, T: ArrayLength<u8>, R: AsyncBufRead> CartStreamBuilder<'a, T, R> {
 
     /// Build a V2 cart stream (AES-GCM + zstd). This is the default.
     pub fn build_v2(self) -> Result<CartStream<T, R, CartStreamV2>, Error> {
+        // make sure the user is using a valid key
         Header::validate_key(self.key)?;
+        // use the configured zstd level or fall back to the default
         let level = self.zstd_level.unwrap_or(3);
+        // use the configured segment size or fall back to the default
         let segment_size = self.segment_size.unwrap_or(DEFAULT_SEGMENT_SIZE) as usize;
+        // build the V2 internal state (compressor + cipher)
         let internal = CartStreamV2::new(self.key.as_slice(), level, segment_size)?;
+        // build the stream with V2 internal state
         Ok(CartStream {
             key: self.key.clone(),
             input: self.input,
@@ -845,6 +959,7 @@ impl<'a, T: ArrayLength<u8>, R: AsyncBufRead> CartStreamBuilder<'a, T, R> {
 
     /// Build a cart stream using the default version (V2).
     pub fn build(self) -> Result<CartStream<T, R, CartStreamV2>, Error> {
+        // V2 is the default version
         self.build_v2()
     }
 }
@@ -1420,7 +1535,9 @@ impl<R: AsyncBufRead> UncartStream<R> {
     pub fn new(cart: R) -> Self {
         UncartStream {
             cart,
+            // pre-allocate the shared decompression output buffer
             decompressed: vec![0; Self::DECOMPRESSED_BUF_SIZE],
+            // the version is unknown until we parse the header on the first read
             internal: UncartInternal::Pending,
             decompressed_remaining: 0,
             decompressed_consumed: 0,
@@ -1634,35 +1751,55 @@ impl<T: ArrayLength<u8>> CartStreamManualV1<T> {
 }
 
 impl<T: ArrayLength<u8>> CartManualVersionSupport for CartStreamManualV1<T> {
+    /// Queue the next buffer of raw bytes and process the previously queued one
+    ///
+    /// Always keeps one buffer in reserve so the final write can be handled
+    /// correctly by `finish`.
+    ///
+    /// # Arguments
+    ///
+    /// * `raw` - The raw bytes to add to the cart stream
     fn next_bytes(&mut self, raw: Bytes) -> Result<bool, Error> {
+        // swap the new buffer in, keeping the previous one to process
         if let Some(old) = self.on_deck.replace(raw) {
+            // set the previously queued buffer as current and cart it
             self.current = Some(old);
             self.cart_bytes(FlushCompress::Partial)
         } else {
+            // this is the first buffer so there is nothing to process yet
             Ok(false)
         }
     }
 
+    /// Continue processing the current input buffer
     fn process(&mut self) -> Result<bool, Error> {
+        // compress/encrypt more of the current buffer with a partial flush
         self.cart_bytes(FlushCompress::Partial)
     }
 
+    /// Get the number of carted bytes that are ready to be read
     fn ready(&self) -> usize {
         self.skip
     }
 
+    /// Get a slice to the currently carted bytes
     fn carted_bytes(&self) -> &[u8] {
         &self.output[..self.skip]
     }
 
+    /// Mark all currently available carted bytes as consumed
     fn consume(&mut self) {
+        // reset our write position so new carted data overwrites the consumed output
         self.skip = 0;
     }
 
+    /// Flush all remaining data and append the `CaRT` footer
     fn finish(&mut self) -> Result<&[u8], Error> {
+        // get our last buffered input, erroring if no data was ever supplied
         let Some(buff) = self.on_deck.take() else {
             return Err(Error::FinishBeforeData);
         };
+        // set it as current and cart it with a final flush
         self.current = Some(buff);
         self.cart_bytes(FlushCompress::Finish)?;
         // ensure enough room for the footer
@@ -1670,10 +1807,11 @@ impl<T: ArrayLength<u8>> CartManualVersionSupport for CartStreamManualV1<T> {
             self.output.try_reserve_exact(footer::FOOTER_LEN)?;
             self.output.extend((0..footer::FOOTER_LEN).map(|_| 0));
         }
+        // get a reference to the footer region of the output buffer
         let mut footer_buf = &mut self.output[self.skip..self.skip + footer::FOOTER_LEN];
-        unsafe {
-            std::ptr::write_bytes(footer_buf.as_mut_ptr(), 0, footer_buf.len());
-        }
+        // zero out the footer region (may overlap previously carted data)
+        footer_buf.fill(0);
+        // write the CaRT footer magic number
         footer_buf.write_all(footer::MAGIC_NUM)?;
         Ok(&self.output[..self.skip + footer::FOOTER_LEN])
     }
@@ -1697,8 +1835,14 @@ pub struct CartStreamManualV2 {
     cipher: Aes128Gcm,
     /// Counter for per-segment nonce derivation
     segment_counter: u32,
-    /// Accumulates compressed plaintext for the current segment
+    /// Fixed-size scratch buffer holding the current segment's compressed bytes.
+    ///
+    /// Allocated once and zero-initialized so zstd always writes into already
+    /// initialized memory (no `unsafe` and no per-chunk re-zeroing). Only the
+    /// first `segment_len` bytes are valid compressed data.
     segment_buf: Vec<u8>,
+    /// Number of valid compressed bytes currently held in `segment_buf`
+    segment_len: usize,
     /// Maximum compressed plaintext bytes per segment before encryption
     segment_size: usize,
     /// Pre-allocated output buffer (header already written at the front)
@@ -1727,6 +1871,10 @@ impl CartStreamManualV2 {
         // build the AES-128-GCM cipher from the key
         let key_bytes = aes_gcm::Key::<Aes128Gcm>::from_slice(key);
         let cipher = <Aes128Gcm as aes_gcm::KeyInit>::new(key_bytes);
+        // zero-initialize the segment scratch buffer once up front so zstd
+        // always writes into initialized memory; a 256-byte floor keeps a tiny
+        // configured segment size from starving the encoder of output space
+        let scratch = segment_size.max(256);
         Ok(CartStreamManualV2 {
             skip: header::HEADER_LEN,
             on_deck: None,
@@ -1734,7 +1882,8 @@ impl CartStreamManualV2 {
             zstd,
             cipher,
             segment_counter: 0,
-            segment_buf: Vec::with_capacity(segment_size),
+            segment_buf: vec![0u8; scratch],
+            segment_len: 0,
             segment_size,
             output,
         })
@@ -1752,43 +1901,48 @@ impl CartStreamManualV2 {
     ///
     /// Writes `[u32 LE ciphertext+tag len][ciphertext][tag]` to `output[skip..]`.
     fn flush_segment(&mut self) -> Result<(), Error> {
-        // nothing to encrypt if the segment buffer is empty
-        if self.segment_buf.is_empty() {
+        // nothing to encrypt if no compressed bytes have accumulated
+        if self.segment_len == 0 {
             return Ok(());
         }
+        // number of valid compressed bytes in this segment
+        let len = self.segment_len;
         // derive the per-segment nonce
         let nonce = self.current_nonce();
-        // encrypt the segment in-place, getting the 16-byte tag separately
+        // encrypt only the valid region in-place (not the zeroed scratch tail),
+        // getting the 16-byte tag separately
         let tag = self
             .cipher
-            .encrypt_in_place_detached(&nonce, b"", &mut self.segment_buf)
+            .encrypt_in_place_detached(&nonce, b"", &mut self.segment_buf[..len])
             .map_err(|_| Error::new("AES-GCM encryption failed"))?;
         // ensure the output buffer has room for [len][ciphertext][tag]
-        let needed = 4 + self.segment_buf.len() + 16;
+        let needed = 4 + len + 16;
         if self.skip + needed > self.output.len() {
             self.output.resize(self.skip + needed, 0);
         }
         // write the 4-byte length prefix (ciphertext + tag size)
-        let ciphertext_len = (self.segment_buf.len() + 16) as u32;
+        let ciphertext_len = (len + 16) as u32;
         self.output[self.skip..self.skip + 4].copy_from_slice(&ciphertext_len.to_le_bytes());
         self.skip += 4;
-        // write the encrypted ciphertext
-        self.output[self.skip..self.skip + self.segment_buf.len()]
-            .copy_from_slice(&self.segment_buf);
-        self.skip += self.segment_buf.len();
+        // write the encrypted ciphertext (the valid region only)
+        self.output[self.skip..self.skip + len].copy_from_slice(&self.segment_buf[..len]);
+        self.skip += len;
         // write the 16-byte GCM authentication tag
         self.output[self.skip..self.skip + 16].copy_from_slice(tag.as_slice());
         self.skip += 16;
-        // clear the segment buffer for the next segment
-        self.segment_buf.clear();
+        // reset the write cursor; the scratch buffer stays allocated/initialized
+        self.segment_len = 0;
         // advance the segment counter for the next nonce
         self.segment_counter += 1;
         Ok(())
     }
 
     /// Compress the current input buffer into the segment buffer, flushing
-    /// encrypted segments to output as they fill up. Writes into spare
-    /// capacity to avoid zeroing memory zstd overwrites.
+    /// encrypted segments to output as they fill up.
+    ///
+    /// Compresses into the already-initialized spare region of `segment_buf`
+    /// (tracked by `segment_len`), so no `unsafe` and no per-chunk re-zeroing
+    /// are needed.
     ///
     /// Returns `true` if the input buffer still has data remaining.
     fn cart_bytes(&mut self) -> Result<bool, Error> {
@@ -1796,25 +1950,18 @@ impl CartStreamManualV2 {
         let Some(buff) = self.current.as_mut() else {
             return Ok(false);
         };
-        // make room in the segment buffer for compressed output
-        let old_len = self.segment_buf.len();
-        let space = self.segment_size.saturating_sub(old_len).max(64);
-        self.segment_buf.reserve(space);
-        // safety: we set_len to create writable space, then truncate
-        // to the actual bytes written by run_on_buffers
-        unsafe { self.segment_buf.set_len(old_len + space) };
-        // compress this chunk of input into the segment buffer
+        // compress this chunk into the spare region starting at the write cursor
         let status = self
             .zstd
-            .run_on_buffers(&buff[..], &mut self.segment_buf[old_len..])
+            .run_on_buffers(&buff[..], &mut self.segment_buf[self.segment_len..])
             .map_err(|e| Error::new(format!("zstd compression failed: {e}")))?;
-        // truncate to the actual number of compressed bytes written
-        self.segment_buf.truncate(old_len + status.bytes_written);
+        // advance the write cursor by the compressed bytes produced
+        self.segment_len += status.bytes_written;
         // advance the input buffer past consumed bytes
         buff.advance(status.bytes_read);
         let has_remaining = buff.has_remaining();
         // encrypt and flush the segment if it's full
-        if self.segment_buf.len() >= self.segment_size {
+        if self.segment_len >= self.segment_size {
             self.flush_segment()?;
         }
         Ok(has_remaining)
@@ -1822,6 +1969,14 @@ impl CartStreamManualV2 {
 }
 
 impl CartManualVersionSupport for CartStreamManualV2 {
+    /// Queue the next buffer of raw bytes and process the previously queued one
+    ///
+    /// Always keeps one buffer in reserve so the final write can be handled
+    /// correctly by `finish`.
+    ///
+    /// # Arguments
+    ///
+    /// * `raw` - The raw bytes to add to the cart stream
     fn next_bytes(&mut self, raw: Bytes) -> Result<bool, Error> {
         // keep one buffer in reserve; process the previous one
         if let Some(old) = self.on_deck.replace(raw) {
@@ -1829,27 +1984,34 @@ impl CartManualVersionSupport for CartStreamManualV2 {
             self.current = Some(old);
             self.cart_bytes()
         } else {
+            // this is the first buffer so there is nothing to process yet
             Ok(false)
         }
     }
 
+    /// Continue processing the current input buffer
     fn process(&mut self) -> Result<bool, Error> {
         // continue compressing the current input buffer
         self.cart_bytes()
     }
 
+    /// Get the number of carted bytes that are ready to be read
     fn ready(&self) -> usize {
         self.skip
     }
 
+    /// Get a slice to the currently carted bytes
     fn carted_bytes(&self) -> &[u8] {
         &self.output[..self.skip]
     }
 
+    /// Mark all currently available carted bytes as consumed
     fn consume(&mut self) {
+        // reset our write position so new carted data overwrites the consumed output
         self.skip = 0;
     }
 
+    /// Flush all remaining data and append the `CaRT` footer
     fn finish(&mut self) -> Result<&[u8], Error> {
         // get the last buffered input
         let Some(buff) = self.on_deck.take() else {
@@ -1860,23 +2022,17 @@ impl CartManualVersionSupport for CartStreamManualV2 {
         while self.cart_bytes()? {}
         // flush the zstd encoder's internal buffers
         loop {
-            // make room for more flushed output
-            let old_len = self.segment_buf.len();
-            let space = self.segment_size.saturating_sub(old_len).max(256);
-            self.segment_buf.reserve(space);
-            unsafe { self.segment_buf.set_len(old_len + space) };
-            // flush compressed data from the encoder
+            // flush compressed data into the spare region at the write cursor
             let mut out_buf =
-                zstd::stream::raw::OutBuffer::around(&mut self.segment_buf[old_len..]);
+                zstd::stream::raw::OutBuffer::around(&mut self.segment_buf[self.segment_len..]);
             let remaining = self
                 .zstd
                 .finish(&mut out_buf, true)
                 .map_err(|e| Error::new(format!("zstd finish failed: {e}")))?;
-            // truncate to the actual bytes flushed
-            let written = out_buf.pos();
-            self.segment_buf.truncate(old_len + written);
+            // advance the write cursor by the bytes flushed
+            self.segment_len += out_buf.pos();
             // encrypt and flush if the segment is full
-            if self.segment_buf.len() >= self.segment_size {
+            if self.segment_len >= self.segment_size {
                 self.flush_segment()?;
             }
             if remaining == 0 {
@@ -1890,11 +2046,10 @@ impl CartManualVersionSupport for CartStreamManualV2 {
         if self.skip + footer::FOOTER_LEN > self.output.len() {
             self.output.resize(self.skip + footer::FOOTER_LEN, 0);
         }
-        // zero out the footer region
+        // get a reference to the footer region of the output buffer
         let mut footer_buf = &mut self.output[self.skip..self.skip + footer::FOOTER_LEN];
-        unsafe {
-            std::ptr::write_bytes(footer_buf.as_mut_ptr(), 0, footer_buf.len());
-        }
+        // zero out the footer region (may overlap previously carted data)
+        footer_buf.fill(0);
         // write the CaRT footer magic number
         footer_buf.write_all(footer::MAGIC_NUM)?;
         Ok(&self.output[..self.skip + footer::FOOTER_LEN])
@@ -1926,6 +2081,7 @@ impl<'a, T: ArrayLength<u8>> CartStreamManualBuilder<'a, T> {
     /// * `key`     - The 16-byte encryption key
     /// * `buf_len` - The size of the output data buffer to allocate
     pub fn new(key: &'a GenericArray<u8, T>, buf_len: usize) -> Self {
+        // start with no overrides; defaults are applied at build time
         Self {
             key,
             buf_len,
@@ -1971,18 +2127,23 @@ impl<'a, T: ArrayLength<u8>> CartStreamManualBuilder<'a, T> {
 
     /// Build a V1 manual cart stream (RC4 + zlib).
     pub fn build_v1(self) -> Result<CartStreamManual<CartStreamManualV1<T>>, Error> {
+        // use the configured zlib level or fall back to the default
         let compression = match self.compression_level {
             Some(level) => Compression::new(level as u32),
             None => Compression::default(),
         };
+        // build the V1 internal state and wrap it
         let internal = CartStreamManualV1::new(self.key, self.buf_len, compression)?;
         Ok(CartStreamManual { internal })
     }
 
     /// Build a V2 manual cart stream (AES-GCM + zstd). This is the default.
     pub fn build_v2(self) -> Result<CartStreamManual<CartStreamManualV2>, Error> {
+        // use the configured zstd level or fall back to the default
         let level = self.zstd_level.unwrap_or(3);
+        // use the configured segment size or fall back to the default
         let segment_size = self.segment_size.unwrap_or(DEFAULT_SEGMENT_SIZE) as usize;
+        // build the V2 internal state and wrap it
         let internal =
             CartStreamManualV2::new(self.key.as_slice(), self.buf_len, level, segment_size)?;
         Ok(CartStreamManual { internal })
@@ -1990,6 +2151,7 @@ impl<'a, T: ArrayLength<u8>> CartStreamManualBuilder<'a, T> {
 
     /// Build a manual cart stream using the default version (V2).
     pub fn build(self) -> Result<CartStreamManual<CartStreamManualV2>, Error> {
+        // V2 is the default version
         self.build_v2()
     }
 }
