@@ -1091,6 +1091,13 @@ struct UncartStreamV1 {
     decrypt_start: usize,
     /// End offset within the decrypted buffer for decompression
     decrypt_end: usize,
+    /// Whether the zlib stream has reached `StreamEnd`
+    ///
+    /// Once the deflate stream ends, the only remaining bytes are the CaRT
+    /// footer. Those must never be fed back into the decompressor: lenient zlib
+    /// builds (zlib-ng, `miniz_oxide`) ignore the trailing bytes, but strict
+    /// builds (such as the system zlib on macOS) reject them as corrupt data.
+    finished: bool,
 }
 
 impl UncartStreamV1 {
@@ -1110,6 +1117,7 @@ impl UncartStreamV1 {
             decrypted: vec![0; Self::DECRYPTED_BUF_SIZE],
             decrypt_start: 0,
             decrypt_end: 0,
+            finished: false,
         }
     }
 
@@ -1141,6 +1149,11 @@ impl UncartStreamV1 {
         let mut write_hole = false;
         'decrypt_and_decompress: loop {
             if *decompressed_remaining == 0 || local_remaining == 0 {
+                // the deflate stream has ended; stop before touching the trailing
+                // footer bytes so they are never fed back into the decompressor
+                if self.finished {
+                    break 'decrypt_and_decompress;
+                }
                 // need more decrypted data to decompress
                 if self.decrypt_start == self.decrypt_end {
                     // read and decrypt the next chunk from the input
@@ -1171,11 +1184,20 @@ impl UncartStreamV1 {
                 let bytes_consumed = (self.zlib.total_in() - old_total_in) as usize;
                 let bytes_written = (self.zlib.total_out() - old_total_out) as usize;
                 self.decrypt_start += bytes_consumed;
-                if status.is_err() {
-                    return Poll::Ready(Err(std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        "CaRT file cannot be decompressed because data is missing/corrupted",
-                    )));
+                // inspect the decompressor status, recording when the stream ends
+                match status {
+                    // the deflate stream is complete; mark it so we never feed the
+                    // trailing footer bytes back into the decompressor
+                    Ok(Status::StreamEnd) => self.finished = true,
+                    // more data is still expected, keep going
+                    Ok(_) => {}
+                    // zlib rejected the data as corrupt/incomplete
+                    Err(_) => {
+                        return Poll::Ready(Err(std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "CaRT file cannot be decompressed because data is missing/corrupted",
+                        )));
+                    }
                 }
                 // copy as much decompressed data as fits into the output buffer
                 let decompress_end = std::cmp::min(output.len() - returned, bytes_written);
@@ -2659,5 +2681,127 @@ mod tests {
         let mut output = Vec::new();
         uncart.read_to_end(&mut output).await.unwrap();
         assert_eq!(output, data);
+    }
+
+    /// A test reader that serves its input as a fixed list of chunks and records
+    /// whether a designated chunk is ever handed out.
+    ///
+    /// Used to prove that V1 uncarting stops once the deflate stream ends and
+    /// never reaches for the trailing footer chunk.
+    struct ChunkedReader {
+        /// The chunks to serve in order
+        chunks: Vec<Vec<u8>>,
+        /// The index of the chunk currently being served
+        idx: usize,
+        /// The read position within the current chunk
+        pos: usize,
+        /// The index of the footer chunk that must never be served
+        footer_chunk: usize,
+        /// Set to `true` if the footer chunk is ever requested
+        footer_served: std::rc::Rc<std::cell::Cell<bool>>,
+    }
+
+    impl AsyncRead for ChunkedReader {
+        /// Copy bytes from the current chunk into the caller's buffer
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let this = self.get_mut();
+            // copy from the current chunk if any remain
+            if this.idx < this.chunks.len() {
+                let cur = &this.chunks[this.idx][this.pos..];
+                let n = std::cmp::min(cur.len(), buf.remaining());
+                buf.put_slice(&cur[..n]);
+                this.pos += n;
+                // advance to the next chunk once this one is drained
+                if this.pos >= this.chunks[this.idx].len() {
+                    this.idx += 1;
+                    this.pos = 0;
+                }
+            }
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncBufRead for ChunkedReader {
+        /// Hand back the remaining bytes of the current chunk
+        fn poll_fill_buf(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<&[u8]>> {
+            let this = self.get_mut();
+            // an exhausted reader reports EOF with an empty slice
+            if this.idx >= this.chunks.len() {
+                return Poll::Ready(Ok(&[]));
+            }
+            // record if the footer chunk is ever requested
+            if this.idx == this.footer_chunk {
+                this.footer_served.set(true);
+            }
+            Poll::Ready(Ok(&this.chunks[this.idx][this.pos..]))
+        }
+
+        /// Advance past `amt` consumed bytes of the current chunk
+        fn consume(self: Pin<&mut Self>, amt: usize) {
+            let this = self.get_mut();
+            this.pos += amt;
+            // advance to the next chunk once this one is drained
+            if this.idx < this.chunks.len() && this.pos >= this.chunks[this.idx].len() {
+                this.idx += 1;
+                this.pos = 0;
+            }
+        }
+    }
+
+    /// Regression test for the macOS uncart failure: once the V1 deflate stream
+    /// reaches its end, the uncarter must not feed the trailing 28-byte footer
+    /// back into the decompressor. Lenient zlib builds (zlib-ng, `miniz_oxide`)
+    /// silently ignore those bytes, but the strict system zlib on macOS rejects
+    /// them with "data is missing/corrupted".
+    ///
+    /// We serve the carted `[header + compressed]` body and the footer as two
+    /// separate chunks. With the fix the footer chunk is never requested; without
+    /// it the uncarter reaches for the footer to hand it to zlib.
+    #[tokio::test]
+    async fn v1_uncart_does_not_consume_footer() {
+        let key = make_key();
+        // incompressible pseudo-random data so the compressed stream is non-trivial
+        let mut state: u32 = 0x0BAD_F00D;
+        let data: Vec<u8> = (0..256 * 1024)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 24) as u8
+            })
+            .collect();
+        // cart the data as V1
+        let cursor = Cursor::new(data.as_slice());
+        let stream = CartStreamBuilder::new(&key, cursor).build_v1().unwrap();
+        let mut carted = Vec::new();
+        BufReader::new(stream)
+            .read_to_end(&mut carted)
+            .await
+            .unwrap();
+        // split off the trailing footer so it lands in its own chunk
+        let split = carted.len() - footer::FOOTER_LEN;
+        let body = carted[..split].to_vec();
+        let footer = carted[split..].to_vec();
+        // build a reader that flags if the footer chunk is ever requested
+        let footer_served = std::rc::Rc::new(std::cell::Cell::new(false));
+        let reader = ChunkedReader {
+            chunks: vec![body, footer],
+            idx: 0,
+            pos: 0,
+            footer_chunk: 1,
+            footer_served: footer_served.clone(),
+        };
+        // uncart and confirm the data round-trips
+        let mut uncart = UncartStream::new(reader);
+        let mut output = Vec::new();
+        uncart.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data, "uncarted data must match the original");
+        // the footer must never be pulled in once the stream has ended
+        assert!(
+            !footer_served.get(),
+            "footer chunk must not be read/decompressed after stream end"
+        );
     }
 }
