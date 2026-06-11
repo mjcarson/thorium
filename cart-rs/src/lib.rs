@@ -258,6 +258,8 @@ pub use errors::Error;
 pub use flate2::Compression;
 pub use libs::{footer, footer::Footer, header, header::Header};
 
+use libs::diag::UncartDiag;
+
 /// Recommended buffer capacity for `BufReader`/`BufWriter` wrapping cart I/O.
 ///
 /// Matches the V2 segment size and internal decryption buffer, so each
@@ -1098,6 +1100,8 @@ struct UncartStreamV1 {
     /// builds (zlib-ng, `miniz_oxide`) ignore the trailing bytes, but strict
     /// builds (such as the system zlib on macOS) reject them as corrupt data.
     finished: bool,
+    /// Streaming diagnostics enabled via the `CART_DIAG` environment variable
+    diag: UncartDiag,
 }
 
 impl UncartStreamV1 {
@@ -1118,6 +1122,8 @@ impl UncartStreamV1 {
             decrypt_start: 0,
             decrypt_end: 0,
             finished: false,
+            // build the opt-in diagnostics state (logs an init line when enabled)
+            diag: UncartDiag::new(Self::DECRYPTED_BUF_SIZE),
         }
     }
 
@@ -1159,6 +1165,9 @@ impl UncartStreamV1 {
                     // read and decrypt the next chunk from the input
                     let raw = ready!(cart.as_mut().poll_fill_buf(cx))?;
                     if raw.is_empty() {
+                        // report end-of-input diagnostics once when enabled
+                        self.diag
+                            .eof(self.zlib.total_in(), self.zlib.total_out(), self.finished);
                         // input exhausted: break so the trailing buf.advance(returned)
                         // still delivers any bytes copied during this poll. A later
                         // poll with returned == 0 then signals true EOF to the caller.
@@ -1169,6 +1178,9 @@ impl UncartStreamV1 {
                     let decrypt_output = &mut self.decrypted[..decompressable];
                     decrypt_output.copy_from_slice(&raw[..decompressable]);
                     self.rc4.apply_keystream(decrypt_output);
+                    // track this decrypted chunk in the diagnostics when enabled
+                    self.diag.note_fill(decompressable);
+                    self.diag.update_in(decrypt_output);
                     cart.as_mut().consume(decompressable);
                     self.decrypt_end = decompressable;
                     self.decrypt_start = 0;
@@ -1184,18 +1196,39 @@ impl UncartStreamV1 {
                 let bytes_consumed = (self.zlib.total_in() - old_total_in) as usize;
                 let bytes_written = (self.zlib.total_out() - old_total_out) as usize;
                 self.decrypt_start += bytes_consumed;
+                // track the inflated bytes in the diagnostics when enabled
+                self.diag.update_out(&decompressed[..bytes_written]);
                 // inspect the decompressor status, recording when the stream ends
                 match status {
                     // the deflate stream is complete; mark it so we never feed the
                     // trailing footer bytes back into the decompressor
-                    Ok(Status::StreamEnd) => self.finished = true,
+                    Ok(Status::StreamEnd) => {
+                        self.finished = true;
+                        // report the end-of-stream diagnostic summary when enabled
+                        self.diag.finish(self.zlib.total_in(), self.zlib.total_out());
+                    }
                     // more data is still expected, keep going
                     Ok(_) => {}
                     // zlib rejected the data as corrupt/incomplete
-                    Err(_) => {
+                    Err(err) => {
+                        // dump the full diagnostic state for this failure when enabled
+                        self.diag.fail(
+                            &err,
+                            self.zlib.total_in(),
+                            self.zlib.total_out(),
+                            &dec_slice[bytes_consumed.min(dec_slice.len())..],
+                            self.decrypt_start,
+                            self.decrypt_end,
+                        );
+                        // surface the backend error and stream position so failures
+                        // are actionable even without diagnostics enabled
                         return Poll::Ready(Err(std::io::Error::new(
                             ErrorKind::InvalidData,
-                            "CaRT file cannot be decompressed because data is missing/corrupted",
+                            format!(
+                                "CaRT file cannot be decompressed because data is missing/corrupted: {err:?} (zlib total_in={}, total_out={})",
+                                self.zlib.total_in(),
+                                self.zlib.total_out()
+                            ),
                         )));
                     }
                 }
