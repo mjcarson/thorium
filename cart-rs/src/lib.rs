@@ -1146,7 +1146,11 @@ impl UncartStreamV1 {
                     // read and decrypt the next chunk from the input
                     let raw = ready!(cart.as_mut().poll_fill_buf(cx))?;
                     if raw.is_empty() {
-                        return Poll::Ready(Ok(()));
+                        // input exhausted: break so the trailing buf.advance(returned)
+                        // still delivers any bytes copied during this poll. A later
+                        // poll with returned == 0 then signals true EOF to the caller.
+                        // (returning here directly could end the stream early).
+                        break 'decrypt_and_decompress;
                     }
                     let decompressable = std::cmp::min(raw.len(), Self::DECRYPTED_BUF_SIZE);
                     let decrypt_output = &mut self.decrypted[..decompressable];
