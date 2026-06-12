@@ -1100,6 +1100,19 @@ struct UncartStreamV1 {
     /// builds (zlib-ng, `miniz_oxide`) ignore the trailing bytes, but strict
     /// builds (such as the system zlib on macOS) reject them as corrupt data.
     finished: bool,
+    /// The newest decrypted bytes withheld from the decompressor
+    ///
+    /// The final [`footer::FOOTER_LEN`] bytes of a V1 cart are the plaintext
+    /// CaRT footer rather than deflate data, but a streaming reader only learns
+    /// which bytes those are at EOF. We therefore always withhold the newest
+    /// footer-sized suffix until later data proves it is stream data. This
+    /// guarantees the decompressor never sees the footer even when a backend
+    /// (such as the hardware accelerated system zlib on macOS) consumes the
+    /// deflate trailer but defers reporting `StreamEnd` until the next call,
+    /// leaving `finished` unset at the moment the footer would have been fed.
+    carry: [u8; footer::FOOTER_LEN],
+    /// How many bytes of `carry` are currently withheld
+    carry_len: usize,
     /// Streaming diagnostics enabled via the `CART_DIAG` environment variable
     diag: UncartDiag,
 }
@@ -1122,8 +1135,72 @@ impl UncartStreamV1 {
             decrypt_start: 0,
             decrypt_end: 0,
             finished: false,
+            // nothing is withheld until the first chunk is decrypted
+            carry: [0; footer::FOOTER_LEN],
+            carry_len: 0,
             // build the opt-in diagnostics state (logs an init line when enabled)
             diag: UncartDiag::new(Self::DECRYPTED_BUF_SIZE),
+        }
+    }
+
+    /// Give the decompressor one final empty flush once the input is exhausted.
+    ///
+    /// Some zlib builds (notably the hardware accelerated system zlib on macOS)
+    /// consume the deflate trailer but defer reporting `StreamEnd` until the
+    /// next inflate call. Without this final flush those builds never get to
+    /// run their deferred data check, and feeding them anything else (like the
+    /// trailing CaRT footer) makes that check fail with `incorrect data check`.
+    /// Flushing with empty input lets the deferred check run against the
+    /// trailer the backend already consumed.
+    ///
+    /// Returns the number of bytes flushed into `decompressed` (expected to be
+    /// 0 for every known backend).
+    ///
+    /// # Arguments
+    ///
+    /// * `decompressed` - Shared decompression output buffer
+    fn finalize_deferred(&mut self, decompressed: &mut [u8]) -> Result<usize, std::io::Error> {
+        // snapshot the totals so we can report any final output
+        let old_total_out = self.zlib.total_out();
+        // hand the decompressor one final empty finish flush
+        let status = self.zlib.decompress(&[], decompressed, FlushDecompress::Finish);
+        // calculate any output the final flush produced
+        let flushed = (self.zlib.total_out() - old_total_out) as usize;
+        // track the flushed bytes in the diagnostics when enabled
+        self.diag.update_out(&decompressed[..flushed]);
+        // inspect the final status
+        match status {
+            // the deferred data check passed and the stream is complete
+            Ok(Status::StreamEnd) => {
+                self.finished = true;
+                // report the end-of-stream diagnostic summary when enabled
+                self.diag.finish(self.zlib.total_in(), self.zlib.total_out());
+                Ok(flushed)
+            }
+            // the stream is genuinely incomplete; fall through to the EOF path
+            Ok(_) => Ok(flushed),
+            // the deferred data check failed
+            Err(err) => {
+                // dump the full diagnostic state for this failure when enabled
+                self.diag.fail(
+                    &err,
+                    self.zlib.total_in(),
+                    self.zlib.total_out(),
+                    &[],
+                    self.decrypt_start,
+                    self.decrypt_end,
+                );
+                // surface the backend error and stream position so failures
+                // are actionable even without diagnostics enabled
+                Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "CaRT file cannot be decompressed because data is missing/corrupted: {err:?} (zlib total_in={}, total_out={})",
+                        self.zlib.total_in(),
+                        self.zlib.total_out()
+                    ),
+                ))
+            }
         }
     }
 
@@ -1165,6 +1242,18 @@ impl UncartStreamV1 {
                     // read and decrypt the next chunk from the input
                     let raw = ready!(cart.as_mut().poll_fill_buf(cx))?;
                     if raw.is_empty() {
+                        // the withheld bytes are the CaRT footer and are dropped;
+                        // give backends that defer their end-of-stream report one
+                        // final empty flush so the data check is still validated
+                        if !self.finished {
+                            let flushed = self.finalize_deferred(decompressed)?;
+                            if flushed > 0 {
+                                // stage any final flushed bytes; the next poll's
+                                // drain path will deliver them to the caller
+                                local_remaining = flushed;
+                                local_consumed = 0;
+                            }
+                        }
                         // report end-of-input diagnostics once when enabled
                         self.diag
                             .eof(self.zlib.total_in(), self.zlib.total_out(), self.finished);
@@ -1174,15 +1263,37 @@ impl UncartStreamV1 {
                         // (returning here directly could end the stream early).
                         break 'decrypt_and_decompress;
                     }
-                    let decompressable = std::cmp::min(raw.len(), Self::DECRYPTED_BUF_SIZE);
-                    let decrypt_output = &mut self.decrypted[..decompressable];
+                    // leave room in the decrypted buffer for the withheld prefix
+                    let decompressable =
+                        std::cmp::min(raw.len(), Self::DECRYPTED_BUF_SIZE - footer::FOOTER_LEN);
+                    // lay any withheld bytes down ahead of the new chunk
+                    let carried = self.carry_len;
+                    self.decrypted[..carried].copy_from_slice(&self.carry[..carried]);
+                    // decrypt the new chunk into place after the withheld bytes
+                    let decrypt_output = &mut self.decrypted[carried..carried + decompressable];
                     decrypt_output.copy_from_slice(&raw[..decompressable]);
                     self.rc4.apply_keystream(decrypt_output);
                     // track this decrypted chunk in the diagnostics when enabled
                     self.diag.note_fill(decompressable);
                     self.diag.update_in(decrypt_output);
                     cart.as_mut().consume(decompressable);
-                    self.decrypt_end = decompressable;
+                    // withhold the newest footer-sized suffix from the decompressor
+                    // since it may be the CaRT footer rather than deflate data
+                    let total = carried + decompressable;
+                    if total <= footer::FOOTER_LEN {
+                        // everything decrypted so far could still be the footer
+                        self.carry[..total].copy_from_slice(&self.decrypted[..total]);
+                        self.carry_len = total;
+                        // nothing is feedable yet - read more input
+                        self.decrypt_end = 0;
+                        self.decrypt_start = 0;
+                        continue 'decrypt_and_decompress;
+                    }
+                    // everything except the newest footer-sized suffix is feedable
+                    let feed_end = total - footer::FOOTER_LEN;
+                    self.carry.copy_from_slice(&self.decrypted[feed_end..total]);
+                    self.carry_len = footer::FOOTER_LEN;
+                    self.decrypt_end = feed_end;
                     self.decrypt_start = 0;
                     *decompressed_consumed = 0;
                 }
@@ -2716,11 +2827,10 @@ mod tests {
         assert_eq!(output, data);
     }
 
-    /// A test reader that serves its input as a fixed list of chunks and records
-    /// whether a designated chunk is ever handed out.
+    /// A test reader that serves its input as a fixed list of chunks.
     ///
-    /// Used to prove that V1 uncarting stops once the deflate stream ends and
-    /// never reaches for the trailing footer chunk.
+    /// Used to prove that V1 uncarting handles the trailing footer correctly
+    /// even when it arrives in its own chunk after the deflate stream ends.
     struct ChunkedReader {
         /// The chunks to serve in order
         chunks: Vec<Vec<u8>>,
@@ -2728,10 +2838,6 @@ mod tests {
         idx: usize,
         /// The read position within the current chunk
         pos: usize,
-        /// The index of the footer chunk that must never be served
-        footer_chunk: usize,
-        /// Set to `true` if the footer chunk is ever requested
-        footer_served: std::rc::Rc<std::cell::Cell<bool>>,
     }
 
     impl AsyncRead for ChunkedReader {
@@ -2766,10 +2872,6 @@ mod tests {
             if this.idx >= this.chunks.len() {
                 return Poll::Ready(Ok(&[]));
             }
-            // record if the footer chunk is ever requested
-            if this.idx == this.footer_chunk {
-                this.footer_served.set(true);
-            }
             Poll::Ready(Ok(&this.chunks[this.idx][this.pos..]))
         }
 
@@ -2785,26 +2887,38 @@ mod tests {
         }
     }
 
-    /// Regression test for the macOS uncart failure: once the V1 deflate stream
-    /// reaches its end, the uncarter must not feed the trailing 28-byte footer
-    /// back into the decompressor. Lenient zlib builds (zlib-ng, `miniz_oxide`)
-    /// silently ignore those bytes, but the strict system zlib on macOS rejects
-    /// them with "data is missing/corrupted".
+    /// Generate incompressible pseudo-random test data via a simple LCG
     ///
-    /// We serve the carted `[header + compressed]` body and the footer as two
-    /// separate chunks. With the fix the footer chunk is never requested; without
-    /// it the uncarter reaches for the footer to hand it to zlib.
-    #[tokio::test]
-    async fn v1_uncart_does_not_consume_footer() {
-        let key = make_key();
-        // incompressible pseudo-random data so the compressed stream is non-trivial
-        let mut state: u32 = 0x0BAD_F00D;
-        let data: Vec<u8> = (0..256 * 1024)
+    /// # Arguments
+    ///
+    /// * `seed` - The LCG seed
+    /// * `len`  - The number of bytes to generate
+    fn lcg_data(seed: u32, len: usize) -> Vec<u8> {
+        // run a simple LCG so the compressed stream stays non-trivial
+        let mut state = seed;
+        (0..len)
             .map(|_| {
                 state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
                 (state >> 24) as u8
             })
-            .collect();
+            .collect()
+    }
+
+    /// Regression test for the macOS uncart failure: the trailing 28-byte CaRT
+    /// footer must never be handed to the zlib decompressor. Some backends
+    /// (notably the hardware accelerated system zlib on macOS) consume the
+    /// deflate trailer but defer reporting `StreamEnd` until the next inflate
+    /// call, so the uncarter cannot rely on `StreamEnd` arriving before the
+    /// footer would be fed; it must withhold the newest footer-sized suffix
+    /// until EOF proves what it is.
+    ///
+    /// We serve the carted `[header + compressed]` body and the footer as two
+    /// separate chunks and confirm the data still round-trips exactly.
+    #[tokio::test]
+    async fn v1_uncart_footer_in_separate_chunk() {
+        let key = make_key();
+        // incompressible pseudo-random data so the compressed stream is non-trivial
+        let data = lcg_data(0x0BAD_F00D, 256 * 1024);
         // cart the data as V1
         let cursor = Cursor::new(data.as_slice());
         let stream = CartStreamBuilder::new(&key, cursor).build_v1().unwrap();
@@ -2817,24 +2931,44 @@ mod tests {
         let split = carted.len() - footer::FOOTER_LEN;
         let body = carted[..split].to_vec();
         let footer = carted[split..].to_vec();
-        // build a reader that flags if the footer chunk is ever requested
-        let footer_served = std::rc::Rc::new(std::cell::Cell::new(false));
+        // build a reader that serves the body and footer as separate chunks
         let reader = ChunkedReader {
             chunks: vec![body, footer],
             idx: 0,
             pos: 0,
-            footer_chunk: 1,
-            footer_served: footer_served.clone(),
         };
         // uncart and confirm the data round-trips
         let mut uncart = UncartStream::new(reader);
         let mut output = Vec::new();
         uncart.read_to_end(&mut output).await.unwrap();
         assert_eq!(output, data, "uncarted data must match the original");
-        // the footer must never be pulled in once the stream has ended
-        assert!(
-            !footer_served.get(),
-            "footer chunk must not be read/decompressed after stream end"
-        );
+    }
+
+    /// The bytes after the deflate trailer must never influence uncarting: the
+    /// withheld footer-sized suffix is dropped at EOF without ever reaching the
+    /// decompressor, so even a wholly corrupt footer region must not break the
+    /// round trip or poison a backend's deferred data check.
+    #[tokio::test]
+    async fn v1_uncart_ignores_garbage_footer() {
+        let key = make_key();
+        // incompressible pseudo-random data so the compressed stream is non-trivial
+        let data = lcg_data(0xDEAD_BEEF, 256 * 1024);
+        // cart the data as V1
+        let cursor = Cursor::new(data.as_slice());
+        let stream = CartStreamBuilder::new(&key, cursor).build_v1().unwrap();
+        let mut carted = Vec::new();
+        BufReader::new(stream)
+            .read_to_end(&mut carted)
+            .await
+            .unwrap();
+        // overwrite the entire footer with garbage
+        let split = carted.len() - footer::FOOTER_LEN;
+        carted[split..].fill(0xFF);
+        // uncart and confirm the garbage footer never affected the stream
+        let cursor = Cursor::new(&carted);
+        let mut uncart = UncartStream::new(cursor);
+        let mut output = Vec::new();
+        uncart.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data, "uncarted data must match the original");
     }
 }
