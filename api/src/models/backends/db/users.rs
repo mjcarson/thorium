@@ -64,6 +64,11 @@ pub fn build(
         pipe.cmd("hsetnx").arg(&keys.data).arg("verification_token")
             .arg(verification_token);
     }
+    // if a profile picture has been set then set that in redis
+    if let Some(profile_picture) = &cast.profile_picture {
+        pipe.cmd("hsetnx").arg(&keys.data).arg("profile_picture")
+            .arg(profile_picture);
+    }
     Ok(())
 }
 
@@ -118,6 +123,7 @@ pub(super) fn cast(
         verified: helpers::extract_bool_default(&mut raw, "verified", true)?,
         verification_token: helpers::extract_opt(&mut raw, "verification_token"),
         verification_sent: deserialize_opt!(&mut raw, "verification_sent"),
+        profile_picture: helpers::extract_opt(&mut raw, "profile_picture"),
     };
     Ok(user)
 }
@@ -372,6 +378,12 @@ pub async fn save(user: &User, shared: &Shared) -> Result<(), ApiError> {
     // save this users unix info if it is set
     if let Some(unix) = &user.unix {
         pipe.cmd("hset").arg(&data_key).arg("unix").arg(serialize!(unix));
+    }
+    // save or clear this users profile picture
+    if let Some(profile_picture) = &user.profile_picture {
+        pipe.cmd("hset").arg(&data_key).arg("profile_picture").arg(profile_picture);
+    } else {
+        pipe.cmd("hdel").arg(&data_key).arg("profile_picture");
     }
     // build the key to the analyst set
     let analyst_key = UserKeys::analysts(shared);

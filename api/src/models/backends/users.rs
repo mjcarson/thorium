@@ -4,7 +4,7 @@
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::{Algorithm, Argon2, Version};
-use axum::extract::{FromRef, FromRequestParts};
+use axum::extract::{FromRef, FromRequestParts, Multipart};
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
@@ -14,11 +14,13 @@ use headers::{Header, HeaderName, HeaderValue};
 use ldap3::{Scope, SearchEntry};
 use rand::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::str;
 use tracing::{Level, Span, event, instrument};
 
 use super::db;
 use crate::conf::Ldap;
+use crate::models::backends::GraphicSupport;
 use crate::models::{
     AiEndpoint, AiEndpointUpdate, AiSettings, AiSettingsUpdate, AuthResponse, Group, ImageScaler,
     Key, ScrubbedUser, UnixInfo, User, UserCreate, UserRole, UserSettings, UserSettingsUpdate,
@@ -26,7 +28,7 @@ use crate::models::{
 };
 use crate::utils::shared::EmailClient;
 use crate::utils::{ApiError, AppState, Shared, bounder};
-use crate::{bad, conflict, is_admin, ldap, unauthorized, unavailable, update};
+use crate::{bad, conflict, internal_err, is_admin, ldap, unauthorized, unavailable, update};
 
 /// The header name for our secret key
 static SECRET_KEY_HEADER: HeaderName = HeaderName::from_static("secret-key");
@@ -624,6 +626,7 @@ impl User {
             verified: false,
             verification_token: None,
             verification_sent: None,
+            profile_picture: None,
         };
         // send a verification email if needed
         match (req.skip_verification, &shared.email) {
@@ -733,6 +736,94 @@ impl User {
     pub async fn force_get(username: &str, shared: &Shared) -> Result<User, ApiError> {
         // get user
         db::users::get(username, shared).await
+    }
+
+    /// A helper for uploading this user's profile picture from a multipart form
+    ///
+    /// This streams the image to S3, saves the new path to the backend, and
+    /// deletes any previous picture that was replaced.
+    ///
+    /// # Arguments
+    ///
+    /// * `form` - The multipart form containing the profile picture
+    /// * `s3_path` - The s3 path to set if a picture is uploaded
+    /// * `shared` - Shared Thorium objects
+    #[instrument(name = "User::set_profile_picture_helper", skip_all, err(Debug))]
+    async fn set_profile_picture_helper(
+        &mut self,
+        mut form: Multipart,
+        s3_path: &mut Option<String>,
+        shared: &Shared,
+    ) -> Result<(), ApiError> {
+        // track any old picture we need to delete after replacing it
+        let mut old_picture = None;
+        // crawl the multipart form
+        while let Some(field) = form.next_field().await? {
+            // only accept the image field
+            match field.name() {
+                Some("image") => {
+                    // build the base path for this user's profile picture
+                    let base_path = Self::build_graphic_base_path_from_self(self);
+                    // upload the graphic to S3
+                    let path = Self::upload_graphic(base_path, field, None, shared).await?;
+                    // set our new picture, tracking any old picture we replaced
+                    if let Some(old_path) = self.profile_picture.replace(path.clone()) {
+                        // only delete the old picture if its path differs from the new one
+                        if old_path != path {
+                            old_picture = Some(old_path);
+                        }
+                    }
+                    // keep track of this path so we can clean it up if we fail to save
+                    s3_path.replace(path);
+                }
+                // reject any other fields
+                _ => return bad!("Profile picture upload must contain an 'image' field".to_owned()),
+            }
+        }
+        // make sure we actually got a picture
+        if s3_path.is_none() {
+            return bad!("No profile picture image was provided".to_owned());
+        }
+        // save the updated user to the backend
+        db::users::save(self, shared).await?;
+        // delete any old picture that is no longer needed
+        if let Some(old_path) = old_picture {
+            Self::delete_graphic(&old_path, shared).await?;
+        }
+        Ok(())
+    }
+
+    /// Upload or replace this user's profile picture
+    ///
+    /// # Arguments
+    ///
+    /// * `form` - The multipart form containing the profile picture
+    /// * `shared` - Shared Thorium objects
+    #[instrument(name = "User::set_profile_picture", skip_all, fields(user = self.username), err(Debug))]
+    pub async fn set_profile_picture(
+        mut self,
+        form: Multipart,
+        shared: &Shared,
+    ) -> Result<(), ApiError> {
+        // track any newly uploaded picture path so we can delete it on error
+        let mut s3_path: Option<String> = None;
+        // try to upload and save the profile picture
+        match self.set_profile_picture_helper(form, &mut s3_path, shared).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // delete from S3 if our path was set to avoid a dangling picture
+                if let Some(s3_path) = &s3_path {
+                    // we have the path in S3, so just delete it with the client directly
+                    if let Err(s3_error) = Self::delete_graphic(s3_path, shared).await {
+                        return internal_err!(format!(
+                            "Error cleaning up profile picture after error: {s3_error}. Original error: {error}"
+                        ));
+                    }
+                }
+                // propogate the error
+                Err(error)
+            }
+        }
     }
 
     /// Lists usernames
@@ -1211,5 +1302,23 @@ impl From<User> for AuthResponse {
             token: user.token,
             expires: user.token_expiration,
         }
+    }
+}
+
+// Add graphic support for users
+impl GraphicSupport for User {
+    /// A unique, immutable key to use to reference the implementing object
+    type GraphicKey<'a> = &'a str;
+
+    /// Build the base path for this graphic
+    fn build_graphic_base_path<'a>(key: Self::GraphicKey<'a>) -> PathBuf {
+        // users use their username namespaced under users/
+        PathBuf::from(format!("users/{key}"))
+    }
+
+    /// Build the base path for this graphic
+    fn build_graphic_base_path_from_self(&self) -> PathBuf {
+        // call our base path builder
+        Self::build_graphic_base_path(&self.username)
     }
 }

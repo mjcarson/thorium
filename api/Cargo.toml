@@ -161,7 +161,7 @@ bytecheck = { version = "=0.6.11", optional = true }
 
 # client dependencies
 reqwest = { workspace = true, optional = true }
-tokio-util = { version = "0.7", default-features = false, features = ["codec", "io", "compat"], optional = true }
+tokio-util = { version = "0.7", default-features = false, features = ["codec", "io", "compat", "time"], optional = true }
 git2 = { version = "0.20", optional = true }
 gix = { version = "0.72", optional = true }
 gix-date = { version = "0.10", optional = true }

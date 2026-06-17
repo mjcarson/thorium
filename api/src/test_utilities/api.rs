@@ -274,6 +274,7 @@ async fn init_s3_buckets(s3_conf: &S3, conf: &Conf) -> Result<(), Error> {
         &conf.thorium.attachments.bucket,
     )
     .await?;
+    init_bucket(&s3_client, lifecycle.clone(), &conf.thorium.graphics.bucket).await?;
     Ok(())
 }
 

@@ -1,19 +1,23 @@
 use axum::Router;
-use axum::extract::{Json, Path, State};
+use axum::extract::{Json, Multipart, Path, State};
 use axum::http::StatusCode;
-use axum::response::Redirect;
+use axum::response::{IntoResponse, Redirect};
 use axum::routing::{delete, get, post};
 use axum_extra::TypedHeader;
+use axum_extra::body::AsyncReadBody;
 use tracing::instrument;
 use utoipa::OpenApi;
 
+use super::shared::graphics;
 use super::OpenApiSecurity;
 
 // our imports
+use crate::models::backends::GraphicSupport;
 use crate::models::{
     AiEndpoint, AiEndpointUpdate, AiSettings, AiSettingsUpdate, AuthResponse, Key, ScrubbedUser,
     Theme, UnixInfo, User, UserCreate, UserRole, UserSettings, UserSettingsUpdate, UserUpdate,
 };
+use crate::not_found;
 use crate::utils::{ApiError, AppState};
 use crate::{is_admin, unauthorized, unavailable};
 
@@ -461,10 +465,136 @@ async fn sync_ldap(user: User, State(state): State<AppState>) -> Result<StatusCo
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Uploads or replaces the authenticated user's own profile picture
+///
+/// # Arguments
+///
+/// * `user` - The authenticated user whose profile picture to set
+/// * `state` - Shared Thorium objects
+/// * `form` - The multipart form containing the profile picture
+#[utoipa::path(
+    post,
+    path = "/api/users/profile/picture",
+    responses(
+        (status = 204, description = "Profile picture uploaded"),
+        (status = 400, description = "The request did not contain a valid image"),
+        (status = 401, description = "This user is not authorized to access this route"),
+    ),
+    security(
+        ("basic" = []),
+    )
+)]
+#[instrument(
+    name = "routes::users::upload_profile_picture",
+    skip_all,
+    fields(user = user.username),
+    err(Debug)
+)]
+#[axum_macros::debug_handler]
+async fn upload_profile_picture(
+    user: User,
+    State(state): State<AppState>,
+    form: Multipart,
+) -> Result<StatusCode, ApiError> {
+    // upload and save the profile picture
+    user.set_profile_picture(form, &state.shared).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Gets a user's profile picture
+///
+/// # Arguments
+///
+/// * `user` - The authenticated user making the request
+/// * `username` - The username of the user whose profile picture to retrieve
+/// * `state` - Shared Thorium objects
+#[utoipa::path(
+    get,
+    path = "/api/users/profile/picture/:username",
+    params(
+        ("username" = String, Path, description = "The username of the user whose profile picture to retrieve"),
+    ),
+    responses(
+        (status = 200, description = "The profile picture was successfully retrieved"),
+        (status = 401, description = "This user is not authorized to access this route"),
+        (status = 404, description = "The user does not exist or the user does not have a profile picture"),
+    ),
+    security(
+        ("basic" = []),
+    )
+)]
+#[instrument(
+    name = "routes::users::get_profile_picture",
+    skip(user, state),
+    fields(user = user.username),
+    err(Debug)
+)]
+async fn get_profile_picture(
+    user: User,
+    Path(username): Path<String>,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    // get the target user
+    let target = User::force_get(&username, &state.shared).await?;
+    // check if this user has a profile picture
+    match &target.profile_picture {
+        Some(picture_path) => {
+            // download the profile picture from S3
+            let get_object = target.download_graphic(picture_path, &state.shared).await?;
+            // get headers for this image
+            let headers = graphics::get_headers(&get_object, picture_path);
+            // convert the output body to a streamable body
+            let body = AsyncReadBody::new(get_object.body.into_async_read());
+            // stream our body with its headers back
+            Ok((headers, body))
+        }
+        None => not_found!(format!("User '{username}' has no profile picture")),
+    }
+}
+
+/// Deletes the authenticated user's own profile picture
+///
+/// # Arguments
+///
+/// * `user` - The authenticated user whose profile picture to delete
+/// * `state` - Shared Thorium objects
+#[utoipa::path(
+    delete,
+    path = "/api/users/profile/picture",
+    responses(
+        (status = 204, description = "Profile picture deleted"),
+        (status = 401, description = "This user is not authorized to access this route"),
+        (status = 404, description = "This user does not have a profile picture"),
+    ),
+    security(
+        ("basic" = []),
+    )
+)]
+#[instrument(name = "routes::users::delete_profile_picture", skip_all, err(Debug))]
+async fn delete_profile_picture(
+    mut user: User,
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiError> {
+    // check if the user has a profile picture to delete
+    match user.profile_picture.take() {
+        Some(picture_path) => {
+            // delete the profile picture from S3
+            User::delete_graphic(&picture_path, &state.shared).await?;
+            // save the updated user to persist the removal
+            crate::models::backends::db::users::save(&user, &state.shared).await?;
+            Ok(StatusCode::NO_CONTENT)
+        }
+        None => not_found!(format!(
+            "User '{}' has no profile picture",
+            user.username
+        )),
+    }
+}
+
 /// The struct containing our openapi docs
 #[derive(OpenApi)]
 #[openapi(
-    paths(list, create, update, resend_email_verification, verify_email, list_details, auth, get_user, update_user, info, logout, logout_user, delete_user, sync_ldap),
+    paths(list, create, update, resend_email_verification, verify_email, list_details, auth, get_user, update_user, info, logout, logout_user, delete_user, sync_ldap, upload_profile_picture, get_profile_picture, delete_profile_picture),
     components(schemas(AuthResponse, ScrubbedUser, Theme, UnixInfo, User, UserCreate, UserRole, UserSettings, UserSettingsUpdate, UserUpdate, AiSettings, AiSettingsUpdate, AiEndpoint, AiEndpointUpdate)),
     modifiers(&OpenApiSecurity),
 )]
@@ -500,4 +630,12 @@ pub fn mount(router: Router<AppState>) -> Router<AppState> {
         .route("/users/logout/{target}", get(logout_user))
         .route("/users/delete/{target}", delete(delete_user))
         .route("/users/sync/ldap", post(sync_ldap))
+        .route(
+            "/users/profile/picture/{username}",
+            get(get_profile_picture),
+        )
+        .route(
+            "/users/profile/picture",
+            post(upload_profile_picture).delete(delete_profile_picture),
+        )
 }

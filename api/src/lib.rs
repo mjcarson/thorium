@@ -114,6 +114,7 @@ async fn initial_settings_consistency_scan(
         verified: bool::default(),
         verification_token: None,
         verification_sent: None,
+        profile_picture: None,
     };
     // do a scan for consistency according to current settings
     settings.consistency_scan(&fake_admin, &shared).await?;

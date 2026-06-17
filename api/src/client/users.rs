@@ -1,10 +1,11 @@
 use base64::Engine as _;
+use std::path::Path;
 
 use super::{ClientSettings, Error, helpers};
 use crate::models::{
     AiSettings, AiSettingsUpdate, AuthResponse, ScrubbedUser, UserCreate, UserUpdate,
 };
-use crate::{send, send_build};
+use crate::{send, send_build, send_bytes};
 
 // import our static runtime if we need a blocking client
 #[cfg(feature = "sync")]
@@ -419,6 +420,145 @@ impl Users {
     pub async fn delete(&self, user: &str) -> Result<reqwest::Response, Error> {
         // build url for logging a user out
         let url = format!("{}/api/users/delete/{}", self.host, user);
+        // build request
+        let req = self
+            .client
+            .delete(&url)
+            .header("authorization", &self.token);
+        // send request
+        send!(self.client, req)
+    }
+
+    /// Uploads or replaces our profile picture in Thorium
+    ///
+    /// The image type is determined from the file's extension and must be one
+    /// of BMP, GIF, JPEG, PNG, or SVG.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to the image file to upload
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::Thorium;
+    /// # use thorium::Error;
+    ///
+    /// # async fn exec() -> Result<(), Error> {
+    /// // create Thorium client
+    /// let thorium = Thorium::build("http://127.0.0.1").token("<token>").build().await?;
+    /// // upload our profile picture
+    /// thorium.users.upload_profile_picture("picture.png").await?;
+    /// # // allow test code to be compiled but don't unwrap as no API instance would be up
+    /// # Ok(())
+    /// # }
+    /// # tokio_test::block_on(async {
+    /// #    exec().await
+    /// # });
+    /// ```
+    pub async fn upload_profile_picture<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<reqwest::Response, Error> {
+        // get a reference to our path
+        let path = path.as_ref();
+        // determine the image content type from the file extension
+        let mime = match path.extension().and_then(|ext| ext.to_str()) {
+            Some("bmp") => "image/bmp",
+            Some("gif") => "image/gif",
+            Some("jpeg" | "jpg") => "image/jpeg",
+            Some("png") => "image/png",
+            Some("svg") => "image/svg+xml",
+            // we don't support any other image types
+            _ => {
+                return Err(Error::new(
+                    "Profile picture must be a BMP, GIF, JPEG, PNG, or SVG".to_owned(),
+                ));
+            }
+        };
+        // read the image bytes from disk
+        let buff = tokio::fs::read(path).await?;
+        // get the file name to send with the image
+        let file_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "image".to_owned());
+        // build the multipart part containing our image with the correct content type
+        let part = reqwest::multipart::Part::bytes(buff)
+            .file_name(file_name)
+            .mime_str(mime)?;
+        // build the form with our image field
+        let form = reqwest::multipart::Form::new().part("image", part);
+        // build url for uploading our profile picture
+        let url = format!("{}/api/users/profile/picture", self.host);
+        // build request
+        let req = self
+            .client
+            .post(&url)
+            .multipart(form)
+            .header("authorization", &self.token);
+        // send request
+        send!(self.client, req)
+    }
+
+    /// Gets a user's profile picture from Thorium
+    ///
+    /// Any authenticated user can retrieve any other user's profile picture.
+    ///
+    /// # Arguments
+    ///
+    /// * `username` - The user whose profile picture to get
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::Thorium;
+    /// # use thorium::Error;
+    ///
+    /// # async fn exec() -> Result<(), Error> {
+    /// // create Thorium client
+    /// let thorium = Thorium::build("http://127.0.0.1").token("<token>").build().await?;
+    /// // get a user's profile picture
+    /// let picture = thorium.users.get_profile_picture("mcarson").await?;
+    /// # // allow test code to be compiled but don't unwrap as no API instance would be up
+    /// # Ok(())
+    /// # }
+    /// # tokio_test::block_on(async {
+    /// #    exec().await
+    /// # });
+    /// ```
+    pub async fn get_profile_picture(&self, username: &str) -> Result<bytes::Bytes, Error> {
+        // build url for getting a user's profile picture
+        let url = format!("{}/api/users/profile/picture/{}", self.host, username);
+        // build request
+        let req = self.client.get(&url).header("authorization", &self.token);
+        // send request and get the raw image bytes
+        send_bytes!(self.client, req)
+    }
+
+    /// Deletes our own profile picture in Thorium
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::Thorium;
+    /// # use thorium::Error;
+    ///
+    /// # async fn exec() -> Result<(), Error> {
+    /// // create Thorium client
+    /// let thorium = Thorium::build("http://127.0.0.1").token("<token>").build().await?;
+    /// // delete our profile picture
+    /// thorium.users.delete_profile_picture().await?;
+    /// # // allow test code to be compiled but don't unwrap as no API instance would be up
+    /// # Ok(())
+    /// # }
+    /// # tokio_test::block_on(async {
+    /// #    exec().await
+    /// # });
+    /// ```
+    pub async fn delete_profile_picture(&self) -> Result<reqwest::Response, Error> {
+        // build url for deleting our profile picture
+        let url = format!("{}/api/users/profile/picture", self.host);
         // build request
         let req = self
             .client
