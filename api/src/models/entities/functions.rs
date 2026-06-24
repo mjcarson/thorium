@@ -35,8 +35,8 @@ impl CompiledFunction {
         let mut form = form
             .text("kind", super::EntityKinds::CompiledFunction.as_str())
             .text("metadata[function_address]", self.address.to_string());
-        // add this functions metadata
-        crate::multipart_list_serialize!(form, "metadata[disassembly]", self.disassembly);
+        // add this functions metadata (list fields require a trailing `[]`)
+        crate::multipart_list_serialize!(form, "metadata[disassembly][]", self.disassembly);
         Ok(form)
     }
 
@@ -82,16 +82,16 @@ impl DecompiledFunction {
     /// * `form` - The form to add too
     #[cfg(feature = "client")]
     pub fn add_to_form(
-        self,
+        mut self,
         form: reqwest::multipart::Form,
     ) -> Result<reqwest::multipart::Form, crate::Error> {
         // always set our entity kind
-        let mut form = form
+        let form = form
             .text("kind", super::EntityKinds::DecompiledFunction.as_str())
             .text("metadata[function_address]", self.address.to_string())
             .text("metadata[decompilation_content]", self.content);
-        // add this functions metadata
-        crate::multipart_list_serialize!(form, "metadata[tools]", self.tools);
+        // add this functions tools (plain strings; list fields require a trailing `[]`)
+        let form = crate::multipart_list!(form, "metadata[tools][]", self.tools);
         Ok(form)
     }
 

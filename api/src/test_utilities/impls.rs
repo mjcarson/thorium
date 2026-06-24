@@ -1,12 +1,18 @@
 //! Contains trait implementations necessary for testing but not used anywhere else
 
+use std::collections::{BTreeSet, HashSet};
+use uuid::Uuid;
+
+use crate::models::helpers::matches_vecs_helper;
 use crate::models::{
-    Group, GroupRequest, Image, ImageRequest, NetworkPolicy, NetworkPolicyRequest,
-    NetworkPolicyRule, NetworkPolicyRuleRaw, NetworkPolicyUpdate, Pipeline, PipelineRequest,
+    CollectionEntity, CollectionEntityRequest, Country, DeviceEntity, DeviceEntityRequest, Entity,
+    EntityMetadata, EntityMetadataRequest, EntityRequest, EntityUpdate, Group, GroupRequest, Image,
+    ImageRequest, NetworkPolicy, NetworkPolicyRequest, NetworkPolicyRule, NetworkPolicyRuleRaw,
+    NetworkPolicyUpdate, Pipeline, PipelineRequest, VendorEntity, VendorEntityRequest,
 };
 use crate::{
     matches_adds, matches_adds_iter, matches_clear, matches_clear_vec_opt, matches_removes,
-    matches_removes_iter, matches_update, matches_vec, same,
+    matches_removes_iter, matches_update, matches_update_opt, matches_vec, same,
 };
 
 impl PartialEq<Group> for GroupRequest {
@@ -181,6 +187,208 @@ impl PartialEq<NetworkPolicyUpdate> for NetworkPolicy {
         );
         matches_update!(self.forced_policy, update.forced_policy);
         matches_update!(self.default_policy, update.default_policy);
+        true
+    }
+}
+
+/// Compare two serializable values by their JSON representation
+///
+/// This is used to compare entity metadata whose request and response types are
+/// identical but which do not implement [`PartialEq`].
+///
+/// # Arguments
+///
+/// * `left` - The left value to compare
+/// * `right` - The right value to compare
+fn json_eq<L: serde::Serialize, R: serde::Serialize>(left: &L, right: &R) -> bool {
+    // serialize both sides and compare their JSON values
+    match (serde_json::to_value(left), serde_json::to_value(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        // if either side failed to serialize then they can't be equal
+        _ => false,
+    }
+}
+
+/// Check that a [`VendorEntity`] corresponds to a [`VendorEntityRequest`]
+///
+/// # Arguments
+///
+/// * `resp` - The vendor entity to compare against
+/// * `req` - The vendor request to compare against
+fn vendor_matches(resp: &VendorEntity, req: &VendorEntityRequest) -> bool {
+    // convert the request's country codes into full country objects
+    let mut req_countries = BTreeSet::new();
+    for code in &req.countries {
+        match Country::new(code) {
+            Ok(country) => {
+                req_countries.insert(country);
+            }
+            // an invalid country code means the two can't be equal
+            Err(_) => return false,
+        }
+    }
+    // compare countries and critical sectors
+    resp.countries == req_countries && resp.critical_sectors == req.critical_sectors
+}
+
+/// Check that a [`DeviceEntity`] corresponds to a [`DeviceEntityRequest`]
+///
+/// # Arguments
+///
+/// * `resp` - The device entity to compare against
+/// * `req` - The device request to compare against
+fn device_matches(resp: &DeviceEntity, req: &DeviceEntityRequest) -> bool {
+    // make sure the simple fields match
+    if !matches_vecs_helper(&resp.urls, &req.urls)
+        || resp.critical_system != req.critical_system
+        || resp.sensitive_location != req.sensitive_location
+        || resp.critical_sectors != req.critical_sectors
+    {
+        return false;
+    }
+    // the response contains full vendor entities, so compare them by their ids
+    let resp_ids: BTreeSet<Uuid> = resp.vendors.iter().map(|vendor| vendor.id).collect();
+    let req_ids: BTreeSet<Uuid> = req.vendors.iter().copied().collect();
+    resp_ids == req_ids
+}
+
+/// Check that a [`CollectionEntity`] corresponds to a [`CollectionEntityRequest`]
+///
+/// # Arguments
+///
+/// * `resp` - The collection entity to compare against
+/// * `req` - The collection request to compare against
+fn collection_matches(resp: &CollectionEntity, req: &CollectionEntityRequest) -> bool {
+    // collection kinds don't implement PartialEq so compare their str forms
+    if resp.collection_kind.as_ref() != req.collection_kind.as_ref() {
+        return false;
+    }
+    // make sure both sides have the same number of tag keys
+    if resp.collection_tags.len() != req.collection_tags.len() {
+        return false;
+    }
+    // make sure every tag key/value in the request is present in the response
+    for (key, req_values) in &req.collection_tags {
+        match resp.collection_tags.get(key) {
+            Some(resp_values) => {
+                // compare the two sets of values ignoring ordering
+                let req_set: HashSet<&String> = req_values.iter().collect();
+                let resp_set: HashSet<&String> = resp_values.iter().collect();
+                if req_set != resp_set {
+                    return false;
+                }
+            }
+            // the response is missing a tag key from the request
+            None => return false,
+        }
+    }
+    // the request stores its flags as options that default to false in the response
+    resp.tags_case_insensitive == req.tags_case_insensitive.unwrap_or(false)
+        && resp.ignore_groups == req.ignore_groups.unwrap_or(false)
+        && resp.start == req.start
+        && resp.end == req.end
+}
+
+impl PartialEq<EntityRequest> for Entity {
+    /// Check if an [`Entity`] corresponds to an [`EntityRequest`]
+    ///
+    /// # Arguments
+    ///
+    /// * `req` - The `EntityRequest` to compare against
+    fn eq(&self, req: &EntityRequest) -> bool {
+        // make sure the shared fields are the same
+        same!(self.name, req.name);
+        same!(self.kind, req.kind());
+        same!(self.description, req.description);
+        // the groups may be returned in a different order
+        matches_vec!(&self.groups, &req.groups);
+        // make sure every tag key/value in the request was applied to the entity
+        for (key, values) in &req.tags {
+            match self.tags.get(key) {
+                Some(value_map) => {
+                    for value in values {
+                        if !value_map.contains_key(value) {
+                            return false;
+                        }
+                    }
+                }
+                // the entity is missing a tag key from the request
+                None => return false,
+            }
+        }
+        // compare the kind-specific metadata
+        match (&self.metadata, &req.metadata) {
+            // these kinds carry no comparable metadata beyond their kind
+            (EntityMetadata::Other, EntityMetadataRequest::Other)
+            | (EntityMetadata::WindowsProcessTree(_), EntityMetadataRequest::WindowsProcessTree) => {
+                true
+            }
+            // these kinds have distinct request/response types so compare them explicitly
+            (EntityMetadata::Vendor(resp), EntityMetadataRequest::Vendor(req)) => {
+                vendor_matches(resp, req)
+            }
+            (EntityMetadata::Device(resp), EntityMetadataRequest::Device(req)) => {
+                device_matches(resp, req)
+            }
+            (EntityMetadata::Collection(resp), EntityMetadataRequest::Collection(req)) => {
+                collection_matches(resp, req)
+            }
+            // these kinds share a type between request and response so compare via JSON
+            (EntityMetadata::FileSystem(resp), EntityMetadataRequest::FileSystem(req)) => {
+                json_eq(resp, req)
+            }
+            (EntityMetadata::Folder(resp), EntityMetadataRequest::Folder(req)) => json_eq(resp, req),
+            (EntityMetadata::WindowsProcess(resp), EntityMetadataRequest::WindowsProcess(req)) => {
+                json_eq(resp, req)
+            }
+            (
+                EntityMetadata::NetworkConnection(resp),
+                EntityMetadataRequest::NetworkConnection(req),
+            ) => json_eq(resp, req),
+            (EntityMetadata::PeSection(resp), EntityMetadataRequest::PeSection(req)) => {
+                json_eq(resp, req)
+            }
+            (EntityMetadata::PeImport(resp), EntityMetadataRequest::PeImport(req)) => {
+                json_eq(resp, req)
+            }
+            (EntityMetadata::SigmaRule(resp), EntityMetadataRequest::SigmaRule(req)) => {
+                json_eq(resp, req)
+            }
+            (EntityMetadata::Flag(resp), EntityMetadataRequest::Flag(req)) => json_eq(resp, req),
+            (EntityMetadata::Incident(resp), EntityMetadataRequest::Incident(req)) => {
+                json_eq(resp, req)
+            }
+            (
+                EntityMetadata::CompiledFunction(resp),
+                EntityMetadataRequest::CompiledFunction(req),
+            ) => json_eq(resp, req),
+            (
+                EntityMetadata::DecompiledFunction(resp),
+                EntityMetadataRequest::DecompiledFunction(req),
+            ) => json_eq(resp, req),
+            // any mismatched pairing of kinds means they aren't equal
+            _ => false,
+        }
+    }
+}
+
+impl PartialEq<EntityUpdate> for Entity {
+    /// Verify that all the elements in an [`EntityUpdate`] were applied to an [`Entity`]
+    ///
+    /// # Arguments
+    ///
+    /// * `update` - The `EntityUpdate` to verify was applied
+    fn eq(&self, update: &EntityUpdate) -> bool {
+        // check that the name was updated if requested
+        matches_update!(self.name, update.name);
+        // check that the description was cleared or updated as requested
+        matches_clear!(self.description, update.clear_description);
+        if !update.clear_description {
+            matches_update_opt!(self.description, update.description);
+        }
+        // check that the groups were added and removed as requested
+        matches_adds!(self.groups, update.add_groups);
+        matches_removes!(self.groups, update.remove_groups);
         true
     }
 }

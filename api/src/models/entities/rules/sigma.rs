@@ -217,13 +217,13 @@ impl SigmaRule {
         // always set our entity kind
         let form = form
             .text("kind", crate::models::EntityKinds::SigmaRule.as_str())
-            .text("metadata[rule]", self.rule)
+            .text("metadata[sigma_rule]", self.rule)
             .text("metadata[score]", self.score.to_string());
-        // add what data this sigma rule applies to
+        // add what data this sigma rule applies to (list fields require a trailing `[]`)
         let mut form =
-            crate::multipart_list_conv!(form, "metadata[sigma_applies_to]", self.applies_to);
+            crate::multipart_list_conv!(form, "metadata[sigma_applies_to][]", self.applies_to);
         // add what actions to take when this sigma rule hits
-        crate::multipart_list_serialize!(form, "metadata[sigma_actions]", self.actions);
+        crate::multipart_list_serialize!(form, "metadata[sigma_actions][]", self.actions);
         Ok(form)
     }
 }

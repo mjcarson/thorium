@@ -23,6 +23,7 @@ pub mod flags;
 pub mod functions;
 pub mod incident;
 pub mod network_activity;
+pub mod pe;
 pub mod processes;
 pub mod rules;
 pub mod shared;
@@ -35,6 +36,7 @@ use flags::Flag;
 use functions::{CompiledFunction, CompiledInstruction, DecompiledFunction};
 use incident::{Incident, IncidentRequest};
 use network_activity::NetworkConnection;
+use pe::{PeImportEntity, PeSectionEntity};
 use processes::{WindowsProcessEntity, WindowsProcessTreeEntity};
 use rules::{SigmaRule, SigmaRuleAppliesTo};
 
@@ -135,7 +137,16 @@ cfg_if::cfg_if! {
             pub disassembly: Vec<CompiledInstruction>,
             /// The decompiled content for a function
             pub decompilation_content: Option<String>,
-
+            /// The MD5 of a PE section's raw data
+            pub md5: Option<String>,
+            /// The raw (on disk) size of a PE section in bytes
+            pub raw_size: Option<u64>,
+            /// The virtual (in memory) size of a PE section in bytes
+            pub virtual_size: Option<u64>,
+            /// The Shannon entropy of a PE section's data
+            pub entropy: Option<f64>,
+            /// The functions imported from a PE import's library
+            pub functions: Vec<String>,
         }
 
         impl EntityMetadataForm {
@@ -285,6 +296,16 @@ cfg_if::cfg_if! {
             pub disassembly: Vec<CompiledInstruction>,
             /// The decompiled content for a function
             pub decompilation_content: Option<String>,
+            /// The MD5 of a PE section's raw data
+            pub md5: Option<String>,
+            /// The raw (on disk) size of a PE section in bytes
+            pub raw_size: Option<u64>,
+            /// The virtual (in memory) size of a PE section in bytes
+            pub virtual_size: Option<u64>,
+            /// The Shannon entropy of a PE section's data
+            pub entropy: Option<f64>,
+            /// The functions to set for a PE import's library
+            pub functions: Vec<String>,
         }
     }
 }
@@ -669,6 +690,10 @@ pub enum EntityMetadata {
     CompiledFunction(CompiledFunction),
     /// A decompiled function
     DecompiledFunction(DecompiledFunction),
+    /// A section within a PE/binary
+    PeSection(PeSectionEntity),
+    /// A library imported by a PE/binary and its functions
+    PeImport(PeImportEntity),
     /// An entity that can't be described by any of the other variants
     #[strum_discriminants(default)]
     Other,
@@ -718,6 +743,10 @@ pub enum EntityMetadataRequest {
     CompiledFunction(CompiledFunction),
     /// A decompild function
     DecompiledFunction(DecompiledFunction),
+    /// A section within a PE/binary
+    PeSection(PeSectionEntity),
+    /// A library imported by a PE/binary and its functions
+    PeImport(PeImportEntity),
     /// An entity that can't be described by any of the other variants
     Other,
 }
@@ -747,6 +776,8 @@ impl EntityMetadataRequest {
             EntityMetadataRequest::Incident(incident) => incident.add_to_form(form),
             EntityMetadataRequest::CompiledFunction(func) => func.add_to_form(form),
             EntityMetadataRequest::DecompiledFunction(decomp) => decomp.add_to_form(form),
+            EntityMetadataRequest::PeSection(section) => section.add_to_form(form),
+            EntityMetadataRequest::PeImport(import) => import.add_to_form(form),
             // just set our kind to other
             EntityMetadataRequest::Other => Ok(form.text("kind", EntityKinds::Other.as_str())),
         }
@@ -768,6 +799,8 @@ impl EntityMetadataRequest {
             EntityMetadataRequest::Incident(_) => EntityKinds::Incident,
             EntityMetadataRequest::CompiledFunction(_) => EntityKinds::CompiledFunction,
             EntityMetadataRequest::DecompiledFunction(_) => EntityKinds::DecompiledFunction,
+            EntityMetadataRequest::PeSection(_) => EntityKinds::PeSection,
+            EntityMetadataRequest::PeImport(_) => EntityKinds::PeImport,
             EntityMetadataRequest::Other => EntityKinds::Other,
         }
     }
@@ -805,7 +838,12 @@ impl EntityMetadataRequest {
             Self::Incident(incident) => Ok(Some(serde_json::to_string(incident)?)),
             Self::CompiledFunction(func) => Ok(Some(serde_json::to_string(func)?)),
             Self::DecompiledFunction(decomp) => Ok(Some(serde_json::to_string(decomp)?)),
-            Self::WindowsProcessTree | Self::SigmaRule(_) | Self::Other => Ok(None),
+            // PE sections/imports are storage/display only and not scanned with sigma rules
+            Self::WindowsProcessTree
+            | Self::PeSection(_)
+            | Self::PeImport(_)
+            | Self::SigmaRule(_)
+            | Self::Other => Ok(None),
         }
     }
 
@@ -907,6 +945,8 @@ impl<'a> From<&'a EntityMetadata> for IdentifyingEntityInfo<'a> {
             | EntityMetadata::Vendor(_)
             | EntityMetadata::WindowsProcessTree(_)
             | EntityMetadata::Incident(_)
+            | EntityMetadata::PeSection(_)
+            | EntityMetadata::PeImport(_)
             | EntityMetadata::Other => Self::Unidentifiable,
         }
     }
@@ -947,6 +987,8 @@ impl<'a> From<&'a EntityMetadataRequest> for IdentifyingEntityInfo<'a> {
             | EntityMetadataRequest::Vendor(_)
             | EntityMetadataRequest::WindowsProcessTree
             | EntityMetadataRequest::Incident(_)
+            | EntityMetadataRequest::PeSection(_)
+            | EntityMetadataRequest::PeImport(_)
             | EntityMetadataRequest::Other => Self::Unidentifiable,
         }
     }
@@ -975,6 +1017,8 @@ impl EntityKinds {
             | Self::FileSystem
             | Self::Folder
             | Self::WindowsProcessTree
+            | Self::PeSection
+            | Self::PeImport
             | Self::SigmaRule
             | Self::Flag
             | Self::Incident
@@ -997,6 +1041,8 @@ impl EntityKinds {
             | Self::FileSystem
             | Self::WindowsProcessTree
             | Self::NetworkConnection
+            | Self::PeSection
+            | Self::PeImport
             | Self::SigmaRule
             | Self::Flag
             | Self::Incident
@@ -1128,6 +1174,8 @@ impl EntityRequest {
             | EntityMetadataRequest::FileSystem(_)
             | EntityMetadataRequest::WindowsProcessTree
             | EntityMetadataRequest::NetworkConnection(_)
+            | EntityMetadataRequest::PeSection(_)
+            | EntityMetadataRequest::PeImport(_)
             | EntityMetadataRequest::SigmaRule(_)
             | EntityMetadataRequest::Flag(_)
             | EntityMetadataRequest::Incident(_)
@@ -1443,7 +1491,7 @@ pub struct EntityListLine {
 }
 
 /// An update to apply to an entity
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "api", derive(utoipa::ToSchema))]
 pub struct EntityUpdate {
     /// The new name to set
@@ -1546,9 +1594,9 @@ impl EntityUpdate {
             .text("clear_description", self.clear_description.to_string());
         // set our name form field
         let form = multipart_text!(form, "name", self.name);
-        // add the groups to add/remove to this form
-        let form = multipart_list!(form, "add_groups", self.add_groups);
-        let form = multipart_list!(form, "remove_groups", self.remove_groups);
+        // add the groups to add/remove to this form (list fields require a trailing `[]`)
+        let form = multipart_list!(form, "add_groups[]", self.add_groups);
+        let form = multipart_list!(form, "remove_groups[]", self.remove_groups);
         // set our description form field
         let form = multipart_text!(form, "description", self.description);
         Ok(form)

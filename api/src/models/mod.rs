@@ -45,6 +45,8 @@ pub use entities::devices::{DeviceEntity, DeviceEntityRequest};
 pub use entities::filesystem::{FileSystemEntity, FileSystemEntityBuilder, FileSystemFolderEntity};
 pub use entities::flags::{Confidence, Flag};
 pub use entities::functions::{CompiledFunction, CompiledInstruction, DecompiledFunction};
+pub use entities::incident::{Incident, IncidentRequest};
+pub use entities::pe::{PeImportEntity, PeSectionEntity};
 pub use entities::processes::{WindowsProcessEntity, WindowsProcessTreeEntity};
 pub use entities::rules::{SigmaRule, SigmaRuleAppliesTo};
 pub use entities::shared::CriticalSector;

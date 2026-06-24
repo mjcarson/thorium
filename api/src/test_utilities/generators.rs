@@ -2,23 +2,31 @@ use cidr::{Ipv4Cidr, Ipv6Cidr};
 use futures::{StreamExt, TryStreamExt, stream};
 use rand::seq::IndexedRandom;
 use rand::{Rng, SeedableRng, seq::IteratorRandom};
-use std::collections::{BTreeMap, HashMap};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::collections::{BTreeMap, BTreeSet};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 use uuid::Uuid;
 
 use crate::client::{ClientSettings, Users};
+use crate::models::entities::network_activity::{
+    NetConState, NetworkConnection, TransportLayerProtocol,
+};
 use crate::models::{
-    ArgStrategy, Buffer, BulkReactionResponse, ChildFilters, Cleanup, Dependencies,
-    DependencyPassStrategy, EphemeralDependencySettings, FilesHandler, GenericJobArgs,
-    GroupRequest, GroupUsersRequest, ImageLifetime, ImageRequest, ImageScaler, ImageVersion,
-    IpBlock, IpBlockRaw, Ipv4Block, Ipv6Block, KwargDependency, NetworkPolicyCustomK8sRule,
-    NetworkPolicyCustomLabel, NetworkPolicyPort, NetworkPolicyRequest, NetworkPolicyRuleRaw,
-    NetworkProtocol, NodeRegistration, OriginRequest, OutputCollection, OutputDisplayType,
-    Pipeline, PipelineRequest, Pools, ReactionCreation, ReactionRequest, RepoCheckout,
-    RepoDependencySettings, RepoRequest, Resources, ResourcesRequest, ResultDependencySettings,
-    SampleDependencySettings, SampleRequest, StageLogsAdd, UserCreate, UserRole, Volume,
-    VolumeTypes, WorkerDeleteMap, WorkerRegistrationList,
+    ArgStrategy, Buffer, BulkReactionResponse, ChildFilters, Cleanup, CollectionEntityRequest,
+    CollectionKind, CompiledFunction, CompiledInstruction, Confidence, CriticalSector,
+    DecompiledFunction, Dependencies, DependencyPassStrategy, DeviceEntityRequest, Entity,
+    EntityMetadataRequest, EntityRequest, EphemeralDependencySettings, FileSystemEntity,
+    FileSystemFolderEntity, FilesHandler, Flag, GenericJobArgs, GroupRequest, GroupUsersRequest,
+    ImageLifetime, ImageRequest, ImageScaler, ImageVersion, IncidentRequest, IpBlock, IpBlockRaw,
+    Ipv4Block,
+    Ipv6Block, KwargDependency, NetworkPolicyCustomK8sRule, NetworkPolicyCustomLabel,
+    NetworkPolicyPort, NetworkPolicyRequest, NetworkPolicyRuleRaw, NetworkProtocol,
+    NodeRegistration, OriginRequest, OutputCollection, OutputDisplayType, PeImportEntity,
+    PeSectionEntity, Pipeline, PipelineRequest, Pools, ReactionCreation, ReactionRequest,
+    RepoCheckout, RepoDependencySettings, RepoRequest, Resources, ResourcesRequest,
+    ResultDependencySettings, SampleDependencySettings, SampleRequest, SigmaRule,
+    SigmaRuleAppliesTo, StageLogsAdd, UserCreate, UserRole, VendorEntityRequest, Volume,
+    VolumeTypes, WindowsProcessEntity, WorkerDeleteMap, WorkerRegistrationList,
 };
 use crate::test_utilities;
 use crate::{Error, Thorium};
@@ -55,7 +63,7 @@ macro_rules! gen_opt {
 }
 
 /// generate a random string
-fn gen_string(len: usize) -> String {
+pub fn gen_string(len: usize) -> String {
     // build the possible values we can generate
     const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789-";
     let mut rng = rand::rngs::SmallRng::from_os_rng();
@@ -1133,6 +1141,318 @@ pub async fn network_policies(
         .await?;
     // return the created requests
     Ok(reqs)
+}
+
+// Entity generators
+
+/// A minimal, valid sigma rule used to generate sigma rule entities in tests
+const TEST_SIGMA_RULE: &str = r#"title: A rule with keywords
+logsource:
+    service: test
+detection:
+    keywords:
+        - '* hello world?'
+        - 'evil'
+    condition: keywords
+"#;
+
+/// Generate metadata for an entity with no unique kind (an `Other` entity)
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_other_meta() -> EntityMetadataRequest {
+    // other entities have no metadata
+    EntityMetadataRequest::Other
+}
+
+/// Generate metadata for a random vendor entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_vendor_meta() -> EntityMetadataRequest {
+    // build a set of countries this vendor operates in (alpha-2 codes)
+    let mut countries = BTreeSet::new();
+    countries.insert("US".to_owned());
+    // build the critical sectors this vendor is associated with
+    let mut critical_sectors = BTreeSet::new();
+    critical_sectors.insert(CriticalSector::InformationTechnology);
+    // build our vendor metadata request
+    EntityMetadataRequest::Vendor(VendorEntityRequest {
+        countries,
+        critical_sectors,
+    })
+}
+
+/// Generate metadata for a random device entity
+///
+/// # Arguments
+///
+/// * `vendors` - The ids of the vendor entities this device is associated with
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_device_meta(vendors: Vec<Uuid>) -> EntityMetadataRequest {
+    // build the critical sectors this device is associated with
+    let mut critical_sectors = BTreeSet::new();
+    critical_sectors.insert(CriticalSector::Energy);
+    // build our device metadata request
+    EntityMetadataRequest::Device(DeviceEntityRequest {
+        urls: vec![format!("https://{}.example.com", gen_string(8))],
+        vendors,
+        critical_system: Some(true),
+        sensitive_location: Some(false),
+        critical_sectors,
+    })
+}
+
+/// Generate metadata for a random flag entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_flag_meta() -> EntityMetadataRequest {
+    // build our flag metadata request
+    EntityMetadataRequest::Flag(Flag {
+        suspicion: gen_int!(0, 100),
+        confidence: Confidence::Likely,
+        content: Some(gen_string(gen_int!(8, 32))),
+        reasoning: gen_string(gen_int!(8, 64)),
+    })
+}
+
+/// Generate metadata for a sigma rule entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_sigma_meta() -> EntityMetadataRequest {
+    // build a validated sigma rule from our test rule
+    let rule = SigmaRule::new(TEST_SIGMA_RULE, SigmaRuleAppliesTo::WindowsProcesses)
+        .expect("failed to build test sigma rule");
+    // build our sigma rule metadata request
+    EntityMetadataRequest::SigmaRule(rule)
+}
+
+/// Generate metadata for a random network connection entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_network_connection_meta() -> EntityMetadataRequest {
+    // build our network connection metadata request, leaving timestamps unset
+    EntityMetadataRequest::NetworkConnection(NetworkConnection {
+        protocol: Some(TransportLayerProtocol::TCP),
+        source: IpAddr::V4(Ipv4Addr::new(10, 0, 0, gen_int!(1, 254))),
+        source_port: Some(gen_int!(1024, 65535)),
+        destination: IpAddr::V4(Ipv4Addr::new(10, 0, 0, gen_int!(1, 254))),
+        destination_port: gen_int!(1, 65535),
+        state: Some(NetConState::Established),
+        pid: Some(gen_int!(1, 65535)),
+        process: Some(gen_string(gen_int!(4, 16))),
+        create_time: None,
+    })
+}
+
+/// Generate metadata for a random collection entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_collection_meta() -> EntityMetadataRequest {
+    // build a single random tag for this collection
+    let mut collection_tags = BTreeMap::new();
+    let mut values = BTreeSet::new();
+    values.insert(gen_string(gen_int!(4, 16)));
+    collection_tags.insert(gen_string(gen_int!(4, 16)), values);
+    // build our collection metadata request, leaving timestamps unset
+    EntityMetadataRequest::Collection(CollectionEntityRequest {
+        collection_kind: CollectionKind::Files,
+        collection_tags,
+        tags_case_insensitive: Some(false),
+        ignore_groups: Some(false),
+        start: None,
+        end: None,
+    })
+}
+
+/// Generate metadata for a random filesystem entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_filesystem_meta() -> EntityMetadataRequest {
+    // build our filesystem metadata request
+    EntityMetadataRequest::FileSystem(FileSystemEntity {
+        sha256: gen_string(64),
+        tools: vec![gen_string(gen_int!(4, 16))],
+    })
+}
+
+/// Generate metadata for a random filesystem folder entity
+///
+/// # Arguments
+///
+/// * `filesystem_id` - The id of the filesystem entity this folder belongs to
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_folder_meta(filesystem_id: Uuid) -> EntityMetadataRequest {
+    // build our folder metadata request
+    EntityMetadataRequest::Folder(FileSystemFolderEntity {
+        filesystem_id,
+        names_sha256: gen_string(64),
+        data_sha256: gen_string(64),
+        all_sha256: gen_string(64),
+    })
+}
+
+/// Generate metadata for a windows process tree entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_windows_process_tree_meta() -> EntityMetadataRequest {
+    // windows process tree entities have no metadata
+    EntityMetadataRequest::WindowsProcessTree
+}
+
+/// Generate metadata for a random windows process entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_windows_process_meta() -> EntityMetadataRequest {
+    // build a process with only a pid and a few descriptive fields set
+    let mut process = WindowsProcessEntity::new(gen_int!(1, 65535));
+    process.name = Some(gen_string(gen_int!(4, 16)));
+    process.image_path = Some(format!("C:\\\\{}.exe", gen_string(gen_int!(4, 16))));
+    process.command = Some(gen_string(gen_int!(8, 32)));
+    process.threads = Some(gen_int!(1, 64));
+    process.handles = Some(gen_int!(1, 256));
+    process.session_id = Some(gen_int!(0, 8));
+    // build our windows process metadata request
+    EntityMetadataRequest::WindowsProcess(process)
+}
+
+/// Generate metadata for a random PE section entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_pe_section_meta() -> EntityMetadataRequest {
+    // build our PE section metadata request with a clean entropy value
+    EntityMetadataRequest::PeSection(PeSectionEntity {
+        md5: Some(gen_string(32)),
+        raw_size: Some(gen_int!(1, 100_000)),
+        virtual_size: Some(gen_int!(1, 100_000)),
+        entropy: Some(7.5),
+    })
+}
+
+/// Generate metadata for a random PE import entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_pe_import_meta() -> EntityMetadataRequest {
+    // build our PE import metadata request with a couple of imported functions
+    EntityMetadataRequest::PeImport(
+        PeImportEntity::new()
+            .function(gen_string(gen_int!(4, 16)))
+            .function(gen_string(gen_int!(4, 16))),
+    )
+}
+
+/// Generate metadata for a random incident entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_incident_meta() -> EntityMetadataRequest {
+    // build our incident metadata request with a cover term and a few list fields
+    EntityMetadataRequest::Incident(IncidentRequest {
+        cover_term: Some(gen_string(gen_int!(4, 16))),
+        mission_teams: vec![gen_string(gen_int!(4, 16)), gen_string(gen_int!(4, 16))],
+        networks: vec![gen_string(gen_int!(4, 16))],
+        machines: vec![gen_string(gen_int!(4, 16))],
+        locations: vec![gen_string(gen_int!(4, 16))],
+    })
+}
+
+/// Generate metadata for a random compiled function entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_compiled_function_meta() -> EntityMetadataRequest {
+    // build a couple of disassembled instructions for this function
+    let disassembly = vec![
+        CompiledInstruction {
+            address: gen_int!(1, 100_000),
+            instruction: gen_string(gen_int!(4, 16)),
+        },
+        CompiledInstruction {
+            address: gen_int!(1, 100_000),
+            instruction: gen_string(gen_int!(4, 16)),
+        },
+    ];
+    // build our compiled function metadata request
+    EntityMetadataRequest::CompiledFunction(CompiledFunction {
+        address: gen_int!(1, 100_000),
+        disassembly,
+    })
+}
+
+/// Generate metadata for a random decompiled function entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_decompiled_function_meta() -> EntityMetadataRequest {
+    // build our decompiled function metadata request
+    EntityMetadataRequest::DecompiledFunction(DecompiledFunction {
+        address: gen_int!(1, 100_000),
+        tools: vec![gen_string(gen_int!(4, 16))],
+        content: gen_string(gen_int!(16, 128)),
+    })
+}
+
+/// Build an entity request with a random name, description, and tags
+///
+/// # Arguments
+///
+/// * `group` - The group this entity should be in
+/// * `metadata` - The kind-specific metadata for this entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_entity(group: &str, metadata: EntityMetadataRequest) -> EntityRequest {
+    // build our entity request with a random name and two random tags
+    let mut req = EntityRequest::new(gen_string(gen_int!(8, 32)), metadata, vec![group.to_owned()])
+        .tag(gen_string(gen_int!(4, 16)), gen_string(gen_int!(4, 16)))
+        .tag(gen_string(gen_int!(4, 16)), gen_string(gen_int!(4, 16)));
+    // add a random description
+    req.description = Some(gen_string(gen_int!(8, 64)));
+    req
+}
+
+/// Create an entity in Thorium and return both the request and the created entity
+///
+/// # Arguments
+///
+/// * `req` - The entity request to create
+/// * `client` - The client to use to create the entity
+#[allow(dead_code)]
+pub async fn entity(
+    req: EntityRequest,
+    client: &Thorium,
+) -> Result<(EntityRequest, Entity), Error> {
+    // create the entity in Thorium
+    let resp = client.entities.create(req.clone()).await?;
+    // get the full entity we just created
+    let entity = client.entities.get(resp.id).await?;
+    Ok((req, entity))
+}
+
+/// Create a vendor entity in a group and return the created entity
+///
+/// This is used to satisfy the vendor dependency of device entities.
+///
+/// # Arguments
+///
+/// * `group` - The group this vendor should be in
+/// * `client` - The client to use to create the vendor
+#[allow(dead_code)]
+pub async fn vendor_entity(group: &str, client: &Thorium) -> Result<Entity, Error> {
+    // build and create a vendor entity
+    let (_, entity) = entity(gen_entity(group, gen_vendor_meta()), client).await?;
+    Ok(entity)
+}
+
+/// Create a filesystem entity in a group and return the created entity
+///
+/// This is used to satisfy the filesystem dependency of folder entities.
+///
+/// # Arguments
+///
+/// * `group` - The group this filesystem should be in
+/// * `client` - The client to use to create the filesystem
+#[allow(dead_code)]
+pub async fn filesystem_entity(group: &str, client: &Thorium) -> Result<Entity, Error> {
+    // build and create a filesystem entity
+    let (_, entity) = entity(gen_entity(group, gen_filesystem_meta()), client).await?;
+    Ok(entity)
 }
 
 // Generators for sync tests
