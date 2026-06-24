@@ -21,6 +21,7 @@ pub mod devices;
 pub mod filesystem;
 pub mod flags;
 pub mod network_activity;
+pub mod pe;
 pub mod processes;
 pub mod rules;
 pub mod shared;
@@ -30,6 +31,7 @@ use devices::DeviceEntity;
 use filesystem::{FileSystemEntity, FileSystemFolderEntity};
 use flags::Flag;
 use network_activity::NetworkConnection;
+use pe::{PeImportEntity, PeSectionEntity};
 use processes::{WindowsProcessEntity, WindowsProcessTreeEntity};
 use rules::{SigmaRule, SigmaRuleAppliesTo};
 
@@ -99,6 +101,16 @@ cfg_if::cfg_if! {
             pub destination_port: Option<u16>,
             pub state: Option<NetConState>,
             pub process: Option<String>,
+            /// The MD5 of a PE section's raw data
+            pub md5: Option<String>,
+            /// The raw (on disk) size of a PE section in bytes
+            pub raw_size: Option<u64>,
+            /// The virtual (in memory) size of a PE section in bytes
+            pub virtual_size: Option<u64>,
+            /// The Shannon entropy of a PE section's data
+            pub entropy: Option<f64>,
+            /// The functions imported from a PE import's library
+            pub functions: Vec<String>,
             /// A sigma rule in yaml format
             pub sigma_rule: Option<String>,
             /// What this sigma rule applies too
@@ -220,6 +232,16 @@ cfg_if::cfg_if! {
             pub state: Option<NetConState>,
             pub pid: Option<u64>,
             pub process: Option<String>,
+            /// The MD5 of a PE section's raw data
+            pub md5: Option<String>,
+            /// The raw (on disk) size of a PE section in bytes
+            pub raw_size: Option<u64>,
+            /// The virtual (in memory) size of a PE section in bytes
+            pub virtual_size: Option<u64>,
+            /// The Shannon entropy of a PE section's data
+            pub entropy: Option<f64>,
+            /// The functions to set for a PE import's library
+            pub functions: Vec<String>,
             /// A sigma rule in yaml format
             pub sigma_rule: Option<String>,
             /// The new things this sigma rule should apply too
@@ -613,6 +635,10 @@ pub enum EntityMetadata {
     WindowsProcess(WindowsProcessEntity),
     /// A Network connection
     NetworkConnection(NetworkConnection),
+    /// A section within a PE/binary
+    PeSection(PeSectionEntity),
+    /// A library imported by a PE/binary and its functions
+    PeImport(PeImportEntity),
     /// A sigma rule to apply to data
     SigmaRule(SigmaRule),
     /// A flag on some suspicious data
@@ -647,8 +673,18 @@ impl EntityMetadata {
                 flag.confidence.hash(hasher);
                 hasher.write(flag.reasoning.as_bytes());
             }
-            // These entities have not identifying metadata
-            Self::Device(_) | Self::Vendor(_) | Self::WindowsProcessTree(_) | Self::Other => (),
+            // a section is identified by its content hash (its name is hashed at the entity level)
+            Self::PeSection(section) => {
+                if let Some(md5) = &section.md5 {
+                    hasher.write(md5.as_bytes());
+                }
+            }
+            // These entities have no identifying metadata (a PE import's dll is its entity name)
+            Self::Device(_)
+            | Self::Vendor(_)
+            | Self::WindowsProcessTree(_)
+            | Self::PeImport(_)
+            | Self::Other => (),
         }
     }
 }
@@ -673,6 +709,10 @@ pub enum EntityMetadataRequest {
     WindowsProcess(WindowsProcessEntity),
     /// A network connection
     NetworkConnection(NetworkConnection),
+    /// A section within a PE/binary
+    PeSection(PeSectionEntity),
+    /// A library imported by a PE/binary and its functions
+    PeImport(PeImportEntity),
     /// A sigma rule to apply to data
     SigmaRule(SigmaRule),
     /// A flag on some suspicious data
@@ -701,6 +741,8 @@ impl EntityMetadataRequest {
             }
             EntityMetadataRequest::WindowsProcess(process) => process.add_to_form(form),
             EntityMetadataRequest::NetworkConnection(conn) => conn.add_to_form(form),
+            EntityMetadataRequest::PeSection(section) => section.add_to_form(form),
+            EntityMetadataRequest::PeImport(import) => import.add_to_form(form),
             EntityMetadataRequest::SigmaRule(rule) => rule.add_to_form(form),
             EntityMetadataRequest::Flag(flag) => flag.add_to_form(form),
             // just set our kind to other
@@ -719,6 +761,8 @@ impl EntityMetadataRequest {
             EntityMetadataRequest::WindowsProcessTree => EntityKinds::WindowsProcessTree,
             EntityMetadataRequest::WindowsProcess(_) => EntityKinds::WindowsProcess,
             EntityMetadataRequest::NetworkConnection(_) => EntityKinds::NetworkConnection,
+            EntityMetadataRequest::PeSection(_) => EntityKinds::PeSection,
+            EntityMetadataRequest::PeImport(_) => EntityKinds::PeImport,
             EntityMetadataRequest::SigmaRule(_) => EntityKinds::SigmaRule,
             EntityMetadataRequest::Flag(_) => EntityKinds::Flag,
             EntityMetadataRequest::Other => EntityKinds::Other,
@@ -753,7 +797,12 @@ impl EntityMetadataRequest {
             Self::WindowsProcess(proc) => Ok(Some(serde_json::to_string(proc)?)),
             Self::NetworkConnection(conn) => Ok(Some(serde_json::to_string(conn)?)),
             Self::Flag(flag) => Ok(Some(serde_json::to_string(flag)?)),
-            Self::WindowsProcessTree | Self::SigmaRule(_) | Self::Other => Ok(None),
+            // PE sections/imports are storage/display only and not scanned with sigma rules
+            Self::WindowsProcessTree
+            | Self::PeSection(_)
+            | Self::PeImport(_)
+            | Self::SigmaRule(_)
+            | Self::Other => Ok(None),
         }
     }
 
@@ -783,8 +832,18 @@ impl EntityMetadataRequest {
                 flag.confidence.hash(hasher);
                 hasher.write(flag.reasoning.as_bytes());
             }
-            // These entities have not identifying metadata
-            Self::Device(_) | Self::Vendor(_) | Self::WindowsProcessTree | Self::Other => (),
+            // a section is identified by its content hash (its name is hashed at the entity level)
+            Self::PeSection(section) => {
+                if let Some(md5) = &section.md5 {
+                    hasher.write(md5.as_bytes());
+                }
+            }
+            // These entities have no identifying metadata (a PE import's dll is its entity name)
+            Self::Device(_)
+            | Self::Vendor(_)
+            | Self::WindowsProcessTree
+            | Self::PeImport(_)
+            | Self::Other => (),
         }
     }
 }
@@ -810,6 +869,8 @@ impl EntityKinds {
             | Self::FileSystem
             | Self::Folder
             | Self::WindowsProcessTree
+            | Self::PeSection
+            | Self::PeImport
             | Self::SigmaRule
             | Self::Flag
             | Self::Other => None,
@@ -828,6 +889,8 @@ impl EntityKinds {
             | Self::FileSystem
             | Self::WindowsProcessTree
             | Self::NetworkConnection
+            | Self::PeSection
+            | Self::PeImport
             | Self::SigmaRule
             | Self::Flag
             | Self::Other => &[],
@@ -957,6 +1020,8 @@ impl EntityRequest {
             | EntityMetadataRequest::FileSystem(_)
             | EntityMetadataRequest::WindowsProcessTree
             | EntityMetadataRequest::NetworkConnection(_)
+            | EntityMetadataRequest::PeSection(_)
+            | EntityMetadataRequest::PeImport(_)
             | EntityMetadataRequest::SigmaRule(_)
             | EntityMetadataRequest::Flag(_)
             | EntityMetadataRequest::Other => None,
