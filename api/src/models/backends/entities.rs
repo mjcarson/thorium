@@ -22,12 +22,12 @@ use crate::models::entities::incident::Incident;
 use crate::models::entities::network_activity::{NetConState, NetworkConnection};
 use crate::models::{
     ApiCursor, AssociationKind, AssociationListOpts, AssociationRequest, AssociationTarget,
-    AssociationTargetColumn, CollectionEntity, Country, CriticalSector, DeviceEntity, Entity,
-    EntityForm, EntityKinds, EntityListLine, EntityListParams, EntityListRow, EntityMetadata,
-    EntityMetadataUpdateForm, EntityResponse, EntityRow, EntityUpdateForm, FileSystemEntity,
-    FileSystemFolderEntity, Flag, Group, GroupAllowAction, ListableAssociation, SigmaRule,
-    TagListRow, TagMap, TagType, TreeSupport, User, VendorEntity, WindowsProcessEntity,
-    WindowsProcessTreeEntity,
+    AssociationTargetColumn, CollectionEntity, CompiledFunction, Country, CriticalSector,
+    DecompiledFunction, DeviceEntity, Entity, EntityForm, EntityKinds, EntityListLine,
+    EntityListParams, EntityListRow, EntityMetadata, EntityMetadataUpdateForm, EntityResponse,
+    EntityRow, EntityUpdateForm, FileSystemEntity, FileSystemFolderEntity, Flag, Group,
+    GroupAllowAction, ListableAssociation, SigmaRule, TagListRow, TagMap, TagType, TreeSupport,
+    User, VendorEntity, WindowsProcessEntity, WindowsProcessTreeEntity,
 };
 use crate::utils::{ApiError, Shared};
 use crate::{
@@ -230,7 +230,9 @@ impl Entity {
             // other and windows process trees have no taggable data
             EntityMetadata::Other
             | EntityMetadata::Collection(_)
-            | EntityMetadata::WindowsProcessTree(_) => (),
+            | EntityMetadata::WindowsProcessTree(_)
+            | EntityMetadata::CompiledFunction(_)
+            | EntityMetadata::DecompiledFunction(_) => (),
         }
         Ok(())
     }
@@ -293,6 +295,8 @@ impl Entity {
                 | EntityMetadata::SigmaRule(_)
                 | EntityMetadata::Flag(_)
                 | EntityMetadata::Incident(_)
+                | EntityMetadata::CompiledFunction(_)
+                | EntityMetadata::DecompiledFunction(_)
                 | EntityMetadata::NetworkConnection(_) => (),
             }
         }
@@ -512,6 +516,21 @@ impl Entity {
                 incident
                     .locations
                     .retain(|location| !form.remove_locations.contains(location));
+            }
+            EntityMetadata::CompiledFunction(func) => {
+                // update this functions addres if needed
+                update!(func.address, form.function_address);
+                // replace our disassembly entirely if any was set
+                if !form.disassembly.is_empty() {
+                    // set our new disassembly
+                    std::mem::swap(&mut func.disassembly, &mut form.disassembly);
+                }
+            }
+            EntityMetadata::DecompiledFunction(decomp) => {
+                // update this functions addres if needed
+                update!(decomp.address, form.function_address);
+                // update our decompilation if needed
+                update!(decomp.content, form.decompilation_content);
             }
             // other kinds have no metadata to update
             EntityMetadata::Other | EntityMetadata::Folder(_) => (),
@@ -812,6 +831,8 @@ impl Entity {
             | EntityMetadata::SigmaRule(_)
             | EntityMetadata::Flag(_)
             | EntityMetadata::Incident(_)
+            | EntityMetadata::CompiledFunction(_)
+            | EntityMetadata::DecompiledFunction(_)
             | EntityMetadata::Other => (),
         }
     }
@@ -851,6 +872,8 @@ impl EntityMetadata {
             EntityMetadata::SigmaRule(rule) => Some(serialize!(rule)),
             EntityMetadata::Flag(flag) => Some(serialize!(flag)),
             EntityMetadata::Incident(incident) => Some(serialize!(incident)),
+            EntityMetadata::CompiledFunction(func) => Some(serialize!(func)),
+            EntityMetadata::DecompiledFunction(decomp) => Some(serialize!(decomp)),
             EntityMetadata::Other => None,
         };
         Ok((self.into(), data))
@@ -1147,6 +1170,9 @@ impl EntityMetadataForm {
             "confidence" => self.confidence = Some(field.text().await?.parse()?),
             "content" => self.content = Some(field.text().await?),
             "reasoning" => self.reasoning = Some(field.text().await?),
+            // the function specific fields
+            "function_address" => self.function_address = Some(field.text().await?.parse()?),
+            "decompilation_content" => self.decompilation_content = Some(field.text().await?),
             maybe_list => {
                 match maybe_list {
                     "urls" => {
@@ -1186,6 +1212,7 @@ impl EntityMetadataForm {
                     "tools" => self.tools.push(field.text().await?),
                     "sigma_applies_to" => self.sigma_applies_to.push(field.text().await?.parse()?),
                     "sigma_actions" => self.sigma_actions.push(deserialize!(&field.text().await?)),
+                    "disassembly" => self.disassembly.push(deserialize!(&field.text().await?)),
                     bad_name => {
                         return bad!(format!("'{bad_name}' is not a valid metadata form name"));
                     }
@@ -1237,6 +1264,12 @@ impl EntityMetadataForm {
             EntityKinds::SigmaRule => Ok(EntityMetadata::SigmaRule(SigmaRule::from_form(self)?)),
             EntityKinds::Flag => Ok(EntityMetadata::Flag(Flag::from_form(self)?)),
             EntityKinds::Incident => Ok(EntityMetadata::Incident(Incident::from_form(self))),
+            EntityKinds::CompiledFunction => Ok(EntityMetadata::CompiledFunction(
+                CompiledFunction::from_form(self)?,
+            )),
+            EntityKinds::DecompiledFunction => Ok(EntityMetadata::DecompiledFunction(
+                DecompiledFunction::from_form(self)?,
+            )),
             EntityKinds::Other => Ok(EntityMetadata::Other),
         }
     }
@@ -1622,14 +1655,12 @@ impl TryFrom<EntityRow> for Entity {
     type Error = ApiError;
 
     fn try_from(row: EntityRow) -> Result<Self, Self::Error> {
-        // deserialize our metadata
-        let metadata = deserialize!(&row.metadata);
         // return the entity with just the single group from this row and no tags
         Ok(Self {
             id: row.id,
             name: row.name,
             kind: row.kind,
-            metadata,
+            metadata: row.metadata,
             groups: vec![row.group],
             created: row.created,
             submitter: row.submitter,

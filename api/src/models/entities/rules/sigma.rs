@@ -16,6 +16,10 @@ pub enum SigmaRuleAppliesTo {
     WindowsProcesses,
     /// Apply this rule to network connections
     NetworkConnections,
+    /// Apply this rule to a compiled function
+    CompiledFunctions,
+    /// Apply this rule to a decompiled function
+    DecompiledFunctions,
 }
 
 impl SigmaRuleAppliesTo {
@@ -24,6 +28,8 @@ impl SigmaRuleAppliesTo {
         match self {
             SigmaRuleAppliesTo::WindowsProcesses => "WindowsProcesses",
             SigmaRuleAppliesTo::NetworkConnections => "NetworkConnections",
+            SigmaRuleAppliesTo::CompiledFunctions => "CompiledFunctions",
+            SigmaRuleAppliesTo::DecompiledFunctions => "DecompiledFunctions",
         }
     }
 }
@@ -45,11 +51,16 @@ impl FromStr for SigmaRuleAppliesTo {
     }
 }
 
+fn default_confidence_temp() -> Confidence {
+    Confidence::Unsure
+}
+
 /// Automatically promote this sigma rule hit to a flag
 #[derive(Debug, Clone, Serialize, Deserialize, Hash)]
 #[cfg_attr(feature = "api", derive(utoipa::ToSchema))]
 pub struct SigmaAutoFlag {
     /// How confident we are in this rule/flag not being a false positive
+    #[serde(default = "default_confidence_temp")]
     pub confidence: Confidence,
     /// The interesting, odd, or suspicious characteristic
     pub content: Option<String>,

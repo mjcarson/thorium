@@ -20,6 +20,7 @@ pub mod countries;
 pub mod devices;
 pub mod filesystem;
 pub mod flags;
+pub mod functions;
 pub mod incident;
 pub mod network_activity;
 pub mod processes;
@@ -31,6 +32,7 @@ use devices::DeviceEntity;
 use filesystem::{FileSystemEntity, FileSystemFolderEntity};
 use flags::Confidence;
 use flags::Flag;
+use functions::{CompiledFunction, CompiledInstruction, DecompiledFunction};
 use incident::{Incident, IncidentRequest};
 use network_activity::NetworkConnection;
 use processes::{WindowsProcessEntity, WindowsProcessTreeEntity};
@@ -127,6 +129,13 @@ cfg_if::cfg_if! {
             pub machines: Vec<String>,
             /// The locations this incident is from
             pub locations: Vec<String>,
+            /// The address this function is located at
+            pub function_address: Option<u64>,
+            /// The dissasembled instructions for this function
+            pub disassembly: Vec<CompiledInstruction>,
+            /// The decompiled content for a function
+            pub decompilation_content: Option<String>,
+
         }
 
         impl EntityMetadataForm {
@@ -270,6 +279,12 @@ cfg_if::cfg_if! {
             pub add_locations: Vec<String>,
             /// The locations to remove from this incident
             pub remove_locations: Vec<String>,
+            /// The address this function is located at
+            pub function_address: Option<u64>,
+            /// The dissasembled instructions for this function
+            pub disassembly: Vec<CompiledInstruction>,
+            /// The decompiled content for a function
+            pub decompilation_content: Option<String>,
         }
     }
 }
@@ -623,6 +638,7 @@ impl TagSupport for Entity {
 )]
 #[cfg_attr(feature = "api", strum_discriminants(derive(utoipa::ToSchema)))]
 #[cfg_attr(feature = "api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "scylla-utils", derive(thorium_derive::ScyllaStoreJson))]
 pub enum EntityMetadata {
     /// A device entity
     Device(DeviceEntity),
@@ -649,6 +665,10 @@ pub enum EntityMetadata {
     Flag(Flag),
     /// An occurence or incident
     Incident(Incident),
+    /// A compiled function
+    CompiledFunction(CompiledFunction),
+    /// A decompiled function
+    DecompiledFunction(DecompiledFunction),
     /// An entity that can't be described by any of the other variants
     #[strum_discriminants(default)]
     Other,
@@ -694,6 +714,10 @@ pub enum EntityMetadataRequest {
     Flag(Flag),
     /// An occurence or incident
     Incident(IncidentRequest),
+    /// A compiled function
+    CompiledFunction(CompiledFunction),
+    /// A decompild function
+    DecompiledFunction(DecompiledFunction),
     /// An entity that can't be described by any of the other variants
     Other,
 }
@@ -721,6 +745,8 @@ impl EntityMetadataRequest {
             EntityMetadataRequest::SigmaRule(rule) => rule.add_to_form(form),
             EntityMetadataRequest::Flag(flag) => flag.add_to_form(form),
             EntityMetadataRequest::Incident(incident) => incident.add_to_form(form),
+            EntityMetadataRequest::CompiledFunction(func) => func.add_to_form(form),
+            EntityMetadataRequest::DecompiledFunction(decomp) => decomp.add_to_form(form),
             // just set our kind to other
             EntityMetadataRequest::Other => Ok(form.text("kind", EntityKinds::Other.as_str())),
         }
@@ -740,6 +766,8 @@ impl EntityMetadataRequest {
             EntityMetadataRequest::SigmaRule(_) => EntityKinds::SigmaRule,
             EntityMetadataRequest::Flag(_) => EntityKinds::Flag,
             EntityMetadataRequest::Incident(_) => EntityKinds::Incident,
+            EntityMetadataRequest::CompiledFunction(_) => EntityKinds::CompiledFunction,
+            EntityMetadataRequest::DecompiledFunction(_) => EntityKinds::DecompiledFunction,
             EntityMetadataRequest::Other => EntityKinds::Other,
         }
     }
@@ -775,6 +803,8 @@ impl EntityMetadataRequest {
             Self::NetworkConnection(conn) => Ok(Some(serde_json::to_string(conn)?)),
             Self::Flag(flag) => Ok(Some(serde_json::to_string(flag)?)),
             Self::Incident(incident) => Ok(Some(serde_json::to_string(incident)?)),
+            Self::CompiledFunction(func) => Ok(Some(serde_json::to_string(func)?)),
+            Self::DecompiledFunction(decomp) => Ok(Some(serde_json::to_string(decomp)?)),
             Self::WindowsProcessTree | Self::SigmaRule(_) | Self::Other => Ok(None),
         }
     }
@@ -831,6 +861,13 @@ pub enum IdentifyingEntityInfo<'a> {
         confidence: Confidence,
         reasoning: &'a String,
     },
+    /// A compiled function
+    CompiledFunction {
+        address: u64,
+        disassembly: &'a Vec<CompiledInstruction>,
+    },
+    /// A decompiled function
+    DecompiledFunction { address: u64, content: &'a String },
     /// An entity that cannot be accurately/usefully identified to prevent duplicates
     Unidentifiable,
 }
@@ -856,6 +893,14 @@ impl<'a> From<&'a EntityMetadata> for IdentifyingEntityInfo<'a> {
                 suspicion: flag.suspicion,
                 confidence: flag.confidence,
                 reasoning: &flag.reasoning,
+            },
+            EntityMetadata::CompiledFunction(func) => Self::CompiledFunction {
+                address: func.address,
+                disassembly: &func.disassembly,
+            },
+            EntityMetadata::DecompiledFunction(decomp) => Self::DecompiledFunction {
+                address: decomp.address,
+                content: &decomp.content,
             },
             // These entities have no useful identifying info
             EntityMetadata::Device(_)
@@ -889,6 +934,14 @@ impl<'a> From<&'a EntityMetadataRequest> for IdentifyingEntityInfo<'a> {
                 confidence: flag.confidence,
                 reasoning: &flag.reasoning,
             },
+            EntityMetadataRequest::CompiledFunction(func) => Self::CompiledFunction {
+                address: func.address,
+                disassembly: &func.disassembly,
+            },
+            EntityMetadataRequest::DecompiledFunction(decomp) => Self::DecompiledFunction {
+                address: decomp.address,
+                content: &decomp.content,
+            },
             // These entities have no useful identifying info
             EntityMetadataRequest::Device(_)
             | EntityMetadataRequest::Vendor(_)
@@ -913,6 +966,8 @@ impl EntityKinds {
         match self {
             Self::WindowsProcess => Some(SigmaRuleAppliesTo::WindowsProcesses),
             Self::NetworkConnection => Some(SigmaRuleAppliesTo::NetworkConnections),
+            Self::CompiledFunction => Some(SigmaRuleAppliesTo::CompiledFunctions),
+            Self::DecompiledFunction => Some(SigmaRuleAppliesTo::DecompiledFunctions),
             // all other entity kinds cannot be scanned with sigma rules
             Self::Device
             | Self::Vendor
@@ -945,6 +1000,8 @@ impl EntityKinds {
             | Self::SigmaRule
             | Self::Flag
             | Self::Incident
+            | Self::CompiledFunction
+            | Self::DecompiledFunction
             | Self::Other => &[],
         }
     }
@@ -956,6 +1013,8 @@ impl From<SigmaRuleAppliesTo> for EntityKinds {
         match applies_to {
             SigmaRuleAppliesTo::WindowsProcesses => EntityKinds::WindowsProcess,
             SigmaRuleAppliesTo::NetworkConnections => EntityKinds::NetworkConnection,
+            SigmaRuleAppliesTo::CompiledFunctions => EntityKinds::CompiledFunction,
+            SigmaRuleAppliesTo::DecompiledFunctions => EntityKinds::DecompiledFunction,
         }
     }
 }
@@ -1072,6 +1131,8 @@ impl EntityRequest {
             | EntityMetadataRequest::SigmaRule(_)
             | EntityMetadataRequest::Flag(_)
             | EntityMetadataRequest::Incident(_)
+            | EntityMetadataRequest::CompiledFunction(_)
+            | EntityMetadataRequest::DecompiledFunction(_)
             | EntityMetadataRequest::Other => None,
         }
     }
