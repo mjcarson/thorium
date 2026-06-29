@@ -76,7 +76,7 @@ pub fn build(
     // add any aliases for this user
     for (provider, alias) in &cast.aliases {
         // build the key to this providers alias map
-        let alias_key = super::keys::oauth::alias_to_username(provider, shared);
+        let alias_key = UserKeys::alias_to_username(provider, shared);
         // add this alias to our alias map
         pipe.cmd("hsetnx").arg(alias_key).arg(alias).arg(&cast.username);
     }
@@ -400,6 +400,146 @@ pub async fn get_username_for_email(
     Ok(username)
 }
 
+/// Save an alias to username mapping for an auth provider
+///
+/// This is auth-provider agnostic; both OAuth providers and LDAP use it to record
+/// that an external alias maps to a Thorium username.
+///
+/// # Arguments
+///
+/// * `provider` - The provider to save this alias for
+/// * `alias` - The alias to save
+/// * `user` - The user we are saving an alias for
+/// * `shared` - Shared Thorium objects
+#[rustfmt::skip]
+#[instrument(name = "db::users::save_alias_mapping", skip(user, shared), fields(user = &user.username), err(Debug))]
+pub async fn save_alias_mapping(
+    provider: &str,
+    alias: &str,
+    user: &User,
+    shared: &Shared,
+) -> Result<(), ApiError> {
+    // get the key to store alias to username mapping
+    let key = UserKeys::alias_to_username(provider, shared);
+    // save this alias to username mapping
+    let redis_result = redis::cmd("hsetnx").arg(key).arg(alias).arg(&user.username)
+        .exec_async(conn!(shared))
+        .await;
+    // if we ran into an error then just return a 401 and log this error internally
+    // this is done to prevent any attacker from forcing alias collisions to enumerate
+    // user aliases. This should be impossible unless the attacker already controls
+    // the auth provider but its better to be defensive.
+    match redis_result {
+        Ok(()) => Ok(()),
+        // saving this alias mapping ran into a problem
+        Err(error) => {
+            // log this error interanally
+            event!(Level::ERROR, error=error.to_string());
+            // return a 401 no matter what the error was
+            unauthorized!()
+        },
+    }
+}
+
+/// Get a username for an auth provider alias if it exists
+///
+/// # Arguments
+///
+/// * `provider` - The provider this alias is for
+/// * `alias` - The alias to use when getting a username
+/// * `shared` - Shared Thorium objects
+#[rustfmt::skip]
+#[instrument(name = "db::users::get_username_by_alias", skip(shared), err(Debug))]
+pub async fn get_username_by_alias(
+    provider: &str,
+    alias: &str,
+    shared: &Shared,
+) -> Result<Option<String>, ApiError> {
+    // get the key to this providers alias to username mapping
+    let key = UserKeys::alias_to_username(provider, shared);
+    // get the username tied to this alias
+    let maybe_username: Option<String> = redis::cmd("hget").arg(key).arg(alias)
+        .query_async(conn!(shared))
+        .await?;
+    Ok(maybe_username)
+}
+
+/// Save an account-link token and the alias it is tied to
+///
+/// This is auth-provider agnostic and is used when linking a new provider alias to
+/// an existing account via an emailed confirmation link.
+///
+/// # Arguments
+///
+/// * `provider` - The provider this link is for
+/// * `username` - The user that we want to link a providers account too
+/// * `token` - The link verification token for this new auth link
+/// * `alias` - The alias to link to this user on confirmation
+/// * `shared` - Shared Thorium objects
+#[rustfmt::skip]
+#[instrument(name = "db::users::save_link_token", skip(token, shared), err(Debug))]
+pub async fn save_link_token(
+    provider: &str,
+    username: &str,
+    token: &str,
+    alias: &str,
+    shared: &Shared,
+) -> Result<(), ApiError> {
+    // build the key to this link tokens alias
+    let key = UserKeys::link_token(provider, username, token, shared);
+    // get how long this account link should be valid for
+    let expire = shared.config.thorium.auth.oauth.as_ref()
+        .map(|conf| conf.link_expire)
+        .unwrap_or(crate::conf::default_oauth_link_expire());
+    // save this link token to alias mapping
+    let redis_result = redis::cmd("set").arg(key).arg(alias).arg("NX").arg("EX").arg(expire)
+        .exec_async(conn!(shared))
+        .await;
+    // if we ran into an error then just return a 401 and log this error internally
+    // this is done to prevent any attacker from forcing alias collisions to enumerate
+    // link tokens. This should be impossible unless the attacker already controls
+    // the auth provider but its better to be defensive.
+    match redis_result {
+        Ok(()) => Ok(()),
+        // saving this link token ran into a problem
+        Err(error) => {
+            // log this error interanally
+            event!(Level::ERROR, error=error.to_string());
+            // return a 401 no matter what the error was
+            unauthorized!()
+        },
+    }
+}
+
+/// Get and consume an account-link token by token
+///
+/// # Arguments
+///
+/// * `provider` - The provider this link token is for
+/// * `username` - The user that we want to link a providers account too
+/// * `token` - The link token to the account link to load
+/// * `shared` - Shared Thorium objects
+#[rustfmt::skip]
+#[instrument(name = "db::users::consume_link_token", skip(token, shared), err(Debug))]
+pub async fn consume_link_token(
+    provider: &str,
+    username: &str,
+    token: &str,
+    shared: &Shared,
+) -> Result<String, ApiError> {
+    // build the key to this link tokens alias
+    let key = UserKeys::link_token(provider, username, token, shared);
+    // get the alias for this link token
+    let maybe_session: Option<String> = redis::cmd("getdel").arg(key)
+        .query_async(conn!(shared))
+        .await?;
+    // if this alias wasn't found then return a 401
+    match maybe_session {
+        Some(alias) => Ok(alias),
+        None => unauthorized!(),
+    }
+}
+
 /// Saves a users data in Redis
 ///
 /// # Arguments
@@ -442,7 +582,7 @@ pub async fn save(user: &User, shared: &Shared) -> Result<(), ApiError> {
     // add any aliases for this user
     for (provider, alias) in &user.aliases {
         // build the key to this providers alias map
-        let alias_key = super::keys::oauth::alias_to_username(provider, shared);
+        let alias_key = UserKeys::alias_to_username(provider, shared);
         // add this alias to our alias map
         pipe.cmd("hset").arg(alias_key).arg(alias).arg(&user.username);
     }
@@ -560,7 +700,7 @@ pub fn build_delete(
     // remove any aliases for this user
     for (provider, alias) in &user.aliases {
         // build the key to this providers alias map
-        let alias_key = super::keys::oauth::alias_to_username(provider, shared);
+        let alias_key = UserKeys::alias_to_username(provider, shared);
         // remove this alias from our alias map
         pipe.cmd("hdel").arg(alias_key).arg(alias).arg(&user.username);
     }

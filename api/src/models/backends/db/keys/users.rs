@@ -114,4 +114,42 @@ impl UserKeys {
     pub fn analysts(shared: &Shared) -> String {
         format!("{ns}:analysts", ns = shared.config.thorium.namespace)
     }
+
+    /// The key to map an auth provider's aliases to usernames
+    ///
+    /// This is auth-provider agnostic: both OAuth providers and LDAP store their
+    /// alias -> username mappings here keyed by their provider name.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - The name of the provider to map an alias to a username for
+    /// * `shared` - Shared Thorium objects
+    pub fn alias_to_username(provider: &str, shared: &Shared) -> String {
+        format!(
+            "{ns}:alias_to_user:{provider}",
+            ns = shared.config.thorium.namespace,
+            provider = provider,
+        )
+    }
+
+    /// The key to an account-link verification token
+    ///
+    /// This is auth-provider agnostic and is used when linking a new auth provider
+    /// alias to an existing account via an emailed confirmation link.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - The provider this link token is for
+    /// * `username` - The user who wants to link a new provider alias to their account
+    /// * `token` - The link verification token for this new auth link
+    /// * `shared` - Shared Thorium objects
+    pub fn link_token(provider: &str, username: &str, token: &str, shared: &Shared) -> String {
+        format!(
+            "{ns}:link_token:{provider}:{username}:{token}",
+            ns = shared.config.thorium.namespace,
+            provider = provider,
+            username = username,
+            token = token,
+        )
+    }
 }

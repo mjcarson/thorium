@@ -16,6 +16,7 @@ use rand::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::str;
 use tracing::{Level, Span, event, instrument};
+use url::Url;
 
 use super::db;
 use crate::conf::Ldap;
@@ -31,6 +32,13 @@ use crate::{bad, conflict, is_admin, ldap, unauthorized, unavailable, update};
 /// The header name for our secret key
 static SECRET_KEY_HEADER: HeaderName = HeaderName::from_static("secret-key");
 static SECRET_KEY_HEADER_REF: &HeaderName = &SECRET_KEY_HEADER;
+
+/// The reserved alias provider name used for LDAP based auth
+///
+/// LDAP participates in the same alias system as OAuth providers; this is the provider
+/// key its aliases are stored under. It is reserved so an OAuth provider cannot reuse
+/// the same name and collide with LDAP aliases.
+pub const LDAP_PROVIDER: &str = "ldap";
 
 /// Return unauthorized if a function return an error
 macro_rules! check_unauth {
@@ -223,8 +231,29 @@ async fn basic_auth_ldap(
     err(Debug)
 )]
 async fn password_auth(username: &str, password: &str, shared: &Shared) -> Result<User, ApiError> {
-    // get the user doc we are authenticating against
-    let mut possible = db::users::get(username, shared).await?;
+    // get the user doc we are authenticating against, supporting ldap aliases for
+    // accounts whose ldap identity differs from their Thorium username (e.g. an
+    // OAuth-registered account that has linked ldap based auth)
+    let mut possible = match db::users::get(username, shared).await {
+        // we found a user directly by the provided name
+        Ok(user) => user,
+        // no user has this name directly so try to resolve it as an ldap alias
+        Err(error) => {
+            // only attempt alias resolution when ldap is configured
+            if shared.config.thorium.auth.ldap.is_some() {
+                // try to resolve this name as an ldap alias to a Thorium username
+                match db::users::get_username_by_alias(LDAP_PROVIDER, username, shared).await? {
+                    // load the account this ldap identity is linked to
+                    Some(resolved) => db::users::get(&resolved, shared).await?,
+                    // this name is neither a user nor a linked ldap alias
+                    None => return Err(error),
+                }
+            } else {
+                // ldap is not configured so there are no aliases to resolve
+                return Err(error);
+            }
+        }
+    };
     event!(
         Level::INFO,
         user = &possible.username,
@@ -232,14 +261,16 @@ async fn password_auth(username: &str, password: &str, shared: &Shared) -> Resul
     );
     // try to authenticate against redis or ldap based on if a password is set
     if let Some(password_hash) = &possible.password {
-        // a password is set use basic auth
-        basic_auth_redis(username, password, password_hash, shared).await?;
+        // a password is set so use basic auth against the resolved user
+        basic_auth_redis(&possible.username, password, password_hash, shared).await?;
     } else {
-        // no password was set so use ldap
+        // no password was set so bind to ldap with the provided ldap identity (which
+        // is the alias for an account that linked ldap, or the username for a pure
+        // ldap user)
         let mut ldap = basic_auth_ldap(username, password, shared).await?;
         // if no unix info is set then try to get it and save it
         if possible.unix.is_none() {
-            // get this users unix info from ldap
+            // get this users unix info from ldap using their ldap identity
             let unix = get_unix_info(
                 username,
                 shared.config.thorium.auth.ldap.as_ref().unwrap(),
@@ -558,6 +589,46 @@ impl UserSettingsUpdate {
     }
 }
 
+/// The outcome of an LDAP registration attempt for a given identity and email
+#[derive(Debug, PartialEq, Eq)]
+enum LdapRegOutcome {
+    /// Create a brand new pure-LDAP user
+    Create,
+    /// The email belongs to an existing account; link this LDAP alias to it
+    Link {
+        /// The username of the existing account to link too
+        existing: String,
+    },
+    /// This LDAP identity is already linked to an account
+    AliasTaken,
+}
+
+/// Decide what an LDAP registration should do based on existing alias/email owners
+///
+/// This is the pure decision logic behind LDAP based account linking so it can be unit
+/// tested without a live LDAP server or Redis.
+///
+/// # Arguments
+///
+/// * `alias_owner` - The account already linked to this LDAP identity if any
+/// * `email_owner` - The account that already owns this email if any
+fn ldap_registration_outcome(
+    alias_owner: Option<String>,
+    email_owner: Option<String>,
+) -> LdapRegOutcome {
+    // if this ldap identity is already linked then we can neither link nor create
+    if alias_owner.is_some() {
+        return LdapRegOutcome::AliasTaken;
+    }
+    // otherwise force linking if the email is taken or create a brand new user
+    match email_owner {
+        // this email already belongs to an account so force linking to it
+        Some(existing) => LdapRegOutcome::Link { existing },
+        // this is a brand new pure-ldap user
+        None => LdapRegOutcome::Create,
+    }
+}
+
 impl User {
     /// Creates a new user in the backend
     ///
@@ -598,14 +669,52 @@ impl User {
         let (password, unix) = match (&shared.config.thorium.auth.ldap, req.local) {
             // ldap config is setup and a local account was not requested
             (Some(conf), false) => {
-                // authenticate against ldap
+                // authenticate against ldap to prove ownership of this ldap identity
                 let mut ldap = basic_auth_ldap(&req.username, &req.password, shared).await?;
-                // get unix info for this user
-                let unix = get_unix_info(&req.username, conf, &mut ldap).await?;
-                // unbind our ldap socket
-                ldap.unbind().await?;
-                // sync this users data
-                (None, Some(unix))
+                // look up who, if anyone, already owns this ldap identity and this email
+                let alias_owner =
+                    db::users::get_username_by_alias(LDAP_PROVIDER, &req.username, shared).await?;
+                let email_owner = db::users::get_username_for_email(&req.email, shared).await?;
+                // decide what to do based on existing alias/email ownership
+                match ldap_registration_outcome(alias_owner, email_owner) {
+                    // this ldap identity is already linked to an account
+                    LdapRegOutcome::AliasTaken => {
+                        // unbind our ldap socket before returning
+                        ldap.unbind().await?;
+                        // tell the user this ldap identity is already in use
+                        return conflict!(
+                            "This LDAP identity is already linked to an account".to_owned()
+                        );
+                    }
+                    // this email already belongs to an account so force account linking
+                    LdapRegOutcome::Link { existing } => {
+                        // send an account link email to the existing account so they can
+                        // confirm linking this ldap identity to it
+                        User::send_alias_link_email(
+                            LDAP_PROVIDER,
+                            &existing,
+                            &req.username,
+                            &req.email,
+                            shared,
+                        )
+                        .await?;
+                        // unbind our ldap socket before returning
+                        ldap.unbind().await?;
+                        // tell the user to check their email to finish linking
+                        return conflict!(
+                            "A user with this email already exists. Please check your email for an account link email!".to_owned()
+                        );
+                    }
+                    // this is a brand new pure-ldap user
+                    LdapRegOutcome::Create => {
+                        // get unix info for this user
+                        let unix = get_unix_info(&req.username, conf, &mut ldap).await?;
+                        // unbind our ldap socket
+                        ldap.unbind().await?;
+                        // pure ldap users have no password and no alias
+                        (None, Some(unix))
+                    }
+                }
             }
             // ldap is not configured or a local account was requested
             (_, _) => {
@@ -1146,6 +1255,224 @@ impl User {
             bad!("LDAP is not configured!".to_owned())
         }
     }
+
+    /// Send an account-link confirmation email to an existing user
+    ///
+    /// This is auth-provider agnostic and backs both OAuth and LDAP account linking.
+    /// It saves a link token tied to the given alias and emails the existing account a
+    /// confirmation link. Clicking that link (the `/oauth/{provider}/link` route)
+    /// attaches the alias to their account.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - The provider we are trying to link this user too
+    /// * `username` - The username of the existing account to link
+    /// * `alias` - The provider alias to link to this user on confirmation
+    /// * `email` - The email address to send the confirmation link to
+    /// * `shared` - Shared Thorium objects
+    #[instrument(name = "User::send_alias_link_email", skip(shared), err(Debug))]
+    pub async fn send_alias_link_email(
+        provider: &str,
+        username: &str,
+        alias: &str,
+        email: &str,
+        shared: &Shared,
+    ) -> Result<(), ApiError> {
+        // get an email client or error since account linking requires email verification
+        let client = match &shared.email {
+            Some(client) => client,
+            None => return unavailable!("Email is not configured!".to_owned()),
+        };
+        // resolve the base url to embed in our link, preferring the oauth redirect base
+        let oauth_base = shared
+            .config
+            .thorium
+            .auth
+            .oauth
+            .as_ref()
+            .map(|oauth| oauth.redirect_base.as_str());
+        let email_base = shared
+            .config
+            .thorium
+            .auth
+            .email
+            .as_ref()
+            .map(|email| email.base_url.as_str());
+        // fall back to the email base url so ldap-only deployments still work
+        let base = match resolve_link_base(oauth_base, email_base) {
+            Some(base) => base,
+            None => {
+                return unavailable!(
+                    "No base URL is configured for account link emails!".to_owned()
+                );
+            }
+        };
+        // build an account link token
+        let link_token = token!();
+        // save our link token and the alias for this user
+        db::users::save_link_token(provider, username, &link_token, alias, shared).await?;
+        // build our link to the new provider account link to embed in the email
+        let link = alias_link_url(base, provider, username, &link_token)?;
+        // build the subject for the account link email
+        let subject = format!("Link Thorium account to new auth provider: {provider}");
+        // get how long this account link is valid for in seconds
+        let expire = shared
+            .config
+            .thorium
+            .auth
+            .oauth
+            .as_ref()
+            .map(|oauth| oauth.link_expire)
+            .unwrap_or(crate::conf::default_oauth_link_expire());
+        // build a human readable time to live for this link
+        let ttl = humanize_ttl(expire);
+        // build a body with our account link email
+        let body = format!(
+            "If you would like to link your Thorium account to the {provider} auth provider then click on the following link in the next {ttl}:\n\n{link}"
+        );
+        // send our account link email
+        client.send(email, subject, body).await
+    }
+
+    /// Link a new provider alias to an existing account using a link token
+    ///
+    /// This is auth-provider agnostic and backs the `/oauth/{provider}/link` route for
+    /// both OAuth and LDAP. The emailed link proves ownership of the account's email so
+    /// the account is also marked verified on success.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - The provider we are linking this account too
+    /// * `username` - The username of the account to add the alias too
+    /// * `token` - The link token from the confirmation email
+    /// * `shared` - Shared Thorium objects
+    #[instrument(name = "User::link_alias", skip(token, shared), err(Debug))]
+    pub async fn link_alias(
+        provider: &str,
+        username: &str,
+        token: &str,
+        shared: &Shared,
+    ) -> Result<(), ApiError> {
+        // get this links alias if it exists
+        let alias = db::users::consume_link_token(provider, username, token, shared).await?;
+        // make sure this alias hasn't been claimed as a username since the link was sent
+        if User::exists(&alias, shared).await? {
+            // a user already exists with this alias as their username
+            return conflict!(format!("{alias} is already a Thorium user"));
+        }
+        // make sure this alias isn't already linked to a different account
+        if let Some(owner) = db::users::get_username_by_alias(provider, &alias, shared).await? {
+            // only error if its linked to a different user
+            if owner != username {
+                return conflict!(format!(
+                    "This {provider} identity is already linked to an account"
+                ));
+            }
+        }
+        // get the user we want to add an alias too
+        let mut user = User::force_get(username, shared).await?;
+        // add this alias to this user
+        user.aliases.insert(provider.to_owned(), alias);
+        // save this users info
+        db::users::save(&user, shared).await?;
+        // since we got this link through email we can also verify their email if its not yet verified
+        if !user.verified {
+            // clear this users verification token and set them as verified in redis
+            db::users::clear_verification_token(username, shared).await?;
+        }
+        Ok(())
+    }
+
+    /// Revoke an active account-link attempt
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - The provider we are revoking an attempted account link for
+    /// * `username` - The username the link attempt was for
+    /// * `token` - The link token to revoke
+    /// * `shared` - Shared Thorium objects
+    #[instrument(name = "User::revoke_alias_link", skip(token, shared), err(Debug))]
+    pub async fn revoke_alias_link(
+        provider: &str,
+        username: &str,
+        token: &str,
+        shared: &Shared,
+    ) -> Result<(), ApiError> {
+        // consume and forget this account link token
+        db::users::consume_link_token(provider, username, token, shared).await?;
+        Ok(())
+    }
+}
+
+/// Resolve the base URL to embed in an account-link email
+///
+/// Prefers the OAuth redirect base (the UI base shared with the OAuth flow) and falls
+/// back to the email verification base URL so LDAP-only deployments still work.
+///
+/// # Arguments
+///
+/// * `oauth_redirect_base` - The OAuth redirect base url if OAuth is configured
+/// * `email_base_url` - The email verification base url if email is configured
+fn resolve_link_base<'a>(
+    oauth_redirect_base: Option<&'a str>,
+    email_base_url: Option<&'a str>,
+) -> Option<&'a str> {
+    // prefer the oauth redirect base then fall back to the email base url
+    oauth_redirect_base.or(email_base_url)
+}
+
+/// Build the account-link URL to embed in a confirmation email
+///
+/// # Arguments
+///
+/// * `base` - The base scheme + domain to build the link against
+/// * `provider` - The provider this link is for
+/// * `username` - The username of the account being linked
+/// * `token` - The link verification token
+fn alias_link_url(
+    base: &str,
+    provider: &str,
+    username: &str,
+    token: &str,
+) -> Result<Url, ApiError> {
+    // build the base url for linking accounts
+    let endpoint = format!("{base}/oauth/{provider}/link");
+    // build our link with the username and token as query params
+    let link = Url::parse_with_params(&endpoint, &[("username", username), ("token", token)])?;
+    Ok(link)
+}
+
+/// Format a number of seconds into a human readable, spaced duration
+///
+/// humantime renders e.g. "1day", so insert a space between each value and its unit so
+/// it reads "1 day".
+///
+/// # Arguments
+///
+/// * `secs` - The number of seconds to format
+fn humanize_ttl(secs: u64) -> String {
+    // render the raw humantime duration
+    let raw = humantime::format_duration(std::time::Duration::from_secs(secs)).to_string();
+    // build a human time formatted string with spaces
+    let mut ttl = String::with_capacity(raw.len() + 1);
+    // keep track of the character before our current one
+    let mut prev: Option<char> = None;
+    // step over each character and add spaces when needed
+    for chr in raw.chars() {
+        // we will never add a space on the first digit
+        if let Some(prev) = prev {
+            // check if our last character was a digit and the current one is not
+            if prev.is_ascii_digit() && chr.is_ascii_alphabetic() {
+                // add a space to seperate the amount from the time visually
+                ttl.push(' ');
+            }
+        }
+        // add the next character
+        ttl.push(chr);
+        // keep track of our previous char
+        prev = Some(chr);
+    }
+    ttl
 }
 
 /// Base64 decode a string
@@ -1275,5 +1602,89 @@ where
         }
         // we failed to extract our auth info from our headers
         Err(AuthReject)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        LdapRegOutcome, alias_link_url, humanize_ttl, ldap_registration_outcome, resolve_link_base,
+    };
+
+    #[test]
+    fn ldap_outcome_creates_when_nothing_taken() {
+        // no existing alias or email owner means we create a brand new pure-ldap user
+        assert_eq!(
+            ldap_registration_outcome(None, None),
+            LdapRegOutcome::Create
+        );
+    }
+
+    #[test]
+    fn ldap_outcome_links_when_email_taken() {
+        // an email already owned by an account forces linking the ldap alias to it
+        assert_eq!(
+            ldap_registration_outcome(None, Some("john".to_owned())),
+            LdapRegOutcome::Link {
+                existing: "john".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn ldap_outcome_alias_taken_short_circuits() {
+        // an already linked ldap identity takes precedence even when an email matches
+        assert_eq!(
+            ldap_registration_outcome(Some("john".to_owned()), None),
+            LdapRegOutcome::AliasTaken
+        );
+        assert_eq!(
+            ldap_registration_outcome(Some("john".to_owned()), Some("jane".to_owned())),
+            LdapRegOutcome::AliasTaken
+        );
+    }
+
+    #[test]
+    fn link_base_prefers_oauth_then_falls_back_to_email() {
+        // prefer the oauth redirect base when it is configured
+        assert_eq!(
+            resolve_link_base(Some("https://oauth"), Some("https://email")),
+            Some("https://oauth")
+        );
+        // fall back to the email base url when oauth is not configured
+        assert_eq!(
+            resolve_link_base(None, Some("https://email")),
+            Some("https://email")
+        );
+        // nothing configured yields no base url
+        assert_eq!(resolve_link_base(None, None), None);
+    }
+
+    #[test]
+    fn alias_link_url_targets_the_link_route() {
+        // build a link against an api base url for the ldap provider
+        let url = alias_link_url("https://thorium.example.com/api", "ldap", "john", "tok123")
+            .expect("failed to build alias link url");
+        // the path should target the providers link route
+        assert_eq!(url.path(), "/api/oauth/ldap/link");
+        // the username and token should be present as query params
+        let params: std::collections::HashMap<String, String> =
+            url.query_pairs().into_owned().collect();
+        assert_eq!(params.get("username").map(String::as_str), Some("john"));
+        assert_eq!(params.get("token").map(String::as_str), Some("tok123"));
+    }
+
+    #[test]
+    fn humanize_ttl_separates_amount_and_unit() {
+        // a single day renders with a space between the amount and unit
+        assert_eq!(humanize_ttl(86_400), "1 day");
+        // no digit should be immediately followed by a letter in the output
+        let formatted = humanize_ttl(90);
+        for window in formatted.as_bytes().windows(2) {
+            assert!(
+                !(window[0].is_ascii_digit() && window[1].is_ascii_alphabetic()),
+                "found unspaced amount/unit in {formatted:?}"
+            );
+        }
     }
 }

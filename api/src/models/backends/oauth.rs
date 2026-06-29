@@ -20,7 +20,7 @@ use crate::models::{
 };
 use crate::utils::shared::OAuthClient;
 use crate::utils::{ApiError, Shared};
-use crate::{bad, conflict, token, token_expire, unauthorized, unavailable};
+use crate::{bad, conflict, token, token_expire, unauthorized};
 
 /// An OAuth user creation session
 #[derive(Serialize, Deserialize, Debug)]
@@ -67,7 +67,7 @@ impl OAuthedMaybeUser {
         shared: &Shared,
     ) -> Result<OAuthedMaybeUser, ApiError> {
         // get this users name by alias if it exists
-        match db::oauth::get_username_by_alias(provider, alias, shared).await? {
+        match db::users::get_username_by_alias(provider, alias, shared).await? {
             // this user should already exist so get our user data
             Some(username) => Ok(Self::User(User::force_get(&username, shared).await?)),
             None => {
@@ -212,72 +212,6 @@ impl OAuthClient {
 }
 
 impl OAuthUserCreate {
-    /// Send an existing user an oauth provider link email
-    ///
-    /// # Arguments
-    ///
-    /// * `provider` - The provider we are trying to link this user too
-    /// * `username` - The username for the user to link
-    /// * `alias` - The alias for this user
-    /// * `shared` - Shared Thorium objects
-    pub async fn send_link_email(
-        &self,
-        provider: &str,
-        username: &str,
-        alias: &str,
-        shared: &Shared,
-    ) -> Result<(), ApiError> {
-        // get our oauth config or return an error
-        let oauth = match &shared.config.thorium.auth.oauth {
-            Some(oauth) => oauth,
-            None => return unavailable!("OAuth is not configured!".to_owned()),
-        };
-        // get an email client
-        let client = match &shared.email {
-            Some(client) => client,
-            None => return unavailable!("Email is not configured!".to_owned()),
-        };
-        // build a oauth link token
-        let link_token = token!();
-        // save our link token and the alias for this user
-        db::oauth::save_link_token(provider, username, &link_token, alias, shared).await?;
-        // build the base url for linking accounts
-        let base = format!("{}/oauth/{provider}/link", oauth.redirect_base);
-        // build our link to new OAuth provider link to embed in the email
-        let link =
-            Url::parse_with_params(&base, &[("username", username), ("token", &link_token)])?;
-        // build the subject for email verification email
-        let subject = format!("Link Thorium account to new OAuth provider: {provider}");
-        // get the expiration of this link in a human readable format; humantime renders e.g. "1day",
-        // so insert a space between each value and its unit so it reads "1 day"
-        let raw = humantime::format_duration(std::time::Duration::from_secs(oauth.link_expire)).to_string();
-        // build a human time formatted string with spaces
-        let mut ttl = String::with_capacity(raw.len() + 1);
-        // keep track the character before our current one
-        let mut prev: Option<char> = None;
-        // step over each character and add spaces when needed
-        for chr in raw.chars() {
-            // we will never add a space on the first digit
-            if let Some(prev) = prev {
-                // check if our last character was a digit and the current one is not
-                if prev.is_ascii_digit() && chr.is_ascii_alphabetic() {
-                    // add a space to seperate the amount from the time visually
-                    ttl.push(' ');
-                }
-            }
-            // add the next character
-            ttl.push(chr);
-            // keep track of our previous char
-            prev = Some(chr);
-        }
-        // build a body with our verification email
-        let body = format!(
-            "If you would like to link your Thorium account to the {provider} OAuth provider then click on the following link in the next {ttl}:\n\n{link}"
-        );
-        // send our verification email
-        client.send(&self.email, subject, body).await
-    }
-
     /// Register a new user from an OAuth registration session
     ///
     /// # Arguments
@@ -305,8 +239,8 @@ impl OAuthUserCreate {
                 // return a conflict error telling the user this email is already in use
                 return conflict!("A different user with this email already exists! Emails must be unique for each user.".to_owned());
             }
-            // create and send an oauth provider link email to this user
-            self.send_link_email(provider, &username, &session.alias, shared)
+            // create and send an account link email to this existing user
+            User::send_alias_link_email(provider, &username, &session.alias, &self.email, shared)
                 .await?;
             // return a 409 and tell the user they already have an account
             return conflict!("A user with this email already exists. Please check your email for a account link email!".to_owned());
@@ -361,21 +295,8 @@ impl OAuthLinkParams {
     /// * `provider` - The Oauth provider we are linking this account too
     /// * `shared` - Shared Thorium objects
     pub async fn link(&self, provider: String, shared: &Shared) -> Result<(), ApiError> {
-        // get this links info if it exists
-        let alias =
-            db::oauth::consume_link_token(&provider, &self.username, &self.token, shared).await?;
-        // get the user we want to add an alias too
-        let mut user = User::force_get(&self.username, shared).await?;
-        // add this alias to this user
-        user.aliases.insert(provider, alias);
-        // save this users info
-        db::users::save(&user, shared).await?;
-        // since we got this link through email we can also verify their email if its not yet verified
-        if !user.verified {
-            // clear this users verification token and set them as verified in redis
-            db::users::clear_verification_token(&self.username, shared).await?;
-        }
-        Ok(())
+        // delegate to the generic account link helper
+        User::link_alias(&provider, &self.username, &self.token, shared).await
     }
 
     /// Revoke an active account linking attempt
@@ -385,9 +306,8 @@ impl OAuthLinkParams {
     /// * `provider` - The Oauth provider we revoking an attempted account linking for
     /// * `shared` - Shared Thorium objects
     pub async fn revoke(&self, provider: String, shared: &Shared) -> Result<(), ApiError> {
-        // consume and forget this account linking token
-        db::oauth::consume_link_token(&provider, &self.username, &self.token, shared).await?;
-        Ok(())
+        // delegate to the generic account link revoke helper
+        User::revoke_alias_link(&provider, &self.username, &self.token, shared).await
     }
 }
 

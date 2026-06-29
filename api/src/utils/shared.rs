@@ -266,6 +266,14 @@ async fn setup_oauth_providers(config: &Conf) -> HashMap<String, OAuthClient> {
             let mut provider_map = HashMap::with_capacity(oauth_conf.providers.len());
             // step over the oauth providers and build clients for them
             for (name, provider_conf) in &oauth_conf.providers {
+                // reject the reserved ldap provider name so oauth aliases cannot
+                // collide with ldap aliases in the shared alias map
+                if name == crate::models::backends::users::LDAP_PROVIDER {
+                    panic!(
+                        "'{}' is a reserved auth provider name and cannot be used as an OAuth provider",
+                        crate::models::backends::users::LDAP_PROVIDER
+                    );
+                }
                 // build a client for this provider
                 let client = OAuthClient::new(name, &oauth_conf.redirect_base, provider_conf)
                     .await
