@@ -231,42 +231,30 @@ async fn basic_auth_ldap(
     err(Debug)
 )]
 async fn password_auth(username: &str, password: &str, shared: &Shared) -> Result<User, ApiError> {
-    // get the user doc we are authenticating against, supporting ldap aliases for
-    // accounts whose ldap identity differs from their Thorium username (e.g. an
-    // OAuth-registered account that has linked ldap based auth)
-    let mut possible = match db::users::get(username, shared).await {
-        // we found a user directly by the provided name
-        Ok(user) => user,
-        // no user has this name directly so try to resolve it as an ldap alias
-        Err(error) => {
-            // only attempt alias resolution when ldap is configured
-            if shared.config.thorium.auth.ldap.is_some() {
-                // try to resolve this name as an ldap alias to a Thorium username
-                match db::users::get_username_by_alias(LDAP_PROVIDER, username, shared).await? {
-                    // load the account this ldap identity is linked to
-                    Some(resolved) => db::users::get(&resolved, shared).await?,
-                    // this name is neither a user nor a linked ldap alias
-                    None => return Err(error),
-                }
-            } else {
-                // ldap is not configured so there are no aliases to resolve
-                return Err(error);
-            }
+    // resolve the account we are authenticating against. Non-local accounts (e.g.
+    // ldap) are reached through the ldap alias map; only local (password) accounts are
+    // reached directly by their Thorium username. We keep the provided name separate
+    // from the resolved user since it is the ldap identity we bind with.
+    let (mut possible, ldap_login) = if shared.config.thorium.auth.ldap.is_some() {
+        // try to resolve the provided name as an ldap alias first
+        match db::users::get_username_by_alias(LDAP_PROVIDER, username, shared).await? {
+            // this is an ldap identity so load the account it is linked to
+            Some(resolved) => (db::users::get(&resolved, shared).await?, true),
+            // not an ldap alias so it must be a local account looked up directly
+            None => (db::users::get(username, shared).await?, false),
         }
+    } else {
+        // ldap is not configured so only direct (local) lookups are possible
+        (db::users::get(username, shared).await?, false)
     };
     event!(
         Level::INFO,
         user = &possible.username,
         msg = "Attempting authentication",
     );
-    // try to authenticate against redis or ldap based on if a password is set
-    if let Some(password_hash) = &possible.password {
-        // a password is set so use basic auth against the resolved user
-        basic_auth_redis(&possible.username, password, password_hash, shared).await?;
-    } else {
-        // no password was set so bind to ldap with the provided ldap identity (which
-        // is the alias for an account that linked ldap, or the username for a pure
-        // ldap user)
+    // authenticate using the path that matches how we resolved this account
+    if ldap_login {
+        // bind to ldap with the provided ldap identity to authenticate
         let mut ldap = basic_auth_ldap(username, password, shared).await?;
         // if no unix info is set then try to get it and save it
         if possible.unix.is_none() {
@@ -284,6 +272,14 @@ async fn password_auth(username: &str, password: &str, shared: &Shared) -> Resul
             // save the updated user object to redis
             db::users::save(&possible, shared).await?;
         }
+    } else if let Some(password_hash) = &possible.password {
+        // a local account so authenticate the password against redis
+        basic_auth_redis(&possible.username, password, password_hash, shared).await?;
+    } else {
+        // a non-local account reached directly by username (a legacy ldap account not
+        // yet migrated to the alias system, or an oauth account) cannot authenticate
+        // via basic auth
+        return unauthorized!();
     }
 
     // check if our token is expired and regenerate it if it is
@@ -589,42 +585,33 @@ impl UserSettingsUpdate {
     }
 }
 
-/// The outcome of an LDAP registration attempt for a given identity and email
+/// The outcome of an LDAP registration attempt for a given email
 #[derive(Debug, PartialEq, Eq)]
 enum LdapRegOutcome {
-    /// Create a brand new pure-LDAP user
+    /// Create a brand new LDAP account
     Create,
     /// The email belongs to an existing account; link this LDAP alias to it
     Link {
         /// The username of the existing account to link too
         existing: String,
     },
-    /// This LDAP identity is already linked to an account
-    AliasTaken,
 }
 
-/// Decide what an LDAP registration should do based on existing alias/email owners
+/// Decide what an LDAP registration should do based on the existing email owner
 ///
 /// This is the pure decision logic behind LDAP based account linking so it can be unit
-/// tested without a live LDAP server or Redis.
+/// tested without a live LDAP server or Redis. The alias-taken case is handled by a
+/// separate guard in `User::create` so it is not represented here.
 ///
 /// # Arguments
 ///
-/// * `alias_owner` - The account already linked to this LDAP identity if any
 /// * `email_owner` - The account that already owns this email if any
-fn ldap_registration_outcome(
-    alias_owner: Option<String>,
-    email_owner: Option<String>,
-) -> LdapRegOutcome {
-    // if this ldap identity is already linked then we can neither link nor create
-    if alias_owner.is_some() {
-        return LdapRegOutcome::AliasTaken;
-    }
-    // otherwise force linking if the email is taken or create a brand new user
+fn ldap_registration_outcome(email_owner: Option<String>) -> LdapRegOutcome {
+    // force linking if the email is taken or create a brand new account
     match email_owner {
         // this email already belongs to an account so force linking to it
         Some(existing) => LdapRegOutcome::Link { existing },
-        // this is a brand new pure-ldap user
+        // this is a brand new ldap account
         None => LdapRegOutcome::Create,
     }
 }
@@ -653,6 +640,15 @@ impl User {
         if User::exists(&req.username, shared).await? {
             return conflict!(format!("User {} already exists", req.username));
         }
+        // when ldap is configured reject any account (local or ldap) whose name is
+        // already an ldap alias so it cannot shadow that linked account at login time
+        if shared.config.thorium.auth.ldap.is_some()
+            && db::users::get_username_by_alias(LDAP_PROVIDER, &req.username, shared)
+                .await?
+                .is_some()
+        {
+            return conflict!("This name is already linked to an account".to_owned());
+        }
         // only allow users with the secret key to create admins with this route
         if req.role == UserRole::Admin || req.local {
             // bounce users without the key
@@ -665,27 +661,18 @@ impl User {
                 return unauthorized!();
             }
         }
+        // the aliases this new account will have (populated for non-local providers)
+        let mut aliases = HashMap::default();
         // if ldap is configured then authenticated against ldap and pull unix info
         let (password, unix) = match (&shared.config.thorium.auth.ldap, req.local) {
             // ldap config is setup and a local account was not requested
             (Some(conf), false) => {
                 // authenticate against ldap to prove ownership of this ldap identity
                 let mut ldap = basic_auth_ldap(&req.username, &req.password, shared).await?;
-                // look up who, if anyone, already owns this ldap identity and this email
-                let alias_owner =
-                    db::users::get_username_by_alias(LDAP_PROVIDER, &req.username, shared).await?;
+                // check if this email already belongs to an account
                 let email_owner = db::users::get_username_for_email(&req.email, shared).await?;
-                // decide what to do based on existing alias/email ownership
-                match ldap_registration_outcome(alias_owner, email_owner) {
-                    // this ldap identity is already linked to an account
-                    LdapRegOutcome::AliasTaken => {
-                        // unbind our ldap socket before returning
-                        ldap.unbind().await?;
-                        // tell the user this ldap identity is already in use
-                        return conflict!(
-                            "This LDAP identity is already linked to an account".to_owned()
-                        );
-                    }
+                // decide whether to create a new account or force linking to an existing one
+                match ldap_registration_outcome(email_owner) {
                     // this email already belongs to an account so force account linking
                     LdapRegOutcome::Link { existing } => {
                         // send an account link email to the existing account so they can
@@ -705,13 +692,15 @@ impl User {
                             "A user with this email already exists. Please check your email for an account link email!".to_owned()
                         );
                     }
-                    // this is a brand new pure-ldap user
+                    // this is a brand new ldap account
                     LdapRegOutcome::Create => {
                         // get unix info for this user
                         let unix = get_unix_info(&req.username, conf, &mut ldap).await?;
                         // unbind our ldap socket
                         ldap.unbind().await?;
-                        // pure ldap users have no password and no alias
+                        // record this ldap identity in the alias system for the new account
+                        aliases.insert(LDAP_PROVIDER.to_owned(), req.username.clone());
+                        // ldap accounts have no password
                         (None, Some(unix))
                     }
                 }
@@ -740,7 +729,7 @@ impl User {
             verified: false,
             verification_token: None,
             verification_sent: None,
-            aliases: HashMap::default(),
+            aliases,
         };
         // send a verification email if needed
         match (req.skip_verification, &shared.email) {
@@ -1612,35 +1601,19 @@ mod tests {
     };
 
     #[test]
-    fn ldap_outcome_creates_when_nothing_taken() {
-        // no existing alias or email owner means we create a brand new pure-ldap user
-        assert_eq!(
-            ldap_registration_outcome(None, None),
-            LdapRegOutcome::Create
-        );
+    fn ldap_outcome_creates_when_email_free() {
+        // no existing email owner means we create a brand new ldap account
+        assert_eq!(ldap_registration_outcome(None), LdapRegOutcome::Create);
     }
 
     #[test]
     fn ldap_outcome_links_when_email_taken() {
         // an email already owned by an account forces linking the ldap alias to it
         assert_eq!(
-            ldap_registration_outcome(None, Some("john".to_owned())),
+            ldap_registration_outcome(Some("john".to_owned())),
             LdapRegOutcome::Link {
                 existing: "john".to_owned()
             }
-        );
-    }
-
-    #[test]
-    fn ldap_outcome_alias_taken_short_circuits() {
-        // an already linked ldap identity takes precedence even when an email matches
-        assert_eq!(
-            ldap_registration_outcome(Some("john".to_owned()), None),
-            LdapRegOutcome::AliasTaken
-        );
-        assert_eq!(
-            ldap_registration_outcome(Some("john".to_owned()), Some("jane".to_owned())),
-            LdapRegOutcome::AliasTaken
         );
     }
 
