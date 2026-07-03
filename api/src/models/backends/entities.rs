@@ -466,6 +466,7 @@ impl Entity {
                 update!(conn.source, form.source);
                 update_opt!(conn.source_port, form.source_port);
                 update!(conn.destination, form.destination);
+                update!(conn.destination_port, form.destination_port);
                 update_opt!(conn.state, form.state);
                 update_opt!(conn.pid, form.pid);
                 update_opt!(conn.process, form.process);
@@ -544,6 +545,10 @@ impl Entity {
                 update!(decomp.address, form.function_address);
                 // update our decompilation if needed
                 update!(decomp.content, form.decompilation_content);
+                // add new tools that decompiled this function
+                decomp.tools.append(&mut form.add_tools);
+                // remove any old tools from this function
+                decomp.tools.retain(|tool| !form.remove_tools.contains(tool));
             }
             EntityMetadata::PeSection(section) => {
                 // update any section details that were set in the form
@@ -1518,6 +1523,16 @@ impl EntityMetadataUpdateForm {
             // the sigma rule specific fields
             "sigma_rule" => self.sigma_rule = Some(field.text().await?),
             "score" => self.score = Some(field.text().await?.parse()?),
+            // the flag specific fields
+            "suspicion" => self.suspicion = Some(field.text().await?.parse()?),
+            "confidence" => self.confidence = Some(field.text().await?.parse()?),
+            "content" => self.content = Some(field.text().await?),
+            "reasoning" => self.reasoning = Some(field.text().await?),
+            // the incident specific fields
+            "cover_term" => self.cover_term = Some(field.text().await?),
+            // the function specific fields
+            "function_address" => self.function_address = Some(field.text().await?.parse()?),
+            "decompilation_content" => self.decompilation_content = Some(field.text().await?),
             // this could be a list field
             maybe_list => {
                 match maybe_list {
@@ -1587,6 +1602,19 @@ impl EntityMetadataUpdateForm {
                         self.remove_sigma_actions
                             .insert(field.text().await?.parse()?);
                     }
+                    // the incident specific list fields
+                    "add_mission_teams" => self.add_mission_teams.push(field.text().await?),
+                    "remove_mission_teams" => {
+                        self.remove_mission_teams.push(field.text().await?);
+                    }
+                    "add_networks" => self.add_networks.push(field.text().await?),
+                    "remove_networks" => self.remove_networks.push(field.text().await?),
+                    "add_machines" => self.add_machines.push(field.text().await?),
+                    "remove_machines" => self.remove_machines.push(field.text().await?),
+                    "add_locations" => self.add_locations.push(field.text().await?),
+                    "remove_locations" => self.remove_locations.push(field.text().await?),
+                    // the compiled function disassembly (json serialized per element)
+                    "disassembly" => self.disassembly.push(deserialize!(&field.text().await?)),
                     // this is an invalid key so return an error
                     bad_name => {
                         return bad!(format!(

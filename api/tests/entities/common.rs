@@ -5,7 +5,7 @@
 //! assertion logic below, so some helpers may be unused in any single binary.
 #![allow(dead_code)]
 
-use thorium::models::{Entity, EntityListOpts, EntityRequest, EntityUpdate};
+use thorium::models::{Entity, EntityListOpts, EntityMetadataUpdate, EntityRequest, EntityUpdate};
 use thorium::test_utilities::{self, generators};
 use thorium::{Error, Thorium, fail, is, is_in};
 
@@ -77,6 +77,40 @@ pub async fn check_update(client: &Thorium, req: EntityRequest) -> Result<(), Er
         .name(generators::gen_string(16))
         .description(generators::gen_string(32))
         .group(new_group);
+    // apply the update to our entity
+    client.entities.update(entity.id, update.clone()).await?;
+    // get the entity back and make sure the update was applied
+    let updated = client.entities.get(entity.id).await?;
+    is!(updated, update);
+    Ok(())
+}
+
+/// Create an entity, update its generic and kind-specific fields, and verify
+///
+/// Builds a kind-specific metadata update from the created entity (so it can
+/// exercise remove-semantics against existing values), applies it alongside the
+/// generic name/description/group changes, and verifies every field was applied.
+///
+/// # Arguments
+///
+/// * `client` - The client to create and update the entity with
+/// * `req` - The entity request to create then update
+/// * `gen_meta` - Builds the kind-specific metadata update from the created entity
+pub async fn check_update_meta(
+    client: &Thorium,
+    req: EntityRequest,
+    gen_meta: impl FnOnce(&Entity) -> EntityMetadataUpdate,
+) -> Result<(), Error> {
+    // create the entity we are going to update
+    let (_, entity) = generators::entity(req, client).await?;
+    // create a second group to move the entity into
+    let new_group = generators::groups(1, client).await?.remove(0).name;
+    // build an update touching the name, description, groups, and kind metadata
+    let update = EntityUpdate::default()
+        .name(generators::gen_string(16))
+        .description(generators::gen_string(32))
+        .group(new_group)
+        .metadata(gen_meta(&entity));
     // apply the update to our entity
     client.entities.update(entity.id, update.clone()).await?;
     // get the entity back and make sure the update was applied

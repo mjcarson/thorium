@@ -5,6 +5,7 @@ mod common;
 use test_utilities::generators;
 use thorium::test_utilities;
 
+/// Verify a other entity can be created and matches its request
 #[tokio::test]
 async fn create() -> Result<(), thorium::Error> {
     // set up an admin client and a group
@@ -14,6 +15,7 @@ async fn create() -> Result<(), thorium::Error> {
     common::check_create(&client, &group, req).await
 }
 
+/// Verify a other entity is updated as requested
 #[tokio::test]
 async fn update() -> Result<(), thorium::Error> {
     // set up an admin client and a group
@@ -23,6 +25,7 @@ async fn update() -> Result<(), thorium::Error> {
     common::check_update(&client, req).await
 }
 
+/// Verify a other entity can be deleted
 #[tokio::test]
 async fn delete() -> Result<(), thorium::Error> {
     // set up an admin client and a group
@@ -35,6 +38,7 @@ async fn delete() -> Result<(), thorium::Error> {
 // Sync tests
 
 #[cfg(all(feature = "sync", not(feature = "python")))]
+/// Verify other entity create and delete via the blocking client
 #[test]
 fn create_delete_blocking() -> Result<(), thorium::Error> {
     // get a blocking admin client

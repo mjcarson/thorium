@@ -26,6 +26,7 @@ async fn request(client: &Thorium, group: &str) -> Result<EntityRequest, Error> 
     ))
 }
 
+/// Verify a folder entity can be created and matches its request
 #[tokio::test]
 async fn create() -> Result<(), thorium::Error> {
     // set up an admin client and a group
@@ -35,6 +36,7 @@ async fn create() -> Result<(), thorium::Error> {
     common::check_create(&client, &group, req).await
 }
 
+/// Verify a folder entity is updated as requested
 #[tokio::test]
 async fn update() -> Result<(), thorium::Error> {
     // set up an admin client and a group
@@ -44,6 +46,7 @@ async fn update() -> Result<(), thorium::Error> {
     common::check_update(&client, req).await
 }
 
+/// Verify a folder entity can be deleted
 #[tokio::test]
 async fn delete() -> Result<(), thorium::Error> {
     // set up an admin client and a group

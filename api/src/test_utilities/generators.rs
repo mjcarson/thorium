@@ -11,11 +11,13 @@ use crate::client::{ClientSettings, Users};
 use crate::models::entities::network_activity::{
     NetConState, NetworkConnection, TransportLayerProtocol,
 };
+use crate::models::entities::rules::{SigmaActionToTake, SigmaAutoFlag};
 use crate::models::{
     ArgStrategy, Buffer, BulkReactionResponse, ChildFilters, Cleanup, CollectionEntityRequest,
     CollectionKind, CompiledFunction, CompiledInstruction, Confidence, CriticalSector,
     DecompiledFunction, Dependencies, DependencyPassStrategy, DeviceEntityRequest, Entity,
-    EntityMetadataRequest, EntityRequest, EphemeralDependencySettings, FileSystemEntity,
+    EntityMetadata, EntityMetadataRequest, EntityMetadataUpdate, EntityRequest,
+    EphemeralDependencySettings, FileSystemEntity,
     FileSystemFolderEntity, FilesHandler, Flag, GenericJobArgs, GroupRequest, GroupUsersRequest,
     ImageLifetime, ImageRequest, ImageScaler, ImageVersion, IncidentRequest, IpBlock, IpBlockRaw,
     Ipv4Block,
@@ -1387,6 +1389,301 @@ pub fn gen_decompiled_function_meta() -> EntityMetadataRequest {
         tools: vec![gen_string(gen_int!(4, 16))],
         content: gen_string(gen_int!(16, 128)),
     })
+}
+
+/// A fixed second-precision timestamp for update tests
+///
+/// Whole-second timestamps round-trip cleanly through scylla's millisecond
+/// precision, avoiding spurious mismatches when comparing datetimes.
+///
+/// # Arguments
+///
+/// * `offset_secs` - The number of seconds to offset from the known base epoch second
+#[allow(dead_code)]
+#[must_use]
+fn fixed_timestamp(offset_secs: i64) -> chrono::DateTime<chrono::Utc> {
+    // build a fixed timestamp offset from a known epoch second
+    chrono::DateTime::from_timestamp(1_700_000_000 + offset_secs, 0)
+        .expect("failed to build fixed timestamp")
+}
+
+/// Generate a device metadata update touching every device-specific field
+///
+/// # Arguments
+///
+/// * `existing` - The created entity to pull removal targets from
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_device_update(existing: &Entity) -> EntityMetadataUpdate {
+    // pull an existing url and critical sector to remove
+    let (remove_urls, remove_critical_sectors) = match &existing.metadata {
+        EntityMetadata::Device(dev) => (
+            dev.urls.first().cloned().into_iter().collect(),
+            dev.critical_sectors.iter().next().copied().into_iter().collect(),
+        ),
+        _ => (Vec::new(), Vec::new()),
+    };
+    // build a device update that adds/removes urls and sectors and toggles flags
+    EntityMetadataUpdate::Device {
+        add_urls: vec![format!("https://{}.example.com", gen_string(8))],
+        remove_urls,
+        critical_system: Some(false),
+        clear_critical_system: None,
+        sensitive_location: None,
+        clear_sensitive_location: Some(true),
+        add_critical_sectors: vec![CriticalSector::Communications],
+        remove_critical_sectors,
+    }
+}
+
+/// Generate a vendor metadata update touching every vendor-specific field
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_vendor_update(_existing: &Entity) -> EntityMetadataUpdate {
+    // the create generator always uses US and InformationTechnology
+    EntityMetadataUpdate::Vendor {
+        add_countries: vec!["CA".to_owned()],
+        remove_countries: vec!["US".to_owned()],
+        add_critical_sectors: vec![CriticalSector::Communications],
+        remove_critical_sectors: vec![CriticalSector::InformationTechnology],
+    }
+}
+
+/// Generate a collection metadata update touching every collection-specific field
+///
+/// # Arguments
+///
+/// * `existing` - The created entity to pull removal targets from
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_collection_update(existing: &Entity) -> EntityMetadataUpdate {
+    // pull an existing tag to delete
+    let delete_collection_tags = match &existing.metadata {
+        EntityMetadata::Collection(col) => col
+            .collection_tags
+            .iter()
+            .next()
+            .map(|(key, values)| {
+                let mut map = std::collections::HashMap::new();
+                map.insert(key.clone(), values.iter().cloned().collect());
+                map
+            })
+            .unwrap_or_default(),
+        _ => std::collections::HashMap::new(),
+    };
+    // add a new random tag
+    let mut add_collection_tags = std::collections::HashMap::new();
+    let mut values = std::collections::HashSet::new();
+    values.insert(gen_string(gen_int!(4, 16)));
+    add_collection_tags.insert(gen_string(gen_int!(4, 16)), values);
+    // build our collection update
+    EntityMetadataUpdate::Collection {
+        add_collection_tags,
+        delete_collection_tags,
+        tags_case_insensitive: Some(true),
+        ignore_groups: Some(true),
+        // the api requires the start to be more recent than the end
+        start: Some(fixed_timestamp(100)),
+        end: Some(fixed_timestamp(0)),
+        clear_start: None,
+        clear_end: None,
+    }
+}
+
+/// Generate a filesystem metadata update touching every filesystem-specific field
+///
+/// # Arguments
+///
+/// * `existing` - The created entity to pull removal targets from
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_filesystem_update(existing: &Entity) -> EntityMetadataUpdate {
+    // pull an existing tool to remove
+    let remove_tools = match &existing.metadata {
+        EntityMetadata::FileSystem(fs) => fs.tools.first().cloned().into_iter().collect(),
+        _ => Vec::new(),
+    };
+    // build a filesystem update that adds and removes a tool
+    EntityMetadataUpdate::FileSystem {
+        add_tools: vec![gen_string(gen_int!(4, 16))],
+        remove_tools,
+    }
+}
+
+/// Generate a windows process tree metadata update
+///
+/// Process trees start with no tools, so this only exercises adding a tool.
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_windows_process_tree_update(_existing: &Entity) -> EntityMetadataUpdate {
+    // build a process tree update that adds a tool
+    EntityMetadataUpdate::WindowsProcessTree {
+        add_tools: vec![gen_string(gen_int!(4, 16))],
+        remove_tools: Vec::new(),
+    }
+}
+
+/// Generate a windows process metadata update touching every process-specific field
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_windows_process_update(_existing: &Entity) -> EntityMetadataUpdate {
+    // build a process update that sets every scalar field
+    EntityMetadataUpdate::WindowsProcess {
+        name: Some(gen_string(gen_int!(4, 16))),
+        image_path: Some(format!("C:\\\\{}.exe", gen_string(gen_int!(4, 16)))),
+        command: Some(gen_string(gen_int!(8, 32))),
+        offset: Some(gen_int!(1, 100_000)),
+        threads: Some(gen_int!(1, 64)),
+        handles: Some(gen_int!(1, 256)),
+        is_wow64: Some(true),
+        session_id: Some(gen_int!(0, 8)),
+        create_time: Some(fixed_timestamp(0)),
+        exit_time: Some(fixed_timestamp(100)),
+    }
+}
+
+/// Generate a network connection metadata update touching every field
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_network_connection_update(_existing: &Entity) -> EntityMetadataUpdate {
+    // build a network connection update that sets every field
+    EntityMetadataUpdate::NetworkConnection {
+        protocol: Some(TransportLayerProtocol::UDP),
+        source: Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, gen_int!(1, 254)))),
+        source_port: Some(gen_int!(1024, 65535)),
+        destination: Some(IpAddr::V4(Ipv4Addr::new(192, 168, 1, gen_int!(1, 254)))),
+        destination_port: Some(gen_int!(1, 65535)),
+        state: Some(NetConState::Closed),
+        pid: Some(gen_int!(1, 65535)),
+        process: Some(gen_string(gen_int!(4, 16))),
+        create_time: Some(fixed_timestamp(0)),
+    }
+}
+
+/// Generate a sigma rule metadata update touching every sigma-specific field
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_sigma_update(_existing: &Entity) -> EntityMetadataUpdate {
+    // build a sigma rule update that changes the rule, score, applies-to, and actions
+    EntityMetadataUpdate::SigmaRule {
+        sigma_rule: Some(TEST_SIGMA_RULE.to_owned()),
+        score: Some(gen_int!(1, 100)),
+        add_applies_to: vec![SigmaRuleAppliesTo::NetworkConnections],
+        remove_applies_to: vec![SigmaRuleAppliesTo::WindowsProcesses],
+        add_actions: vec![SigmaActionToTake::Flag(SigmaAutoFlag {
+            confidence: Confidence::Likely,
+            content: Some(gen_string(gen_int!(4, 16))),
+            reasoning: gen_string(gen_int!(8, 32)),
+        })],
+        remove_actions: std::collections::BTreeSet::new(),
+    }
+}
+
+/// Generate a flag metadata update touching every flag-specific field
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_flag_update(_existing: &Entity) -> EntityMetadataUpdate {
+    // build a flag update that sets every field
+    EntityMetadataUpdate::Flag {
+        suspicion: Some(gen_int!(0, 100)),
+        confidence: Some(Confidence::Unsure),
+        reasoning: Some(gen_string(gen_int!(8, 32))),
+        content: Some(gen_string(gen_int!(4, 16))),
+    }
+}
+
+/// Generate an incident metadata update touching every incident-specific field
+///
+/// # Arguments
+///
+/// * `existing` - The created entity to pull removal targets from
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_incident_update(existing: &Entity) -> EntityMetadataUpdate {
+    // pull one existing value from each list to remove
+    let (remove_mission_teams, remove_networks, remove_machines, remove_locations) =
+        match &existing.metadata {
+            EntityMetadata::Incident(incident) => (
+                incident.mission_teams.first().cloned().into_iter().collect(),
+                incident.networks.first().cloned().into_iter().collect(),
+                incident.machines.first().cloned().into_iter().collect(),
+                incident.locations.first().cloned().into_iter().collect(),
+            ),
+            _ => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+        };
+    // build an incident update that sets the cover term and edits every list
+    EntityMetadataUpdate::Incident {
+        cover_term: Some(gen_string(gen_int!(4, 16))),
+        add_mission_teams: vec![gen_string(gen_int!(4, 16))],
+        remove_mission_teams,
+        add_networks: vec![gen_string(gen_int!(4, 16))],
+        remove_networks,
+        add_machines: vec![gen_string(gen_int!(4, 16))],
+        remove_machines,
+        add_locations: vec![gen_string(gen_int!(4, 16))],
+        remove_locations,
+    }
+}
+
+/// Generate a compiled function metadata update touching every field
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_compiled_function_update(_existing: &Entity) -> EntityMetadataUpdate {
+    // build a compiled function update that sets the address and replaces disassembly
+    EntityMetadataUpdate::CompiledFunction {
+        function_address: Some(gen_int!(1, 100_000)),
+        disassembly: vec![CompiledInstruction {
+            address: gen_int!(1, 100_000),
+            instruction: gen_string(gen_int!(4, 16)),
+        }],
+    }
+}
+
+/// Generate a decompiled function metadata update touching every field
+///
+/// # Arguments
+///
+/// * `existing` - The created entity to pull removal targets from
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_decompiled_function_update(existing: &Entity) -> EntityMetadataUpdate {
+    // pull an existing tool to remove
+    let remove_tools = match &existing.metadata {
+        EntityMetadata::DecompiledFunction(decomp) => {
+            decomp.tools.first().cloned().into_iter().collect()
+        }
+        _ => Vec::new(),
+    };
+    // build a decompiled function update that sets the address, content, and tools
+    EntityMetadataUpdate::DecompiledFunction {
+        function_address: Some(gen_int!(1, 100_000)),
+        decompilation_content: Some(gen_string(gen_int!(16, 128))),
+        add_tools: vec![gen_string(gen_int!(4, 16))],
+        remove_tools,
+    }
+}
+
+/// Generate a PE section metadata update touching every field
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_pe_section_update(_existing: &Entity) -> EntityMetadataUpdate {
+    // build a PE section update that sets every field
+    EntityMetadataUpdate::PeSection {
+        md5: Some(gen_string(32)),
+        raw_size: Some(gen_int!(1, 100_000)),
+        virtual_size: Some(gen_int!(1, 100_000)),
+        entropy: Some(3.25),
+    }
+}
+
+/// Generate a PE import metadata update replacing the imported functions
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_pe_import_update(_existing: &Entity) -> EntityMetadataUpdate {
+    // build a PE import update that replaces the imported functions
+    EntityMetadataUpdate::PeImport {
+        functions: vec![gen_string(gen_int!(4, 16)), gen_string(gen_int!(4, 16))],
+    }
 }
 
 /// Build an entity request with a random name, description, and tags

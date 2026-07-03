@@ -53,7 +53,8 @@ pub use entities::shared::CriticalSector;
 pub use entities::vendors::{VendorEntity, VendorEntityRequest};
 pub use entities::{
     Entity, EntityKinds, EntityListLine, EntityListOpts, EntityListParams, EntityMetadata,
-    EntityMetadataRequest, EntityParentInfo, EntityRequest, EntityResponse, EntityUpdate,
+    EntityMetadataRequest, EntityMetadataUpdate, EntityParentInfo, EntityRequest, EntityResponse,
+    EntityUpdate,
 };
 pub use errors::InvalidEnum;
 pub use events::{

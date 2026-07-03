@@ -6,7 +6,8 @@ use uuid::Uuid;
 use crate::models::helpers::matches_vecs_helper;
 use crate::models::{
     CollectionEntity, CollectionEntityRequest, Country, DeviceEntity, DeviceEntityRequest, Entity,
-    EntityMetadata, EntityMetadataRequest, EntityRequest, EntityUpdate, Group, GroupRequest, Image,
+    EntityMetadata, EntityMetadataRequest, EntityMetadataUpdate, EntityRequest, EntityUpdate, Group,
+    GroupRequest, Image,
     ImageRequest, NetworkPolicy, NetworkPolicyRequest, NetworkPolicyRule, NetworkPolicyRuleRaw,
     NetworkPolicyUpdate, Pipeline, PipelineRequest, VendorEntity, VendorEntityRequest,
 };
@@ -389,6 +390,552 @@ impl PartialEq<EntityUpdate> for Entity {
         // check that the groups were added and removed as requested
         matches_adds!(self.groups, update.add_groups);
         matches_removes!(self.groups, update.remove_groups);
+        // verify any kind-specific metadata update was applied
+        if let Some(meta) = &update.metadata {
+            match (meta, &self.metadata) {
+                (
+                    EntityMetadataUpdate::Device {
+                        add_urls,
+                        remove_urls,
+                        critical_system,
+                        clear_critical_system,
+                        sensitive_location,
+                        clear_sensitive_location,
+                        add_critical_sectors,
+                        remove_critical_sectors,
+                    },
+                    EntityMetadata::Device(dev),
+                ) => {
+                    // added urls present, removed urls absent
+                    if !add_urls.iter().all(|url| dev.urls.contains(url)) {
+                        return false;
+                    }
+                    if remove_urls.iter().any(|url| dev.urls.contains(url)) {
+                        return false;
+                    }
+                    // critical system flag was cleared or set
+                    match (clear_critical_system, critical_system) {
+                        (Some(true), _) => {
+                            if dev.critical_system.is_some() {
+                                return false;
+                            }
+                        }
+                        (_, Some(val)) => {
+                            if dev.critical_system != Some(*val) {
+                                return false;
+                            }
+                        }
+                        _ => {}
+                    }
+                    // sensitive location flag was cleared or set
+                    match (clear_sensitive_location, sensitive_location) {
+                        (Some(true), _) => {
+                            if dev.sensitive_location.is_some() {
+                                return false;
+                            }
+                        }
+                        (_, Some(val)) => {
+                            if dev.sensitive_location != Some(*val) {
+                                return false;
+                            }
+                        }
+                        _ => {}
+                    }
+                    // added sectors present, removed sectors absent
+                    if !add_critical_sectors
+                        .iter()
+                        .all(|sector| dev.critical_sectors.contains(sector))
+                    {
+                        return false;
+                    }
+                    if remove_critical_sectors
+                        .iter()
+                        .any(|sector| dev.critical_sectors.contains(sector))
+                    {
+                        return false;
+                    }
+                }
+                (
+                    EntityMetadataUpdate::Vendor {
+                        add_countries,
+                        remove_countries,
+                        add_critical_sectors,
+                        remove_critical_sectors,
+                    },
+                    EntityMetadata::Vendor(vendor),
+                ) => {
+                    // added countries (alpha-2 codes) present
+                    for code in add_countries {
+                        match Country::new(code) {
+                            Ok(country) => {
+                                if !vendor.countries.contains(&country) {
+                                    return false;
+                                }
+                            }
+                            Err(_) => return false,
+                        }
+                    }
+                    // removed countries absent
+                    for code in remove_countries {
+                        if let Ok(country) = Country::new(code) {
+                            if vendor.countries.contains(&country) {
+                                return false;
+                            }
+                        }
+                    }
+                    // added sectors present, removed sectors absent
+                    if !add_critical_sectors
+                        .iter()
+                        .all(|sector| vendor.critical_sectors.contains(sector))
+                    {
+                        return false;
+                    }
+                    if remove_critical_sectors
+                        .iter()
+                        .any(|sector| vendor.critical_sectors.contains(sector))
+                    {
+                        return false;
+                    }
+                }
+                (
+                    EntityMetadataUpdate::Collection {
+                        add_collection_tags,
+                        delete_collection_tags,
+                        tags_case_insensitive,
+                        ignore_groups,
+                        start,
+                        end,
+                        clear_start,
+                        clear_end,
+                    },
+                    EntityMetadata::Collection(col),
+                ) => {
+                    // added tag values present under their key
+                    for (key, values) in add_collection_tags {
+                        match col.collection_tags.get(key) {
+                            Some(existing) => {
+                                if !values.iter().all(|val| existing.contains(val)) {
+                                    return false;
+                                }
+                            }
+                            None => return false,
+                        }
+                    }
+                    // deleted tag values absent
+                    for (key, values) in delete_collection_tags {
+                        if let Some(existing) = col.collection_tags.get(key) {
+                            if values.iter().any(|val| existing.contains(val)) {
+                                return false;
+                            }
+                        }
+                    }
+                    if let Some(val) = tags_case_insensitive {
+                        if col.tags_case_insensitive != *val {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = ignore_groups {
+                        if col.ignore_groups != *val {
+                            return false;
+                        }
+                    }
+                    // start was cleared or set
+                    match (clear_start, start) {
+                        (Some(true), _) => {
+                            if col.start.is_some() {
+                                return false;
+                            }
+                        }
+                        (_, Some(ts)) => {
+                            if col.start != Some(*ts) {
+                                return false;
+                            }
+                        }
+                        _ => {}
+                    }
+                    // end was cleared or set
+                    match (clear_end, end) {
+                        (Some(true), _) => {
+                            if col.end.is_some() {
+                                return false;
+                            }
+                        }
+                        (_, Some(ts)) => {
+                            if col.end != Some(*ts) {
+                                return false;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                (
+                    EntityMetadataUpdate::FileSystem {
+                        add_tools,
+                        remove_tools,
+                    },
+                    EntityMetadata::FileSystem(fs),
+                ) => {
+                    if !add_tools.iter().all(|tool| fs.tools.contains(tool)) {
+                        return false;
+                    }
+                    if remove_tools.iter().any(|tool| fs.tools.contains(tool)) {
+                        return false;
+                    }
+                }
+                (
+                    EntityMetadataUpdate::WindowsProcessTree {
+                        add_tools,
+                        remove_tools,
+                    },
+                    EntityMetadata::WindowsProcessTree(tree),
+                ) => {
+                    if !add_tools.iter().all(|tool| tree.tools.contains(tool)) {
+                        return false;
+                    }
+                    if remove_tools.iter().any(|tool| tree.tools.contains(tool)) {
+                        return false;
+                    }
+                }
+                (
+                    EntityMetadataUpdate::WindowsProcess {
+                        name,
+                        image_path,
+                        command,
+                        offset,
+                        threads,
+                        handles,
+                        is_wow64,
+                        session_id,
+                        create_time,
+                        exit_time,
+                    },
+                    EntityMetadata::WindowsProcess(win_proc),
+                ) => {
+                    if let Some(val) = name {
+                        if win_proc.name.as_ref() != Some(val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = image_path {
+                        if win_proc.image_path.as_ref() != Some(val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = command {
+                        if win_proc.command.as_ref() != Some(val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = offset {
+                        if win_proc.offset != Some(*val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = threads {
+                        if win_proc.threads != Some(*val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = handles {
+                        if win_proc.handles != Some(*val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = is_wow64 {
+                        if win_proc.is_wow64 != Some(*val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = session_id {
+                        if win_proc.session_id != Some(*val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = create_time {
+                        if win_proc.create_time != Some(*val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = exit_time {
+                        if win_proc.exit_time != Some(*val) {
+                            return false;
+                        }
+                    }
+                }
+                (
+                    EntityMetadataUpdate::NetworkConnection {
+                        protocol,
+                        source,
+                        source_port,
+                        destination,
+                        destination_port,
+                        state,
+                        pid,
+                        process,
+                        create_time,
+                    },
+                    EntityMetadata::NetworkConnection(conn),
+                ) => {
+                    // protocol/state have no PartialEq, so compare their display form
+                    if let Some(val) = protocol {
+                        if conn.protocol.as_ref().map(ToString::to_string)
+                            != Some(val.to_string())
+                        {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = source {
+                        if conn.source != *val {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = source_port {
+                        if conn.source_port != Some(*val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = destination {
+                        if conn.destination != *val {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = destination_port {
+                        if conn.destination_port != *val {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = state {
+                        if conn.state.as_ref().map(ToString::to_string) != Some(val.to_string()) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = pid {
+                        if conn.pid != Some(*val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = process {
+                        if conn.process.as_ref() != Some(val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = create_time {
+                        if conn.create_time != Some(*val) {
+                            return false;
+                        }
+                    }
+                }
+                (
+                    EntityMetadataUpdate::SigmaRule {
+                        sigma_rule,
+                        score,
+                        add_applies_to,
+                        remove_applies_to,
+                        add_actions,
+                        remove_actions: _,
+                    },
+                    EntityMetadata::SigmaRule(rule),
+                ) => {
+                    if let Some(val) = sigma_rule {
+                        if &rule.rule != val {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = score {
+                        if rule.score != *val {
+                            return false;
+                        }
+                    }
+                    if !add_applies_to
+                        .iter()
+                        .all(|applies| rule.applies_to.contains(applies))
+                    {
+                        return false;
+                    }
+                    if remove_applies_to
+                        .iter()
+                        .any(|applies| rule.applies_to.contains(applies))
+                    {
+                        return false;
+                    }
+                    // actions have no PartialEq; they were created empty so must json-match the adds
+                    if !add_actions.is_empty() && !json_eq(&rule.actions, add_actions) {
+                        return false;
+                    }
+                }
+                (
+                    EntityMetadataUpdate::Flag {
+                        suspicion,
+                        confidence,
+                        reasoning,
+                        content,
+                    },
+                    EntityMetadata::Flag(flag),
+                ) => {
+                    if let Some(val) = suspicion {
+                        if flag.suspicion != *val {
+                            return false;
+                        }
+                    }
+                    // confidence has no PartialEq, so compare its display form
+                    if let Some(val) = confidence {
+                        if flag.confidence.to_string() != val.to_string() {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = reasoning {
+                        if &flag.reasoning != val {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = content {
+                        if flag.content.as_ref() != Some(val) {
+                            return false;
+                        }
+                    }
+                }
+                (
+                    EntityMetadataUpdate::Incident {
+                        cover_term,
+                        add_mission_teams,
+                        remove_mission_teams,
+                        add_networks,
+                        remove_networks,
+                        add_machines,
+                        remove_machines,
+                        add_locations,
+                        remove_locations,
+                    },
+                    EntityMetadata::Incident(incident),
+                ) => {
+                    if let Some(val) = cover_term {
+                        if incident.cover_term.as_ref() != Some(val) {
+                            return false;
+                        }
+                    }
+                    if !add_mission_teams
+                        .iter()
+                        .all(|team| incident.mission_teams.contains(team))
+                        || remove_mission_teams
+                            .iter()
+                            .any(|team| incident.mission_teams.contains(team))
+                    {
+                        return false;
+                    }
+                    if !add_networks
+                        .iter()
+                        .all(|net| incident.networks.contains(net))
+                        || remove_networks
+                            .iter()
+                            .any(|net| incident.networks.contains(net))
+                    {
+                        return false;
+                    }
+                    if !add_machines
+                        .iter()
+                        .all(|machine| incident.machines.contains(machine))
+                        || remove_machines
+                            .iter()
+                            .any(|machine| incident.machines.contains(machine))
+                    {
+                        return false;
+                    }
+                    if !add_locations
+                        .iter()
+                        .all(|loc| incident.locations.contains(loc))
+                        || remove_locations
+                            .iter()
+                            .any(|loc| incident.locations.contains(loc))
+                    {
+                        return false;
+                    }
+                }
+                (
+                    EntityMetadataUpdate::CompiledFunction {
+                        function_address,
+                        disassembly,
+                    },
+                    EntityMetadata::CompiledFunction(func),
+                ) => {
+                    if let Some(val) = function_address {
+                        if func.address != *val {
+                            return false;
+                        }
+                    }
+                    // disassembly has no PartialEq; it is fully replaced so must json-match
+                    if !disassembly.is_empty() && !json_eq(&func.disassembly, disassembly) {
+                        return false;
+                    }
+                }
+                (
+                    EntityMetadataUpdate::DecompiledFunction {
+                        function_address,
+                        decompilation_content,
+                        add_tools,
+                        remove_tools,
+                    },
+                    EntityMetadata::DecompiledFunction(decomp),
+                ) => {
+                    if let Some(val) = function_address {
+                        if decomp.address != *val {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = decompilation_content {
+                        if &decomp.content != val {
+                            return false;
+                        }
+                    }
+                    if !add_tools.iter().all(|tool| decomp.tools.contains(tool)) {
+                        return false;
+                    }
+                    if remove_tools.iter().any(|tool| decomp.tools.contains(tool)) {
+                        return false;
+                    }
+                }
+                (
+                    EntityMetadataUpdate::PeSection {
+                        md5,
+                        raw_size,
+                        virtual_size,
+                        entropy,
+                    },
+                    EntityMetadata::PeSection(section),
+                ) => {
+                    if let Some(val) = md5 {
+                        if section.md5.as_ref() != Some(val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = raw_size {
+                        if section.raw_size != Some(*val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = virtual_size {
+                        if section.virtual_size != Some(*val) {
+                            return false;
+                        }
+                    }
+                    if let Some(val) = entropy {
+                        if section.entropy != Some(*val) {
+                            return false;
+                        }
+                    }
+                }
+                (
+                    EntityMetadataUpdate::PeImport { functions },
+                    EntityMetadata::PeImport(import),
+                ) => {
+                    // imported functions are fully replaced
+                    if !functions.is_empty() && &import.functions != functions {
+                        return false;
+                    }
+                }
+                // a metadata update for the wrong kind means it wasn't applied
+                _ => return false,
+            }
+        }
         true
     }
 }
