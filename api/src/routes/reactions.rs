@@ -13,12 +13,13 @@ use uuid::Uuid;
 
 use super::OpenApiSecurity;
 use crate::bad;
+use crate::models::backends::reactions::ReactionCursorParam;
 use crate::models::{
-    Actions, BulkReactionResponse, CommitishKinds, Group, HandleReactionResponse, ImageScaler,
-    JobResetRequestor, Pipeline, Reaction, ReactionCache, ReactionCacheUpdate, ReactionDetailsList,
-    ReactionIdResponse, ReactionList, ReactionListParams, ReactionRequest, ReactionStatus,
-    ReactionUpdate, RepoDependency, RepoDependencyRequest, StageLogLine, StageLogs, StageLogsAdd,
-    StatusUpdate, SystemComponents, User,
+    Actions, ApiCursor, BulkReactionResponse, CommitishKinds, Group, HandleReactionResponse,
+    ImageScaler, JobResetRequestor, Pipeline, Reaction, ReactionCache, ReactionCacheUpdate,
+    ReactionDetailsList, ReactionIdResponse, ReactionList, ReactionListParams, ReactionRequest,
+    ReactionStatus, ReactionUpdate, RepoDependency, RepoDependencyRequest, StageLogLine, StageLogs,
+    StageLogsAdd, StatusUpdate, SystemComponents, User,
 };
 use crate::utils::{ApiError, AppState};
 
@@ -695,6 +696,45 @@ async fn list_tag(
     Ok(Json(names))
 }
 
+/// Lists reactions with a specific tag
+///
+/// # Arguments
+///
+/// * `user` - The user that is listing reactions
+/// * `group` - The group to list reactions from
+/// * `tag` - The tag to list reactions from
+/// * `params` - The query params to use for this request
+/// * `state` - Shared Thorium objects
+#[utoipa::path(
+    get,
+    path = "/api/reactions/tag/:group/:tag/",
+    params(
+        ("group" = String, Path, description = "The group to list reactions from"),
+        ("tag" = String, Path, description = "The tag to list reactions from"),
+        ("params" = ReactionListParams, Query, description = "The query params to use for this request")
+    ),
+    responses(
+        (status = 200, description = "Reactions with the specified tag", body = ReactionList),
+        (status = 401, description = "This user is not authorized to access this route"),
+    ),
+    security(
+        ("basic" = []),
+    )
+)]
+#[instrument(name = "routes::reactions::list_tag", skip_all, err(Debug))]
+async fn list_tag_new(
+    user: User,
+    Path(tag): Path<String>,
+    Query(params): Query<ReactionListParams>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiCursor<String>>, ApiError> {
+    // build the params to pass to our redis cursor
+    let params = ReactionCursorParam::Tag { tag, params };
+    // list reactions with this tag
+    let cursor = Reaction::list_new(&user, params, &state.shared).await?;
+    Ok(Json(cursor))
+}
+
 /// Lists reaction details with a specific tag
 ///
 /// # Arguments
@@ -1192,6 +1232,7 @@ pub fn mount(router: Router<AppState>) -> Router<AppState> {
             get(list_status_details),
         )
         .route("/reactions/tag/{group}/{tag}/", get(list_tag))
+        .route("/reactions/tag/{tag}/", get(list_tag_new))
         .route(
             "/reactions/tag/{group}/{tag}/details/",
             get(list_tag_details),

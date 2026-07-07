@@ -7,15 +7,17 @@ use chrono::prelude::*;
 use futures::StreamExt;
 use futures::stream;
 use std::collections::{HashMap, HashSet};
-use tracing::{Level, Span, event, instrument, span};
+use tracing::{Level, event, instrument, span};
 use uuid::Uuid;
 
 use super::db;
+use crate::models::ApiCursor;
+use crate::models::ReactionListParams;
 use crate::models::{
-    BulkReactionResponse, GenericJobArgs, Group, GroupAllowAction, JobList, Pipeline, Reaction,
-    ReactionCache, ReactionCacheUpdate, ReactionDetailsList, ReactionExpire, ReactionList,
-    ReactionRequest, ReactionStatus, ReactionUpdate, Repo, RepoDependency, Sample, StageLogs,
-    StageLogsAdd, StatusUpdate, User,
+    BulkReactionResponse, Group, GroupAllowAction, JobList, Pipeline, Reaction, ReactionCache,
+    ReactionCacheUpdate, ReactionDetailsList, ReactionExpire, ReactionList, ReactionRequest,
+    ReactionStatus, ReactionUpdate, Repo, RepoDependency, Sample, StageLogs, StageLogsAdd,
+    StatusUpdate, User,
 };
 use crate::utils::{ApiError, Shared, bounder};
 use crate::{
@@ -546,6 +548,27 @@ impl Reaction {
         db::reactions::list_tag(&group.name, tag, cursor, limit, shared).await
     }
 
+    /// Lists reactions
+    ///
+    /// # Arguments
+    ///
+    /// * `group` - The group to list reactions from
+    /// * `tag` - The tag of reactions to list
+    /// * `cursor` - The page of reactions to retrieve
+    /// * `limit` - The max number of reactions to retrieve (weakly enforced)
+    /// * `shared` - Shared objects in Thorium
+    #[instrument(name = "Reaction::list_tag", skip_all, err(Debug))]
+    pub async fn list_new(
+        user: &User,
+        mut params: ReactionCursorParam,
+        shared: &Shared,
+    ) -> Result<ApiCursor<String>, ApiError> {
+        // authorize the groups to list files from
+        user.authorize_groups(params.mut_groups(), shared).await?;
+        // use correct backend to list reaction names
+        db::reactions::list_new(params, shared).await
+    }
+
     /// Lists reactions for an entire group with a set status
     ///
     /// # Arguments
@@ -976,6 +999,51 @@ impl Reaction {
         let s3_path = format!("{}/files/{file_path}", self.id);
         // download this attachment
         shared.s3.reaction_cache.download(&s3_path).await
+    }
+}
+
+/// The parameters for listing reactions in redis using a cursor
+#[derive(Debug)]
+pub enum ReactionCursorParam {
+    /// List reactions across all groups
+    General {
+        pipeline: String,
+        params: ReactionListParams,
+    },
+    /// List reactions by status
+    Status {
+        pipeline: String,
+        status: ReactionStatus,
+        params: ReactionListParams,
+    },
+    /// List reactions by tag
+    Tag {
+        tag: String,
+        params: ReactionListParams,
+    },
+    /// List sub reactions
+    Sub {
+        sub: Uuid,
+        params: ReactionListParams,
+    },
+    /// List sub reactions with a status
+    SubAndStatus {
+        sub: Uuid,
+        status: ReactionStatus,
+        params: ReactionListParams,
+    },
+}
+
+impl ReactionCursorParam {
+    /// Get a mutable reference to the groups to return data from
+    pub fn mut_groups(&mut self) -> &mut Vec<String> {
+        match self {
+            ReactionCursorParam::General { params, .. } => &mut params.groups,
+            ReactionCursorParam::Status { params, .. } => &mut params.groups,
+            ReactionCursorParam::Tag { params, .. } => &mut params.groups,
+            ReactionCursorParam::Sub { params, .. } => &mut params.groups,
+            ReactionCursorParam::SubAndStatus { params, .. } => &mut params.groups,
+        }
     }
 }
 

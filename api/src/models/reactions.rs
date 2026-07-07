@@ -585,6 +585,9 @@ pub struct ReactionListParams {
     /// The max amount of reactions to return in on request
     #[serde(default = "default_list_limit")]
     pub limit: usize,
+    /// The groups to list reactions from
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 impl Default for ReactionListParams {
@@ -592,6 +595,7 @@ impl Default for ReactionListParams {
         Self {
             cursor: usize::default(),
             limit: default_list_limit(),
+            groups: Vec::default(),
         }
     }
 }
