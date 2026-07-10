@@ -424,6 +424,21 @@ impl RedisCursorSupport for Reaction {
     /// The type of data we are sorting on
     type Sort = String;
 
+    /// Get our cursor id from params if one was provided
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - The params to get a cursor id from
+    fn get_id(params: &Self::Params) -> Option<Uuid> {
+        match params {
+            ReactionCursorParam::General { params, .. } => params.cursor,
+            ReactionCursorParam::Status { params, .. } => params.cursor,
+            ReactionCursorParam::Tag { params, .. } => params.cursor,
+            ReactionCursorParam::Sub { params, .. } => params.cursor,
+            ReactionCursorParam::SubAndStatus { params, .. } => params.cursor,
+        }
+    }
+
     /// Get the amount of data to return at most for this page
     ///
     /// # Arguments
@@ -515,12 +530,13 @@ impl RedisCursorSupport for Reaction {
     }
 }
 
-/// Lists reaction ids by a tag in a set of groups
+/// Lists reaction ids across a set of groups using a redis cursor
 ///
 /// # Arguments
 ///
 /// * `params` - The params for listing reactions
 /// * `shared` - Shared Thorium objects
+#[instrument(name = "db::reactions::list_new", skip_all, err(Debug))]
 pub async fn list_new(
     params: ReactionCursorParam,
     shared: &Shared,

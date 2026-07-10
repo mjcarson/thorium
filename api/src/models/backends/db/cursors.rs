@@ -3208,6 +3208,13 @@ pub trait RedisCursorSupport: Debug + Serialize + for<'a> Deserialize<'a> {
     /// The type of data we are sorting on
     type Sort: Debug + Ord + PartialOrd + Serialize + for<'a> Deserialize<'a>;
 
+    /// Get our cursor id from params if one was provided
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - The params to get a cursor id from
+    fn get_id(params: &Self::Params) -> Option<Uuid>;
+
     /// Get the amount of data to return at most for this page
     ///
     /// # Arguments
@@ -3261,7 +3268,7 @@ pub struct RedisCursorName<D: RedisCursorSupport> {
 }
 
 /// A single cursor for a group in redis
-#[derive(Serialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct RedisGroupCursor {
     /// The redis key to use for this cursor
     pub key: String,
@@ -3288,8 +3295,9 @@ async fn initial_names_helper<D: RedisCursorSupport>(
     let mut group_cursor = RedisGroupCursor { key, cursor: 0 };
     // get this groups names
     let (new_cursor, names) = D::get_names(params, &group_cursor, shared).await?;
-    // if this returned data then return an updated cursor and data
-    if names.is_empty() {
+    // this group only has no data if its scan completed without returning names
+    // an empty batch with a non zero cursor is valid and must keep this group alive
+    if names.is_empty() && new_cursor == 0 {
         // this group contains no data
         Ok(None)
     } else {
@@ -3305,17 +3313,15 @@ async fn initial_names_helper<D: RedisCursorSupport>(
 }
 
 /// The data to retain throughout this redis cursors life
-#[derive(Serialize, Debug, Default)]
-pub struct RedisCursorRetain<D: RedisCursorSupport>
-where
-    for<'de> D: Deserialize<'de> + Debug,
-    D: Serialize,
-    D: RedisCursorSupport,
-    D: Debug,
-{
-    /// The groups this cursor is still searching and the info to continue this cursor
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(bound = "")]
+pub struct RedisCursorRetain<D: RedisCursorSupport> {
+    /// The groups whose redis scans are unfinished and the info to continue those scans
     pub groups: HashMap<String, RedisGroupCursor>,
     /// A sorted set of names to return in future iterations sorted by group
+    ///
+    /// Every group that may still yield data has an entry here even if its
+    /// buffered names are currently empty
     pub remaining: BTreeMap<String, BTreeMap<D::Sort, D::Names>>,
 }
 
@@ -3341,11 +3347,15 @@ impl<D: RedisCursorSupport> RedisCursorRetain<D> {
             .try_collect::<Vec<_>>()
             .await?
             .into_iter()
-            .filter_map(|opt| opt);
-        // step over and any any groups with data
+            .flatten();
+        // step over and add any groups with data
         for (group, group_cursor, names) in cursor_iter {
-            // add this group to our cursor
-            retain.groups.insert(group.clone(), group_cursor);
+            // only track this groups scan cursor if its scan has not yet completed
+            // a cursor of 0 means this groups scan finished in a single pass
+            if group_cursor.cursor != 0 {
+                // add this group to our cursor
+                retain.groups.insert(group.clone(), group_cursor);
+            }
             // add this groups names to our cursor
             retain.remaining.insert(group, names);
         }
@@ -3369,6 +3379,8 @@ where
     params: D::Params,
     /// The max amount of data to return at once
     pub limit: usize,
+    /// Whether this cursor has been saved to redis before
+    in_redis: bool,
 }
 
 impl<D: RedisCursorSupport> RedisCursor<D> {
@@ -3378,19 +3390,63 @@ impl<D: RedisCursorSupport> RedisCursor<D> {
     ///
     /// * `params` - The parameters to use with this cursor
     /// * `shared` - Shared Thorium objects
+    #[instrument(name = "RedisCursor::new", skip_all, err(Debug))]
     pub async fn new(params: D::Params, shared: &Shared) -> Result<Self, ApiError> {
-        // get the limit on the amount of data to return
-        let limit = D::get_limit(&params);
-        // TODO load or create new retrained data
-        let retain = RedisCursorRetain::<D>::new(&params, shared).await?;
-        // TODO get an id and load an existing cursor
-        let cursor = RedisCursor {
-            id: Uuid::new_v4(),
-            retain,
-            params,
-            limit,
-        };
-        Ok(cursor)
+        // if a cursor id was passed then load that existing cursor from redis
+        match D::get_id(&params) {
+            Some(id) => RedisCursor::get(id, params, shared).await,
+            None => {
+                // get the limit on the amount of data to return
+                let limit = D::get_limit(&params);
+                // this is a new cursor so seed the first page of every group
+                let retain = RedisCursorRetain::<D>::new(&params, shared).await?;
+                // build our new cursor with a new id
+                let cursor = RedisCursor {
+                    id: Uuid::new_v4(),
+                    retain,
+                    params,
+                    limit,
+                    in_redis: false,
+                };
+                Ok(cursor)
+            }
+        }
+    }
+
+    /// Gets an existing redis cursors data from redis
+    ///
+    /// # Arguments
+    ///
+    /// * `cursor_id` - The id of the cursor to load
+    /// * `params` - The parameters to use with this cursor
+    /// * `shared` - Shared Thorium objects
+    #[instrument(name = "RedisCursor::get", skip(params, shared), err(Debug))]
+    pub async fn get(
+        cursor_id: Uuid,
+        params: D::Params,
+        shared: &Shared,
+    ) -> Result<Self, ApiError> {
+        // build the key to our cursor data in redis
+        let key = cursors::data(CursorKind::Redis, &cursor_id, shared);
+        // get our cursor from redis
+        let data: Option<String> = query!(cmd("get").arg(key), shared).await?;
+        // check if we got any cursor data
+        match data {
+            Some(data) => {
+                // try to deserialize this cursors retained data
+                let retain: RedisCursorRetain<D> = deserialize!(&data);
+                // rebuild our cursor
+                let cursor = RedisCursor {
+                    id: cursor_id,
+                    retain,
+                    limit: D::get_limit(&params),
+                    params,
+                    in_redis: true,
+                };
+                Ok(cursor)
+            }
+            None => not_found!(format!("Cursor {cursor_id} doesn't exist")),
+        }
     }
 
     /// Check if this cursor has been exhausted
@@ -3431,36 +3487,41 @@ impl<D: RedisCursorSupport> RedisCursor<D> {
                             data.push(name);
                         }
                         None => {
-                            // get the group for this entry
-                            let group = first.key();
-                            // this group exists but appears to have no data
-                            // try to get the next page in case this group has more data
-                            // so we don't end up with out of order data on
-                            // we need to get more data from this group to ensure we
-                            // don't end up with out of order data when we get
-                            // the next page.
-                            //let names = self.get(&group, shared).await?;
-                            // get the key to this groups data
-                            let group_cursor = match self.retain.groups.get_mut(group) {
-                                Some(key) => key,
-                                None => {
-                                    return internal_err!(format!("Missing key for group {group}"));
+                            // this groups buffered names are drained so check if its
+                            // redis scan still has more data to pull
+                            // we have to refill before moving to the next group to ensure
+                            // we don't return out of order data on the next page
+                            match self.retain.groups.get_mut(first.key()) {
+                                Some(group_cursor) => {
+                                    // this groups scan is unfinished so get its next batch of names
+                                    let (new_cursor, names) =
+                                        D::get_names(&self.params, group_cursor, shared).await?;
+                                    // update this groups cursor
+                                    group_cursor.cursor = new_cursor;
+                                    // get a mutable entry to this entry
+                                    let entry = first.get_mut();
+                                    // add these names to our remaining data
+                                    D::add_names(names, entry);
+                                    // if this scan has now completed then stop tracking its cursor
+                                    if new_cursor == 0 {
+                                        // get the group for this entry
+                                        let group = first.key().clone();
+                                        // remove this groups scan cursor since its scan is complete
+                                        self.retain.groups.remove(&group);
+                                        // if the final batch added no names then this group is
+                                        // fully exhausted and can be removed
+                                        if first.get().is_empty() {
+                                            first.remove_entry();
+                                        }
+                                    }
+                                    // if the batch was empty but the scan is unfinished we simply
+                                    // loop and refill this group again on the next iteration
                                 }
-                            };
-                            // get this groups names
-                            let (new_cursor, names) =
-                                D::get_names(&self.params, group_cursor, shared).await?;
-                            // update this groups cursor
-                            group_cursor.cursor = new_cursor;
-                            // get a mutable entry to this entry
-                            let entry = first.get_mut();
-                            // add these names to our remaining data
-                            D::add_names(names, entry);
-                            // if we didn't find any new names then remove this group
-                            if entry.is_empty() || group_cursor.cursor == 0 {
-                                // remove this group from our remaining set as it has
-                                // no more data to return
-                                first.remove_entry();
+                                None => {
+                                    // this groups scan already completed and its names are
+                                    // drained so remove it from our remaining data
+                                    first.remove_entry();
+                                }
                             }
                         }
                     }
@@ -3469,6 +3530,12 @@ impl<D: RedisCursorSupport> RedisCursor<D> {
                 None => break,
             }
         }
+        // drop any groups that are fully drained and fully scanned so our
+        // exhausted check is accurate on exact page boundaries
+        let groups = &self.retain.groups;
+        self.retain
+            .remaining
+            .retain(|group, names| !names.is_empty() || groups.contains_key(group));
         // if our cursor is exhausted then don't include a cursor id
         let id = if self.exhausted() {
             None
@@ -3486,16 +3553,25 @@ impl<D: RedisCursorSupport> RedisCursor<D> {
     /// * `shared` - Shared Thorium objects
     #[instrument(name = "RedisCursor::save", skip_all, err(Debug))]
     pub async fn save(&self, shared: &Shared) -> Result<(), ApiError> {
-        // serialize our retained data
-        let data = serialize!(&self.retain);
         // build the key to save this cursor data too
         let key = cursors::data(CursorKind::Redis, &self.id, shared);
-        // save this cursors data to redis
-        let _: () = query!(
-            cmd("set").arg(key).arg(data).arg("EX").arg(2_628_000),
-            shared
-        )
-        .await?;
+        // either save or delete this cursor based on whether its exhausted or not
+        if self.exhausted() {
+            // only delete if this cursor was actually written to redis
+            if self.in_redis {
+                // delete this cursor from redis
+                let _: () = query!(cmd("del").arg(key), shared).await?;
+            }
+        } else {
+            // serialize our retained data
+            let data = serialize!(&self.retain);
+            // save this cursors data to redis
+            let _: () = query!(
+                cmd("set").arg(key).arg(data).arg("EX").arg(2_628_000),
+                shared
+            )
+            .await?;
+        }
         Ok(())
     }
 }

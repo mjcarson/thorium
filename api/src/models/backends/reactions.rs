@@ -2,7 +2,8 @@
 //! Currently only Redis is supported
 
 use aws_sdk_s3::primitives::ByteStream;
-use axum::extract::Multipart;
+use axum::extract::{FromRequestParts, Multipart};
+use axum::http::request::Parts;
 use chrono::prelude::*;
 use futures::StreamExt;
 use futures::stream;
@@ -12,7 +13,7 @@ use uuid::Uuid;
 
 use super::db;
 use crate::models::ApiCursor;
-use crate::models::ReactionListParams;
+use crate::models::ReactionCursorParams;
 use crate::models::{
     BulkReactionResponse, Group, GroupAllowAction, JobList, Pipeline, Reaction, ReactionCache,
     ReactionCacheUpdate, ReactionDetailsList, ReactionExpire, ReactionList, ReactionRequest,
@@ -548,22 +549,20 @@ impl Reaction {
         db::reactions::list_tag(&group.name, tag, cursor, limit, shared).await
     }
 
-    /// Lists reactions
+    /// Lists reaction ids across groups with a redis cursor
     ///
     /// # Arguments
     ///
-    /// * `group` - The group to list reactions from
-    /// * `tag` - The tag of reactions to list
-    /// * `cursor` - The page of reactions to retrieve
-    /// * `limit` - The max number of reactions to retrieve (weakly enforced)
+    /// * `user` - The user that is listing reactions
+    /// * `params` - The params to use when listing reactions
     /// * `shared` - Shared objects in Thorium
-    #[instrument(name = "Reaction::list_tag", skip_all, err(Debug))]
+    #[instrument(name = "Reaction::list_new", skip_all, err(Debug))]
     pub async fn list_new(
         user: &User,
         mut params: ReactionCursorParam,
         shared: &Shared,
     ) -> Result<ApiCursor<String>, ApiError> {
-        // authorize the groups to list files from
+        // authorize the groups to list reactions from
         user.authorize_groups(params.mut_groups(), shared).await?;
         // use correct backend to list reaction names
         db::reactions::list_new(params, shared).await
@@ -1007,30 +1006,42 @@ impl Reaction {
 pub enum ReactionCursorParam {
     /// List reactions across all groups
     General {
+        /// The pipeline to list reactions for
         pipeline: String,
-        params: ReactionListParams,
+        /// The shared params for listing reactions with a cursor
+        params: ReactionCursorParams,
     },
     /// List reactions by status
     Status {
+        /// The pipeline to list reactions for
         pipeline: String,
+        /// The status that listed reactions must have
         status: ReactionStatus,
-        params: ReactionListParams,
+        /// The shared params for listing reactions with a cursor
+        params: ReactionCursorParams,
     },
     /// List reactions by tag
     Tag {
+        /// The tag that listed reactions must have
         tag: String,
-        params: ReactionListParams,
+        /// The shared params for listing reactions with a cursor
+        params: ReactionCursorParams,
     },
     /// List sub reactions
     Sub {
+        /// The parent reaction to list sub reactions for
         sub: Uuid,
-        params: ReactionListParams,
+        /// The shared params for listing reactions with a cursor
+        params: ReactionCursorParams,
     },
     /// List sub reactions with a status
     SubAndStatus {
+        /// The parent reaction to list sub reactions for
         sub: Uuid,
+        /// The status that listed sub reactions must have
         status: ReactionStatus,
-        params: ReactionListParams,
+        /// The shared params for listing reactions with a cursor
+        params: ReactionCursorParams,
     },
 }
 
@@ -1043,6 +1054,25 @@ impl ReactionCursorParam {
             ReactionCursorParam::Tag { params, .. } => &mut params.groups,
             ReactionCursorParam::Sub { params, .. } => &mut params.groups,
             ReactionCursorParam::SubAndStatus { params, .. } => &mut params.groups,
+        }
+    }
+}
+
+impl<S> FromRequestParts<S> for ReactionCursorParams
+where
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // try to extract our query
+        if let Some(query) = parts.uri.query() {
+            // try to deserialize our query string
+            Ok(serde_qs::Config::new()
+                .max_depth(5)
+                .deserialize_str(query)?)
+        } else {
+            Ok(Self::default())
         }
     }
 }
