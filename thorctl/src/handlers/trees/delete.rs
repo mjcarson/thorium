@@ -28,13 +28,42 @@ struct DeleteGraph {
     children_of: HashMap<u64, HashSet<u64>>,
 }
 
+/// Resolve a branch into its `(parent, child)` node hashes for the chosen direction mode
+///
+/// The canonical Thorium convention (used by sample origins, the filesystem/process
+/// builders, and the UI's tree renderer) is `To`/`Bidirectional` = parent→child and
+/// `From` = child→parent. Some tools instead link sub-entities to their parent with
+/// the child as the association source (so `To` = child→parent); passing
+/// `reverse = true` flips the interpretation to handle that data.
+///
+/// # Arguments
+///
+/// * `direction` - The branch's directionality
+/// * `src` - The hash of the node the branch is stored under
+/// * `node` - The hash of the node the branch points to
+/// * `reverse` - Whether to invert the parent/child interpretation
+fn orient(direction: Directionality, src: u64, node: u64, reverse: bool) -> (u64, u64) {
+    // map the branch onto a (parent, child) pair based on the direction mode
+    match (direction, reverse) {
+        // canonical: To/Bidirectional point from the parent (src) down to the child (node)
+        (Directionality::To | Directionality::Bidirectional, false) => (src, node),
+        // reversed: To/Bidirectional point from the child (src) up to the parent (node)
+        (Directionality::To | Directionality::Bidirectional, true) => (node, src),
+        // canonical: From points from the child (src) up to the parent (node)
+        (Directionality::From, false) => (node, src),
+        // reversed: From points from the parent (src) down to the child (node)
+        (Directionality::From, true) => (src, node),
+    }
+}
+
 impl DeleteGraph {
     /// Build a [`DeleteGraph`] from a fully grown [`Tree`]
     ///
     /// # Arguments
     ///
     /// * `tree` - The tree to build a traversal view from
-    fn from_tree(tree: &Tree) -> Self {
+    /// * `reverse` - Whether associations point child→parent instead of parent→child
+    fn from_tree(tree: &Tree, reverse: bool) -> Self {
         // collect the hashes of our initial root nodes
         let initial = tree.initial.iter().copied().collect::<HashSet<u64>>();
         // map every entity node's hash to its entity id
@@ -55,25 +84,11 @@ impl DeleteGraph {
             for (src, branches) in branch_map {
                 // convert each branch into a directed parent/child edge
                 for branch in branches {
-                    match branch.direction {
-                        // a `To` branch points from a parent (src) down to a child
-                        Directionality::To => {
-                            children_of.entry(*src).or_default().insert(branch.node);
-                            parents_of.entry(branch.node).or_default().insert(*src);
-                        }
-                        // a `From` branch points from a child (src) up to a parent
-                        Directionality::From => {
-                            parents_of.entry(*src).or_default().insert(branch.node);
-                            children_of.entry(branch.node).or_default().insert(*src);
-                        }
-                        // treat bidirectional edges as a mutual parent relationship only so
-                        // neither endpoint is ever traversed into as a descendant and each
-                        // protects the other from deletion (conservative for a destructive op)
-                        Directionality::Bidirectional => {
-                            parents_of.entry(*src).or_default().insert(branch.node);
-                            parents_of.entry(branch.node).or_default().insert(*src);
-                        }
-                    }
+                    // resolve this branch into its parent and child based on the direction mode
+                    let (parent, child) = orient(branch.direction, *src, branch.node, reverse);
+                    // record the edge in both adjacency maps
+                    children_of.entry(parent).or_default().insert(child);
+                    parents_of.entry(child).or_default().insert(parent);
                 }
             }
         }
@@ -277,7 +292,8 @@ fn describe_node(tree: &Tree, hash: u64) -> String {
 /// * `tree` - The tree that was built and planned over
 /// * `graph` - The traversal view used to plan deletions
 /// * `plan` - The deletion plan with a decision for every entity node
-fn debug_report(tree: &Tree, graph: &DeleteGraph, plan: &Plan) {
+/// * `reverse` - Whether the parent/child direction was inverted
+fn debug_report(tree: &Tree, graph: &DeleteGraph, plan: &Plan, reverse: bool) {
     // build a dimmed prefix so debug lines are easy to spot
     let prefix = "debug:".dimmed();
     // tally the node kinds in the built tree
@@ -303,6 +319,19 @@ fn debug_report(tree: &Tree, graph: &DeleteGraph, plan: &Plan) {
         .values()
         .map(std::collections::HashSet::len)
         .sum();
+    // tally the direction of every branch to reveal orientation/convention issues
+    let (mut to, mut from, mut bidir) = (0usize, 0usize, 0usize);
+    for branch_map in [&tree.branches, &tree.hint_branches] {
+        for edges in branch_map.values() {
+            for branch in edges {
+                match branch.direction {
+                    Directionality::To => to += 1,
+                    Directionality::From => from += 1,
+                    Directionality::Bidirectional => bidir += 1,
+                }
+            }
+        }
+    }
     // print the tree level stats
     println!(
         "{prefix} tree has {} nodes ({} entities, {samples} samples, {repos} repos, {tags} tags), \
@@ -310,6 +339,15 @@ fn debug_report(tree: &Tree, graph: &DeleteGraph, plan: &Plan) {
         tree.data_map.len(),
         graph.entities.len(),
         tree.initial.len(),
+    );
+    // print the direction breakdown and the active direction mode
+    println!(
+        "{prefix} branch directions: {to} To, {from} From, {bidir} Bidirectional; direction mode: {}",
+        if reverse {
+            "reversed (child->parent)"
+        } else {
+            "canonical (parent->child)"
+        }
     );
     // build a stable, name sorted view of every entity decision
     let mut lines = plan
@@ -372,12 +410,12 @@ pub async fn delete(thorium: &Thorium, args: &Args, cmd: &DeleteTree) -> Result<
     let opts = cmd.to_opts();
     // build the tree from our initial nodes
     let tree = thorium.trees.start(&opts, &query).await?;
-    // plan which entity nodes should be deleted
-    let graph = DeleteGraph::from_tree(&tree);
+    // plan which entity nodes should be deleted, honoring the direction mode
+    let graph = DeleteGraph::from_tree(&tree, cmd.reverse);
     let plan = graph.plan();
     // log why each entity is or isn't being deleted if debugging is enabled
     if cmd.debug {
-        debug_report(&tree, &graph, &plan);
+        debug_report(&tree, &graph, &plan, cmd.reverse);
     }
     // resolve each planned node hash back into its entity info for deletion and display
     let mut targets = Vec::with_capacity(plan.to_delete.len());
@@ -396,6 +434,31 @@ pub async fn delete(thorium: &Thorium, args: &Args, cmd: &DeleteTree) -> Result<
     targets.sort_by(|left, right| left.name.cmp(&right.name));
     // show the user what we plan to delete
     print_summary(&targets);
+    // if nothing is deletable but the tree holds non-initial entities, the direction
+    // convention may be inverted, so nudge the user toward the fix
+    if targets.is_empty() {
+        // count entity nodes that aren't initial roots
+        let non_initial_entities = graph
+            .entities
+            .keys()
+            .filter(|hash| !graph.initial.contains(hash))
+            .count();
+        // only hint if there were entities we could have considered
+        if non_initial_entities > 0 {
+            // suggest flipping the direction mode based on the current setting
+            if cmd.reverse {
+                println!(
+                    "Hint: no entities were eligible. Try removing --reverse, or use --debug to inspect the tree."
+                );
+            } else {
+                println!(
+                    "Hint: no entities were eligible. If your entities link child->parent \
+                     (e.g. flags/functions pointing up to their sample), re-run with --reverse. \
+                     Use --debug to inspect the tree."
+                );
+            }
+        }
+    }
     // stop here if this is only a preview or there is nothing to delete
     if cmd.dry_run || targets.is_empty() {
         return Ok(());
@@ -578,5 +641,85 @@ mod tests {
         );
         // F is an entity with no path from the initial node so it is unreachable
         assert_eq!(plan.decisions.get(&F), Some(&Decision::Unreachable));
+    }
+
+    /// Build a [`DeleteGraph`] from raw branches using [`orient`], mirroring `from_tree`
+    ///
+    /// # Arguments
+    ///
+    /// * `initial` - The hashes of the initial root nodes
+    /// * `entity_hashes` - The hashes of nodes that are entities
+    /// * `branches` - The raw `(src, node, direction)` branches in the tree
+    /// * `reverse` - Whether to invert the parent/child interpretation
+    fn graph_from_branches(
+        initial: &[u64],
+        entity_hashes: &[u64],
+        branches: &[(u64, u64, Directionality)],
+        reverse: bool,
+    ) -> DeleteGraph {
+        // collect our initial root hashes
+        let initial = initial.iter().copied().collect::<HashSet<u64>>();
+        // give every entity node a synthetic id
+        let mut entities = HashMap::new();
+        for hash in entity_hashes {
+            entities.insert(*hash, Uuid::new_v4());
+        }
+        // build adjacency the same way from_tree does, via orient
+        let mut parents_of: HashMap<u64, HashSet<u64>> = HashMap::new();
+        let mut children_of: HashMap<u64, HashSet<u64>> = HashMap::new();
+        for (src, node, direction) in branches {
+            // resolve this branch into a parent and child for the chosen mode
+            let (parent, child) = orient(*direction, *src, *node, reverse);
+            children_of.entry(parent).or_default().insert(child);
+            parents_of.entry(child).or_default().insert(parent);
+        }
+        DeleteGraph {
+            initial,
+            entities,
+            parents_of,
+            children_of,
+        }
+    }
+
+    /// `orient` maps every direction/mode combination to the right parent/child
+    #[test]
+    fn orient_maps_directions() {
+        // canonical: To/Bidirectional point from the parent (src) to the child (node)
+        assert_eq!(orient(Directionality::To, 1, 2, false), (1, 2));
+        assert_eq!(orient(Directionality::Bidirectional, 1, 2, false), (1, 2));
+        // canonical: From points from the child (src) up to the parent (node)
+        assert_eq!(orient(Directionality::From, 1, 2, false), (2, 1));
+        // reversed: To/Bidirectional flip to child (src) -> parent (node)
+        assert_eq!(orient(Directionality::To, 1, 2, true), (2, 1));
+        assert_eq!(orient(Directionality::Bidirectional, 1, 2, true), (2, 1));
+        // reversed: From flips to parent (src) -> child (node)
+        assert_eq!(orient(Directionality::From, 1, 2, true), (1, 2));
+    }
+
+    /// Child->parent associations only resolve correctly with `--reverse`
+    #[test]
+    fn reversed_convention_child_to_parent() {
+        // the user's tree: A<-B<-C and D<-C, i.e. child->parent associations (child is source, To)
+        // each association is mirrored on both endpoints (To on the source, From on the target)
+        let branches = [
+            (B, A, Directionality::To),   // B is a child of A
+            (A, B, Directionality::From), // mirror
+            (C, B, Directionality::To),   // C is a child of B
+            (B, C, Directionality::From), // mirror
+            (C, D, Directionality::To),   // C is also a child of external D
+            (D, C, Directionality::From), // mirror
+        ];
+        // A is the initial sample; B, C, D are entities (D is C's external parent)
+        // without --reverse the traversal is inverted and finds nothing to delete
+        let canonical = graph_from_branches(&[A], &[B, C, D], &branches, false);
+        assert!(canonical.plan().to_delete.is_empty());
+        // with --reverse we correctly delete B and preserve C (held by external D)
+        let reversed = graph_from_branches(&[A], &[B, C, D], &branches, true);
+        let plan = reversed.plan();
+        assert_eq!(sorted(plan.to_delete), vec![B]);
+        assert_eq!(
+            plan.decisions.get(&C),
+            Some(&Decision::ExternalParent(vec![D]))
+        );
     }
 }

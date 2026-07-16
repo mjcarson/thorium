@@ -56,6 +56,13 @@ pub struct DeleteTree {
     /// Skip the confirmation prompt before deleting
     #[clap(long, visible_alias = "yes")]
     pub force: bool,
+    /// Treat associations as pointing from child to parent (invert parent/child)
+    ///
+    /// Use this when your entities are linked with the child as the association
+    /// source (e.g. flags, functions, and other sub-entities that point up to the
+    /// sample/binary they belong to), so "down" follows those links to descendants.
+    #[clap(long)]
+    pub reverse: bool,
     /// Log why each entity in the tree is or isn't being deleted
     #[clap(long)]
     pub debug: bool,
