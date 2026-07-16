@@ -85,13 +85,14 @@ impl DeleteGraph {
         }
     }
 
-    /// Plan which entity nodes should be deleted
+    /// Plan which entity nodes should be deleted, recording a reason for each
     ///
-    /// Returns the hashes of the entity nodes to delete. An entity is deleted
-    /// only if every one of its parents is an initial node or is itself being
-    /// deleted; any entity with a surviving/external parent is preserved, as are
-    /// all of its descendants.
-    fn plan(&self) -> Vec<u64> {
+    /// An entity is deleted only if every one of its parents is an initial node
+    /// or is itself being deleted; any entity with a surviving/external parent is
+    /// preserved, as are all of its descendants. The returned [`Plan`] also
+    /// records a [`Decision`] for every entity node so callers can explain the
+    /// outcome (used by `--debug`).
+    fn plan(&self) -> Plan {
         // compute the downward closure of our initial nodes by following child edges
         let mut down: HashSet<u64> = self.initial.iter().copied().collect();
         // seed our traversal queue with the initial nodes
@@ -114,22 +115,30 @@ impl DeleteGraph {
             .copied()
             .filter(|hash| !self.initial.contains(hash) && self.entities.contains_key(hash))
             .collect();
-        // protect any candidate that has a parent outside the deletion scope
+        // track which candidates are protected and why
         let mut protected: HashSet<u64> = HashSet::new();
+        // record the surviving parents that directly protect a candidate
+        let mut external: HashMap<u64, Vec<u64>> = HashMap::new();
+        // record the preserved ancestor that propagated protection to a candidate
+        let mut protected_by: HashMap<u64, u64> = HashMap::new();
         // track newly protected nodes so we can propagate protection to their descendants
         let mut work: VecDeque<u64> = VecDeque::new();
         // seed protection from candidates with a surviving/external parent
         for candidate in &candidates {
             // check this candidate's parents for anything that will survive
             if let Some(parents) = self.parents_of.get(candidate) {
-                // a parent that is neither a root nor another candidate will survive
-                let has_surviving_parent = parents
+                // collect the parents that are neither a root nor another candidate
+                let surviving = parents
                     .iter()
-                    .any(|parent| !self.initial.contains(parent) && !candidates.contains(parent));
+                    .copied()
+                    .filter(|parent| !self.initial.contains(parent) && !candidates.contains(parent))
+                    .collect::<Vec<u64>>();
                 // protect this candidate if it hangs off a surviving parent
-                if has_surviving_parent {
-                    // mark this candidate protected and queue it for propagation
+                if !surviving.is_empty() {
+                    // mark this candidate protected and record the surviving parents
                     protected.insert(*candidate);
+                    external.insert(*candidate, surviving);
+                    // queue it so its descendants inherit protection
                     work.push_back(*candidate);
                 }
             }
@@ -141,17 +150,70 @@ impl DeleteGraph {
                 // protect any candidate child that isn't already protected
                 for child in children {
                     if candidates.contains(child) && protected.insert(*child) {
+                        // record which ancestor propagated protection to this child
+                        protected_by.insert(*child, node);
                         work.push_back(*child);
                     }
                 }
             }
         }
-        // delete every candidate that wasn't protected
-        candidates
-            .into_iter()
-            .filter(|hash| !protected.contains(hash))
-            .collect()
+        // build a decision for every entity node and collect the ones to delete
+        let mut decisions = HashMap::with_capacity(self.entities.len());
+        let mut to_delete = Vec::new();
+        for hash in self.entities.keys().copied() {
+            // classify this entity node in priority order
+            let decision = if self.initial.contains(&hash) {
+                // initial nodes are roots and are never deleted
+                Decision::Initial
+            } else if !down.contains(&hash) {
+                // this entity can't be reached by traversing down from any initial node
+                Decision::Unreachable
+            } else if let Some(surviving) = external.get(&hash) {
+                // this entity is held by one or more surviving parents
+                Decision::ExternalParent(surviving.clone())
+            } else if let Some(ancestor) = protected_by.get(&hash) {
+                // this entity descends from a preserved node
+                Decision::ProtectedDescendant(*ancestor)
+            } else {
+                // nothing is keeping this entity so it will be deleted
+                to_delete.push(hash);
+                Decision::Delete
+            };
+            // record this entity's decision
+            decisions.insert(hash, decision);
+        }
+        Plan {
+            to_delete,
+            decisions,
+        }
     }
+}
+
+/// Why an entity node was or wasn't scheduled for deletion
+#[derive(Debug, PartialEq, Eq)]
+enum Decision {
+    /// This entity is scheduled for deletion
+    Delete,
+    /// This entity is an initial (root) node and is never deleted
+    Initial,
+    /// This entity is not reachable downward from any initial node
+    Unreachable,
+    /// This entity is preserved because it has surviving/external parent(s)
+    ///
+    /// Holds the node hashes of the surviving parents.
+    ExternalParent(Vec<u64>),
+    /// This entity is preserved because it descends from a preserved node
+    ///
+    /// Holds the node hash of the preserved ancestor that protected it.
+    ProtectedDescendant(u64),
+}
+
+/// The result of planning deletions over a tree
+struct Plan {
+    /// The hashes of the entity nodes to delete
+    to_delete: Vec<u64>,
+    /// The decision for every entity node in the tree, keyed by node hash
+    decisions: HashMap<u64, Decision>,
 }
 
 /// A single entity slated for deletion
@@ -191,6 +253,112 @@ fn print_summary(targets: &[DeleteTarget]) {
     }
 }
 
+/// Describe a tree node by its hash for debug output
+///
+/// # Arguments
+///
+/// * `tree` - The tree to resolve the node from
+/// * `hash` - The hash of the node to describe
+fn describe_node(tree: &Tree, hash: u64) -> String {
+    // resolve this hash into a readable label from the tree's node data
+    match tree.data_map.get(&hash) {
+        Some(TreeNode::Entity(entity)) => format!("entity '{}' ({})", entity.name, entity.id),
+        Some(TreeNode::Sample(sample)) => format!("sample {}", sample.sha256),
+        Some(TreeNode::Repo(repo)) => format!("repo {}", repo.url),
+        Some(TreeNode::Tag(_)) => format!("tag node #{hash}"),
+        None => format!("unknown node #{hash}"),
+    }
+}
+
+/// Log why each entity in the tree is or isn't being deleted
+///
+/// # Arguments
+///
+/// * `tree` - The tree that was built and planned over
+/// * `graph` - The traversal view used to plan deletions
+/// * `plan` - The deletion plan with a decision for every entity node
+fn debug_report(tree: &Tree, graph: &DeleteGraph, plan: &Plan) {
+    // build a dimmed prefix so debug lines are easy to spot
+    let prefix = "debug:".dimmed();
+    // tally the node kinds in the built tree
+    let (mut samples, mut repos, mut tags) = (0usize, 0usize, 0usize);
+    for node in tree.data_map.values() {
+        match node {
+            TreeNode::Entity(_) => (),
+            TreeNode::Sample(_) => samples += 1,
+            TreeNode::Repo(_) => repos += 1,
+            TreeNode::Tag(_) => tags += 1,
+        }
+    }
+    // count how many initial nodes actually resolved into the tree's node data
+    let resolved_initial = tree
+        .initial
+        .iter()
+        .filter(|hash| tree.data_map.contains_key(hash))
+        .count();
+    // count the total number of displayed and hinted branch edges
+    let branches: usize = tree.branches.values().map(std::collections::HashSet::len).sum();
+    let hint_branches: usize = tree
+        .hint_branches
+        .values()
+        .map(std::collections::HashSet::len)
+        .sum();
+    // print the tree level stats
+    println!(
+        "{prefix} tree has {} nodes ({} entities, {samples} samples, {repos} repos, {tags} tags), \
+         {} initial nodes ({resolved_initial} resolved), {branches} branches, {hint_branches} hint branches",
+        tree.data_map.len(),
+        graph.entities.len(),
+        tree.initial.len(),
+    );
+    // build a stable, name sorted view of every entity decision
+    let mut lines = plan
+        .decisions
+        .iter()
+        .map(|(hash, decision)| {
+            // resolve this entity's name for sorting and display
+            let name = match tree.data_map.get(hash) {
+                Some(TreeNode::Entity(entity)) => entity.name.clone(),
+                _ => format!("#{hash}"),
+            };
+            (name, *hash, decision)
+        })
+        .collect::<Vec<(String, u64, &Decision)>>();
+    // sort by entity name for readable output
+    lines.sort_by(|left, right| left.0.cmp(&right.0));
+    // print a decision line for every entity node in the tree
+    for (name, hash, decision) in lines {
+        // count this entity's parents and children to reveal direction/orientation issues
+        let parents = graph.parents_of.get(&hash).map_or(0, HashSet::len);
+        let children = graph.children_of.get(&hash).map_or(0, HashSet::len);
+        // build the human readable reason for this decision
+        let reason = match decision {
+            Decision::Delete => "DELETE".bright_red().to_string(),
+            Decision::Initial => "KEEP: initial node".to_string(),
+            Decision::Unreachable => {
+                "KEEP: not reachable downward from initial nodes".to_string()
+            }
+            Decision::ExternalParent(surviving) => {
+                // list each surviving parent that protects this entity
+                let parents = surviving
+                    .iter()
+                    .map(|parent| describe_node(tree, *parent))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                format!("KEEP: surviving parent(s): {parents}")
+            }
+            Decision::ProtectedDescendant(ancestor) => {
+                format!(
+                    "KEEP: descends from preserved {}",
+                    describe_node(tree, *ancestor)
+                )
+            }
+        };
+        // print this entity's decision line
+        println!("{prefix} entity '{name}' [parents={parents}, children={children}] -> {reason}");
+    }
+}
+
 /// Delete the descendant entities under a set of initial tree nodes
 ///
 /// # Arguments
@@ -206,10 +374,14 @@ pub async fn delete(thorium: &Thorium, args: &Args, cmd: &DeleteTree) -> Result<
     let tree = thorium.trees.start(&opts, &query).await?;
     // plan which entity nodes should be deleted
     let graph = DeleteGraph::from_tree(&tree);
-    let to_delete = graph.plan();
+    let plan = graph.plan();
+    // log why each entity is or isn't being deleted if debugging is enabled
+    if cmd.debug {
+        debug_report(&tree, &graph, &plan);
+    }
     // resolve each planned node hash back into its entity info for deletion and display
-    let mut targets = Vec::with_capacity(to_delete.len());
-    for hash in &to_delete {
+    let mut targets = Vec::with_capacity(plan.to_delete.len());
+    for hash in &plan.to_delete {
         // only entity nodes should have made it into our plan
         if let Some(TreeNode::Entity(entity)) = tree.data_map.get(hash) {
             // record the info we need to delete and display this entity
@@ -329,7 +501,7 @@ mod tests {
             &[(A, B), (B, C), (D, C), (C, E)],
         );
         // only B is safe to delete; C is held by D and E hangs off the preserved C
-        assert_eq!(sorted(graph.plan()), vec![B]);
+        assert_eq!(sorted(graph.plan().to_delete), vec![B]);
     }
 
     /// A plain chain rooted at an initial node deletes every descendant
@@ -338,7 +510,7 @@ mod tests {
         // A -> B -> C -> D
         let graph = graph(&[A], &[B, C, D], &[(A, B), (B, C), (C, D)]);
         // every descendant entity is deleted, but the initial node A is not
-        assert_eq!(sorted(graph.plan()), vec![B, C, D]);
+        assert_eq!(sorted(graph.plan().to_delete), vec![B, C, D]);
     }
 
     /// A node whose parents are all in scope is deletable even via a diamond
@@ -347,7 +519,7 @@ mod tests {
         // A -> B -> C and A -> X -> C
         let graph = graph(&[A], &[B, X, C], &[(A, B), (A, X), (B, C), (X, C)]);
         // C's parents (B and X) are both being deleted, so C is deletable too
-        assert_eq!(sorted(graph.plan()), vec![B, C, X]);
+        assert_eq!(sorted(graph.plan().to_delete), vec![B, C, X]);
     }
 
     /// Protection propagates down through multiple descendant levels
@@ -360,7 +532,7 @@ mod tests {
             &[(A, B), (B, C), (D, C), (C, E), (E, F)],
         );
         // C is protected by D, and protection flows down to E and F
-        assert_eq!(sorted(graph.plan()), vec![B]);
+        assert_eq!(sorted(graph.plan().to_delete), vec![B]);
     }
 
     /// A surviving non-entity node in the middle protects its entity child
@@ -369,7 +541,7 @@ mod tests {
         // A -> S (sample, not an entity) -> B
         let graph = graph(&[A], &[B], &[(A, S), (S, B)]);
         // S survives (it is never deleted) so its child B is preserved
-        assert!(graph.plan().is_empty());
+        assert!(graph.plan().to_delete.is_empty());
     }
 
     /// Initial nodes are never deleted even if they are entities
@@ -378,6 +550,33 @@ mod tests {
         // A (entity) is the initial node and parents B
         let graph = graph(&[A], &[A, B], &[(A, B)]);
         // only the child B is deleted; the initial A is left alone
-        assert_eq!(sorted(graph.plan()), vec![B]);
+        assert_eq!(sorted(graph.plan().to_delete), vec![B]);
+    }
+
+    /// The plan records an accurate reason for every entity decision
+    #[test]
+    fn plan_records_reasons() {
+        // A -> B -> C, external D -> C, C -> E, plus a disconnected entity Z
+        let graph = graph(
+            &[A],
+            &[B, C, D, E, F],
+            &[(A, B), (B, C), (D, C), (C, E)],
+        );
+        // build the plan so we can inspect its per entity decisions
+        let plan = graph.plan();
+        // B has only in-scope parents so it is deleted
+        assert_eq!(plan.decisions.get(&B), Some(&Decision::Delete));
+        // C is preserved because it has a surviving external parent D
+        assert_eq!(
+            plan.decisions.get(&C),
+            Some(&Decision::ExternalParent(vec![D]))
+        );
+        // E is preserved because it descends from the preserved C
+        assert_eq!(
+            plan.decisions.get(&E),
+            Some(&Decision::ProtectedDescendant(C))
+        );
+        // F is an entity with no path from the initial node so it is unreachable
+        assert_eq!(plan.decisions.get(&F), Some(&Decision::Unreachable));
     }
 }

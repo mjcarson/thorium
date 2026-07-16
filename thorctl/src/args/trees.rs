@@ -56,6 +56,9 @@ pub struct DeleteTree {
     /// Skip the confirmation prompt before deleting
     #[clap(long, visible_alias = "yes")]
     pub force: bool,
+    /// Log why each entity in the tree is or isn't being deleted
+    #[clap(long)]
+    pub debug: bool,
 }
 
 impl DeleteTree {
