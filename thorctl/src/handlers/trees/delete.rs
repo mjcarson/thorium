@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use colored::Colorize;
 use futures::stream::{self, StreamExt};
 use thorium::Thorium;
-use thorium::models::{Directionality, EntityKinds, Tree, TreeNode};
+use thorium::models::{Directionality, EntityKinds, Tree, TreeNode, TreeRelationships};
 use uuid::Uuid;
 
 use crate::Args;
@@ -28,31 +28,129 @@ struct DeleteGraph {
     children_of: HashMap<u64, HashSet<u64>>,
 }
 
-/// Resolve a branch into its `(parent, child)` node hashes for the chosen direction mode
+/// The kind of a tree node, used to orient edges by node type
 ///
-/// The canonical Thorium convention (used by sample origins, the filesystem/process
-/// builders, and the UI's tree renderer) is `To`/`Bidirectional` = parent→child and
-/// `From` = child→parent. Some tools instead link sub-entities to their parent with
-/// the child as the association source (so `To` = child→parent); passing
-/// `reverse = true` flips the interpretation to handle that data.
+/// [`EntityKinds`] is the discriminant of [`thorium::models::EntityMetadata`], so
+/// this captures "the type of node" for both entity and non-entity nodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NodeKind {
+    /// A sample node
+    Sample,
+    /// A repo node
+    Repo,
+    /// A tag node
+    Tag,
+    /// An entity node of a specific kind
+    Entity(EntityKinds),
+}
+
+/// Get the [`NodeKind`] for a tree node
+///
+/// # Arguments
+///
+/// * `node` - The tree node to classify
+fn node_kind(node: &TreeNode) -> NodeKind {
+    // map each tree node variant to its orientation kind
+    match node {
+        TreeNode::Sample(_) => NodeKind::Sample,
+        TreeNode::Repo(_) => NodeKind::Repo,
+        TreeNode::Tag(_) => NodeKind::Tag,
+        TreeNode::Entity(entity) => NodeKind::Entity(entity.kind),
+    }
+}
+
+/// Which endpoint of an edge is the parent/container
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Orientation {
+    /// The first node (branch source) is the parent
+    FirstParent,
+    /// The second node (branch target) is the parent
+    SecondParent,
+    /// No containment can be inferred from the kinds; use the branch direction
+    UseDirection,
+    /// This edge is not part of the deletion hierarchy and should be skipped
+    Skip,
+}
+
+/// Decide which node is the parent/container based on the two endpoints' kinds
+///
+/// Orientation depends on the type of node, not on the stored association direction,
+/// because the same association kind is created both parent→child and child→parent in
+/// different code paths. This mirrors the pairwise kind matching in
+/// [`thorium::models::AssociationKind`]'s `From<(EntityKinds, EntityKinds)>`.
+///
+/// # Arguments
+///
+/// * `a` - The kind of the branch's source node
+/// * `b` - The kind of the branch's target node
+fn orient(a: NodeKind, b: NodeKind) -> Orientation {
+    use EntityKinds::{
+        CompiledFunction, DecompiledFunction, FileSystem, Flag, Folder, NetworkConnection,
+        PeImport, PeSection, WindowsProcess, WindowsProcessTree,
+    };
+    use NodeKind::{Entity as E, Repo, Sample, Tag};
+    // match on the pair of node kinds to determine the container/parent side
+    match (a, b) {
+        // tag nodes are not part of the containment hierarchy
+        (Tag, _) | (_, Tag) => Orientation::Skip,
+        // two flags have no containment between them
+        (E(Flag), E(Flag)) => Orientation::UseDirection,
+        // a flag is always a leaf child of whatever it annotates
+        (_, E(Flag)) => Orientation::FirstParent,
+        (E(Flag), _) => Orientation::SecondParent,
+        // a folder contains its files, so a folder parents a sample/repo (FileIn)
+        (E(Folder), Sample | Repo) => Orientation::FirstParent,
+        (Sample | Repo, E(Folder)) => Orientation::SecondParent,
+        // samples/repos contain the sub-entities extracted or carved from them
+        (
+            Sample | Repo,
+            E(FileSystem
+            | WindowsProcessTree
+            | PeSection
+            | PeImport
+            | NetworkConnection
+            | CompiledFunction
+            | DecompiledFunction),
+        ) => Orientation::FirstParent,
+        (
+            E(FileSystem
+            | WindowsProcessTree
+            | PeSection
+            | PeImport
+            | NetworkConnection
+            | CompiledFunction
+            | DecompiledFunction),
+            Sample | Repo,
+        ) => Orientation::SecondParent,
+        // a filesystem contains its folders
+        (E(FileSystem), E(Folder)) => Orientation::FirstParent,
+        (E(Folder), E(FileSystem)) => Orientation::SecondParent,
+        // a process tree contains its processes
+        (E(WindowsProcessTree), E(WindowsProcess)) => Orientation::FirstParent,
+        (E(WindowsProcess), E(WindowsProcessTree)) => Orientation::SecondParent,
+        // a compiled function contains its decompiled form
+        (E(CompiledFunction), E(DecompiledFunction)) => Orientation::FirstParent,
+        (E(DecompiledFunction), E(CompiledFunction)) => Orientation::SecondParent,
+        // any other pairing (same kind, cross-cutting references) defers to direction
+        _ => Orientation::UseDirection,
+    }
+}
+
+/// Resolve a branch to `(parent, child)` using only the stored direction
+///
+/// Used as a tiebreak when the node kinds don't establish containment (same-kind
+/// edges like sample↔sample origins or process↔process, and cross-cutting refs).
 ///
 /// # Arguments
 ///
 /// * `direction` - The branch's directionality
 /// * `src` - The hash of the node the branch is stored under
 /// * `node` - The hash of the node the branch points to
-/// * `reverse` - Whether to invert the parent/child interpretation
-fn orient(direction: Directionality, src: u64, node: u64, reverse: bool) -> (u64, u64) {
-    // map the branch onto a (parent, child) pair based on the direction mode
-    match (direction, reverse) {
-        // canonical: To/Bidirectional point from the parent (src) down to the child (node)
-        (Directionality::To | Directionality::Bidirectional, false) => (src, node),
-        // reversed: To/Bidirectional point from the child (src) up to the parent (node)
-        (Directionality::To | Directionality::Bidirectional, true) => (node, src),
-        // canonical: From points from the child (src) up to the parent (node)
-        (Directionality::From, false) => (node, src),
-        // reversed: From points from the parent (src) down to the child (node)
-        (Directionality::From, true) => (src, node),
+fn orient_by_direction(direction: Directionality, src: u64, node: u64) -> (u64, u64) {
+    // canonical convention: To/Bidirectional point parent→child, From points child→parent
+    match direction {
+        Directionality::To | Directionality::Bidirectional => (src, node),
+        Directionality::From => (node, src),
     }
 }
 
@@ -62,8 +160,7 @@ impl DeleteGraph {
     /// # Arguments
     ///
     /// * `tree` - The tree to build a traversal view from
-    /// * `reverse` - Whether associations point child→parent instead of parent→child
-    fn from_tree(tree: &Tree, reverse: bool) -> Self {
+    fn from_tree(tree: &Tree) -> Self {
         // collect the hashes of our initial root nodes
         let initial = tree.initial.iter().copied().collect::<HashSet<u64>>();
         // map every entity node's hash to its entity id
@@ -78,17 +175,41 @@ impl DeleteGraph {
         // build the parent/child adjacency maps for our tree
         let mut parents_of: HashMap<u64, HashSet<u64>> = HashMap::new();
         let mut children_of: HashMap<u64, HashSet<u64>> = HashMap::new();
+        // helper to record a directed parent -> child edge in both maps
+        let mut add_edge = |parent: u64, child: u64| {
+            children_of.entry(parent).or_default().insert(child);
+            parents_of.entry(child).or_default().insert(parent);
+        };
         // fold in both displayed branches and hinted branches so no real edge is missed
         for branch_map in [&tree.branches, &tree.hint_branches] {
             // step over every source node and its branches
             for (src, branches) in branch_map {
                 // convert each branch into a directed parent/child edge
                 for branch in branches {
-                    // resolve this branch into its parent and child based on the direction mode
-                    let (parent, child) = orient(branch.direction, *src, branch.node, reverse);
-                    // record the edge in both adjacency maps
-                    children_of.entry(parent).or_default().insert(child);
-                    parents_of.entry(child).or_default().insert(parent);
+                    // tag relationships are not containment edges, so skip them
+                    if matches!(branch.relationship, TreeRelationships::Tags) {
+                        continue;
+                    }
+                    // resolve this branch into a directed parent/child edge by node kind
+                    let (parent, child) =
+                        match (tree.data_map.get(src), tree.data_map.get(&branch.node)) {
+                            // orient by the two endpoints' kinds when we have both nodes
+                            (Some(src_node), Some(other_node)) => {
+                                match orient(node_kind(src_node), node_kind(other_node)) {
+                                    Orientation::FirstParent => (*src, branch.node),
+                                    Orientation::SecondParent => (branch.node, *src),
+                                    Orientation::UseDirection => {
+                                        orient_by_direction(branch.direction, *src, branch.node)
+                                    }
+                                    // this edge isn't part of the hierarchy so skip it
+                                    Orientation::Skip => continue,
+                                }
+                            }
+                            // an endpoint is missing (shouldn't happen) so fall back to direction
+                            _ => orient_by_direction(branch.direction, *src, branch.node),
+                        };
+                    // record the resolved edge
+                    add_edge(parent, child);
                 }
             }
         }
@@ -292,8 +413,7 @@ fn describe_node(tree: &Tree, hash: u64) -> String {
 /// * `tree` - The tree that was built and planned over
 /// * `graph` - The traversal view used to plan deletions
 /// * `plan` - The deletion plan with a decision for every entity node
-/// * `reverse` - Whether the parent/child direction was inverted
-fn debug_report(tree: &Tree, graph: &DeleteGraph, plan: &Plan, reverse: bool) {
+fn debug_report(tree: &Tree, graph: &DeleteGraph, plan: &Plan) {
     // build a dimmed prefix so debug lines are easy to spot
     let prefix = "debug:".dimmed();
     // tally the node kinds in the built tree
@@ -340,15 +460,9 @@ fn debug_report(tree: &Tree, graph: &DeleteGraph, plan: &Plan, reverse: bool) {
         graph.entities.len(),
         tree.initial.len(),
     );
-    // print the direction breakdown and the active direction mode
-    println!(
-        "{prefix} branch directions: {to} To, {from} From, {bidir} Bidirectional; direction mode: {}",
-        if reverse {
-            "reversed (child->parent)"
-        } else {
-            "canonical (parent->child)"
-        }
-    );
+    // print the raw branch direction breakdown (orientation is decided by node kind,
+    // but the direction is still shown as it is the tiebreak for same-kind edges)
+    println!("{prefix} branch directions: {to} To, {from} From, {bidir} Bidirectional");
     // build a stable, name sorted view of every entity decision
     let mut lines = plan
         .decisions
@@ -366,6 +480,11 @@ fn debug_report(tree: &Tree, graph: &DeleteGraph, plan: &Plan, reverse: bool) {
     lines.sort_by(|left, right| left.0.cmp(&right.0));
     // print a decision line for every entity node in the tree
     for (name, hash, decision) in lines {
+        // resolve this entity's kind so orientation issues are easy to spot
+        let kind = match tree.data_map.get(&hash) {
+            Some(TreeNode::Entity(entity)) => entity.kind.to_string(),
+            _ => "?".to_string(),
+        };
         // count this entity's parents and children to reveal direction/orientation issues
         let parents = graph.parents_of.get(&hash).map_or(0, HashSet::len);
         let children = graph.children_of.get(&hash).map_or(0, HashSet::len);
@@ -393,7 +512,9 @@ fn debug_report(tree: &Tree, graph: &DeleteGraph, plan: &Plan, reverse: bool) {
             }
         };
         // print this entity's decision line
-        println!("{prefix} entity '{name}' [parents={parents}, children={children}] -> {reason}");
+        println!(
+            "{prefix} entity '{name}' ({kind}) [parents={parents}, children={children}] -> {reason}"
+        );
     }
 }
 
@@ -410,12 +531,12 @@ pub async fn delete(thorium: &Thorium, args: &Args, cmd: &DeleteTree) -> Result<
     let opts = cmd.to_opts();
     // build the tree from our initial nodes
     let tree = thorium.trees.start(&opts, &query).await?;
-    // plan which entity nodes should be deleted, honoring the direction mode
-    let graph = DeleteGraph::from_tree(&tree, cmd.reverse);
+    // plan which entity nodes should be deleted (orientation is derived from node kind)
+    let graph = DeleteGraph::from_tree(&tree);
     let plan = graph.plan();
     // log why each entity is or isn't being deleted if debugging is enabled
     if cmd.debug {
-        debug_report(&tree, &graph, &plan, cmd.reverse);
+        debug_report(&tree, &graph, &plan);
     }
     // resolve each planned node hash back into its entity info for deletion and display
     let mut targets = Vec::with_capacity(plan.to_delete.len());
@@ -434,8 +555,8 @@ pub async fn delete(thorium: &Thorium, args: &Args, cmd: &DeleteTree) -> Result<
     targets.sort_by(|left, right| left.name.cmp(&right.name));
     // show the user what we plan to delete
     print_summary(&targets);
-    // if nothing is deletable but the tree holds non-initial entities, the direction
-    // convention may be inverted, so nudge the user toward the fix
+    // if nothing is deletable but the tree holds non-initial entities, point the user
+    // at the debug output so they can inspect node kinds and edges
     if targets.is_empty() {
         // count entity nodes that aren't initial roots
         let non_initial_entities = graph
@@ -444,19 +565,11 @@ pub async fn delete(thorium: &Thorium, args: &Args, cmd: &DeleteTree) -> Result<
             .filter(|hash| !graph.initial.contains(hash))
             .count();
         // only hint if there were entities we could have considered
-        if non_initial_entities > 0 {
-            // suggest flipping the direction mode based on the current setting
-            if cmd.reverse {
-                println!(
-                    "Hint: no entities were eligible. Try removing --reverse, or use --debug to inspect the tree."
-                );
-            } else {
-                println!(
-                    "Hint: no entities were eligible. If your entities link child->parent \
-                     (e.g. flags/functions pointing up to their sample), re-run with --reverse. \
-                     Use --debug to inspect the tree."
-                );
-            }
+        if non_initial_entities > 0 && !cmd.debug {
+            println!(
+                "Hint: {non_initial_entities} entities were in the tree but none were eligible \
+                 to delete. Re-run with --debug to see each entity's kind and why it was kept."
+            );
         }
     }
     // stop here if this is only a preview or there is nothing to delete
@@ -643,83 +756,59 @@ mod tests {
         assert_eq!(plan.decisions.get(&F), Some(&Decision::Unreachable));
     }
 
-    /// Build a [`DeleteGraph`] from raw branches using [`orient`], mirroring `from_tree`
-    ///
-    /// # Arguments
-    ///
-    /// * `initial` - The hashes of the initial root nodes
-    /// * `entity_hashes` - The hashes of nodes that are entities
-    /// * `branches` - The raw `(src, node, direction)` branches in the tree
-    /// * `reverse` - Whether to invert the parent/child interpretation
-    fn graph_from_branches(
-        initial: &[u64],
-        entity_hashes: &[u64],
-        branches: &[(u64, u64, Directionality)],
-        reverse: bool,
-    ) -> DeleteGraph {
-        // collect our initial root hashes
-        let initial = initial.iter().copied().collect::<HashSet<u64>>();
-        // give every entity node a synthetic id
-        let mut entities = HashMap::new();
-        for hash in entity_hashes {
-            entities.insert(*hash, Uuid::new_v4());
-        }
-        // build adjacency the same way from_tree does, via orient
-        let mut parents_of: HashMap<u64, HashSet<u64>> = HashMap::new();
-        let mut children_of: HashMap<u64, HashSet<u64>> = HashMap::new();
-        for (src, node, direction) in branches {
-            // resolve this branch into a parent and child for the chosen mode
-            let (parent, child) = orient(*direction, *src, *node, reverse);
-            children_of.entry(parent).or_default().insert(child);
-            parents_of.entry(child).or_default().insert(parent);
-        }
-        DeleteGraph {
-            initial,
-            entities,
-            parents_of,
-            children_of,
-        }
-    }
-
-    /// `orient` maps every direction/mode combination to the right parent/child
+    /// `orient` derives the parent/child side purely from the two node kinds
     #[test]
-    fn orient_maps_directions() {
-        // canonical: To/Bidirectional point from the parent (src) to the child (node)
-        assert_eq!(orient(Directionality::To, 1, 2, false), (1, 2));
-        assert_eq!(orient(Directionality::Bidirectional, 1, 2, false), (1, 2));
-        // canonical: From points from the child (src) up to the parent (node)
-        assert_eq!(orient(Directionality::From, 1, 2, false), (2, 1));
-        // reversed: To/Bidirectional flip to child (src) -> parent (node)
-        assert_eq!(orient(Directionality::To, 1, 2, true), (2, 1));
-        assert_eq!(orient(Directionality::Bidirectional, 1, 2, true), (2, 1));
-        // reversed: From flips to parent (src) -> child (node)
-        assert_eq!(orient(Directionality::From, 1, 2, true), (1, 2));
-    }
-
-    /// Child->parent associations only resolve correctly with `--reverse`
-    #[test]
-    fn reversed_convention_child_to_parent() {
-        // the user's tree: A<-B<-C and D<-C, i.e. child->parent associations (child is source, To)
-        // each association is mirrored on both endpoints (To on the source, From on the target)
-        let branches = [
-            (B, A, Directionality::To),   // B is a child of A
-            (A, B, Directionality::From), // mirror
-            (C, B, Directionality::To),   // C is a child of B
-            (B, C, Directionality::From), // mirror
-            (C, D, Directionality::To),   // C is also a child of external D
-            (D, C, Directionality::From), // mirror
-        ];
-        // A is the initial sample; B, C, D are entities (D is C's external parent)
-        // without --reverse the traversal is inverted and finds nothing to delete
-        let canonical = graph_from_branches(&[A], &[B, C, D], &branches, false);
-        assert!(canonical.plan().to_delete.is_empty());
-        // with --reverse we correctly delete B and preserve C (held by external D)
-        let reversed = graph_from_branches(&[A], &[B, C, D], &branches, true);
-        let plan = reversed.plan();
-        assert_eq!(sorted(plan.to_delete), vec![B]);
+    fn orient_by_node_kind() {
+        use NodeKind::{Entity as E, Sample, Tag};
+        use thorium::models::EntityKinds::{
+            CompiledFunction, DecompiledFunction, FileSystem, Flag, Folder, WindowsProcess,
+            WindowsProcessTree,
+        };
+        // samples contain the functions extracted from them (either endpoint order)
+        assert_eq!(orient(Sample, E(CompiledFunction)), Orientation::FirstParent);
+        assert_eq!(orient(E(CompiledFunction), Sample), Orientation::SecondParent);
+        // a compiled function contains its decompiled form
         assert_eq!(
-            plan.decisions.get(&C),
-            Some(&Decision::ExternalParent(vec![D]))
+            orient(E(CompiledFunction), E(DecompiledFunction)),
+            Orientation::FirstParent
         );
+        assert_eq!(
+            orient(E(DecompiledFunction), E(CompiledFunction)),
+            Orientation::SecondParent
+        );
+        // flags are always leaf children of whatever they annotate
+        assert_eq!(orient(Sample, E(Flag)), Orientation::FirstParent);
+        assert_eq!(
+            orient(E(DecompiledFunction), E(Flag)),
+            Orientation::FirstParent
+        );
+        assert_eq!(orient(E(Flag), Sample), Orientation::SecondParent);
+        // two flags have no containment between them
+        assert_eq!(orient(E(Flag), E(Flag)), Orientation::UseDirection);
+        // a filesystem contains folders; a folder contains file samples (FileIn)
+        assert_eq!(orient(E(FileSystem), E(Folder)), Orientation::FirstParent);
+        assert_eq!(orient(E(Folder), Sample), Orientation::FirstParent);
+        // a process tree contains its processes
+        assert_eq!(
+            orient(E(WindowsProcessTree), E(WindowsProcess)),
+            Orientation::FirstParent
+        );
+        // tag edges are skipped; same-kind / unlisted pairs defer to the direction
+        assert_eq!(orient(Tag, Sample), Orientation::Skip);
+        assert_eq!(orient(Sample, Sample), Orientation::UseDirection);
+        assert_eq!(
+            orient(E(WindowsProcess), E(WindowsProcess)),
+            Orientation::UseDirection
+        );
+    }
+
+    /// `orient_by_direction` maps the stored direction to a parent/child pair
+    #[test]
+    fn orient_by_direction_maps() {
+        // To/Bidirectional keep the source as the parent
+        assert_eq!(orient_by_direction(Directionality::To, 1, 2), (1, 2));
+        assert_eq!(orient_by_direction(Directionality::Bidirectional, 1, 2), (1, 2));
+        // From makes the pointed-to node the parent
+        assert_eq!(orient_by_direction(Directionality::From, 1, 2), (2, 1));
     }
 }
