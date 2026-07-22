@@ -3,12 +3,13 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
 use thorium::client::conf::ActiveScopedToken;
 use thorium::models::{ScopedToken, ScopedTokenRequest, ScopedTokenUpdate};
+use thorium::utils::helpers::human_duration;
 use thorium::{CtlConf, Error, Thorium};
 
 use crate::args::Args;
-use crate::args::scoped_tokens::{
-    ActivateScopedToken, CreateScopedToken, CurrentScopedToken, DeleteScopedTokens,
-    ListScopedTokens, ScopedTokens, UpdateScopedToken,
+use crate::args::tokens::{
+    ActivateScopedToken, CreateScopedToken, CurrentScopedToken, DeleteScopedTokens, DescribeTokens,
+    GetTokens, Tokens, UpdateScopedToken,
 };
 use crate::utils;
 
@@ -26,6 +27,26 @@ fn parse_expires(expires: Option<&String>, date_fmt: &str) -> Result<Option<Date
         )),
         None => Ok(None),
     }
+}
+
+/// Get a human readable duration until a target timestamp
+///
+/// Returns `None` if the target timestamp has already passed. Only the two
+/// most significant units are kept to keep output short (e.g. "2 months 29 days").
+///
+/// # Arguments
+///
+/// * `target` - The timestamp to get a human readable duration until
+fn time_until(target: DateTime<Utc>) -> Option<String> {
+    // get the time remaining until our target or bail if its in the past
+    let remaining = (target - Utc::now()).to_std().ok()?;
+    // truncate to whole seconds so we don't print ms/us/ns level detail
+    let secs = remaining.as_secs();
+    // convert our remaining time to a human readable string
+    let human = human_duration(std::time::Duration::from_secs(secs));
+    // keep only the two most significant units (each unit is 2 words)
+    let short: Vec<&str> = human.split_whitespace().take(4).collect();
+    Some(short.join(" "))
 }
 
 /// Print a scoped tokens info
@@ -104,31 +125,121 @@ async fn create(thorium: Thorium, cmd: &CreateScopedToken) -> Result<(), Error> 
     // create our scoped token
     let scoped = thorium.users.create_scoped_token(&req).await?;
     // print our new scoped tokens info
-    print_token(&scoped, cmd.show_token);
-    // tell the user how to see this scoped tokens value if it was hidden
-    if !cmd.show_token {
-        println!("Rerun with --show-token to see this scoped tokens value");
-    }
+    print_token(&scoped, false);
+    // tell the user how to see this scoped tokens value
+    println!(
+        "Run 'thorctl tokens describe {} --show-token' to see this scoped tokens value",
+        scoped.name
+    );
     Ok(())
 }
 
-/// List all available scoped tokens
+/// A line in the scoped token table printed by the get command
+struct TokenLine;
+
+impl TokenLine {
+    /// Print the scoped token tables header
+    #[allow(clippy::print_literal)]
+    pub fn header() {
+        // print the header for the scoped token table
+        println!(
+            "{:<32} | {:<20} | {:<20} | {}",
+            "NAME", "REFRESH", "EXPIRATION", "GROUPS"
+        );
+        // print the separator under the header
+        println!("{:-<33}+{:-<22}+{:-<22}+{:-<32}", "", "", "", "");
+    }
+
+    /// Print a single scoped token as a table line
+    ///
+    /// # Arguments
+    ///
+    /// * `scoped` - The scoped token to print
+    pub fn list(scoped: &ScopedToken) {
+        // get the time until this scoped tokens value rotates
+        let refresh = time_until(scoped.token_expiration).unwrap_or_else(|| "now".to_owned());
+        // get the time until this scoped token permanently expires
+        let expiration = match scoped.expires {
+            Some(expires) => time_until(expires).unwrap_or_else(|| "expired".to_owned()),
+            None => "never".to_owned(),
+        };
+        // print this scoped tokens table line
+        println!(
+            "{:<32} | {:<20} | {:<20} | {}",
+            scoped.name,
+            refresh,
+            expiration,
+            scoped.groups.join(", ")
+        );
+    }
+}
+
+/// Get a table of all available scoped tokens
 ///
 /// # Arguments
 ///
 /// * `thorium` - The Thorium client
-/// * `cmd` - The list command to execute
-async fn list(thorium: Thorium, cmd: &ListScopedTokens) -> Result<(), Error> {
+/// * `cmd` - The get command to execute
+async fn get(thorium: Thorium, _cmd: &GetTokens) -> Result<(), Error> {
     // list all of our scoped tokens
     let tokens = thorium.users.list_scoped_tokens().await?;
-    // tell the user if there are no scoped tokens to list
-    if tokens.is_empty() {
-        println!("No scoped tokens found");
-        return Ok(());
-    }
+    // print the header for the scoped token table
+    TokenLine::header();
     // print each of our scoped tokens
     for scoped in &tokens {
-        print_token(scoped, cmd.show_token);
+        TokenLine::list(scoped);
+    }
+    Ok(())
+}
+
+/// Describe scoped tokens by displaying all of their JSON-formatted details
+///
+/// Token values are redacted unless `--show-token` is set.
+///
+/// # Arguments
+///
+/// * `thorium` - The Thorium client
+/// * `cmd` - The describe command to execute
+async fn describe(thorium: Thorium, cmd: &DescribeTokens) -> Result<(), Error> {
+    // list all of our scoped tokens
+    let mut tokens = thorium.users.list_scoped_tokens().await?;
+    // limit our tokens to the requested names if any were given
+    if !cmd.names.is_empty() {
+        // make sure all of the requested names exist
+        for name in &cmd.names {
+            if !tokens.iter().any(|scoped| &scoped.name == name) {
+                return Err(Error::new(format!("Scoped token {name} not found")));
+            }
+        }
+        // drop any tokens that were not requested
+        tokens.retain(|scoped| cmd.names.contains(&scoped.name));
+    }
+    // serialize our scoped tokens redacting values if needed
+    let mut details = Vec::with_capacity(tokens.len());
+    for scoped in tokens {
+        // serialize this scoped token
+        let mut value = serde_json::to_value(&scoped)
+            .map_err(|err| Error::new(format!("Failed to serialize scoped token: {err}")))?;
+        // redact this scoped tokens value unless it was requested
+        if !cmd.show_token {
+            value["token"] = serde_json::Value::String("<redacted>".to_owned());
+        }
+        details.push(value);
+    }
+    // serialize our details in the requested format
+    let raw = if cmd.condensed {
+        serde_json::to_string(&details)
+    } else {
+        serde_json::to_string_pretty(&details)
+    };
+    // print our serialized details
+    match raw {
+        Ok(raw) => println!("{raw}"),
+        Err(err) => {
+            return Err(Error::new(format!(
+                "Failed to serialize scoped tokens: {err}"
+            )));
+        }
     }
     Ok(())
 }
@@ -160,7 +271,7 @@ async fn update(thorium: Thorium, cmd: &UpdateScopedToken) -> Result<(), Error> 
         .update_scoped_token(&cmd.name, &update)
         .await?;
     // print our updated scoped tokens info
-    print_token(&scoped, cmd.show_token);
+    print_token(&scoped, false);
     Ok(())
 }
 
@@ -198,17 +309,17 @@ async fn delete(thorium: Thorium, cmd: &DeleteScopedTokens) -> Result<(), Error>
 /// # Arguments
 ///
 /// * `args` - The arguments passed to Thorctl
-/// * `config` - The Thorctl config to update
-/// * `thorium` - The Thorium client
 /// * `cmd` - The activate command to execute
-async fn activate(
-    args: &Args,
-    mut config: CtlConf,
-    thorium: Thorium,
-    cmd: &ActivateScopedToken,
-) -> Result<(), Error> {
+pub async fn activate(args: &Args, cmd: &ActivateScopedToken) -> Result<(), Error> {
     // make sure we have a config file to store our activation in
     require_config(args)?;
+    // load our config and instance a client that always uses our primary
+    // credentials since scoped tokens cannot manage scoped tokens
+    let (mut config, thorium) = utils::get_primary_client(args).await?;
+    // warn about insecure connections if not set to skip
+    if !config.skip_insecure_warning.unwrap_or_default() {
+        utils::warn_insecure_conf(&config)?;
+    }
     // get this scoped tokens info rotating its value if it has expired
     let scoped = thorium.users.get_scoped_token(&cmd.name).await?;
     // save this scoped token to our config
@@ -219,11 +330,11 @@ async fn activate(
     // write our updated config to disk
     write_config(args, &config)?;
     // print this scoped tokens info
-    print_token(&scoped, cmd.show_token);
+    print_token(&scoped, false);
     // tell the user this scoped token is now active
     println!(
         "Activated scoped token {}; Thorctl commands will now authenticate with it \
-        until 'thorctl scoped-tokens deactivate' is run",
+        until 'thorctl deactivate' is run",
         scoped.name
     );
     Ok(())
@@ -234,10 +345,11 @@ async fn activate(
 /// # Arguments
 ///
 /// * `args` - The arguments passed to Thorctl
-/// * `config` - The Thorctl config to update
-fn deactivate(args: &Args, mut config: CtlConf) -> Result<(), Error> {
-    // make sure we have a config file to store our activation in
+pub fn deactivate(args: &Args) -> Result<(), Error> {
+    // make sure we have a config file that could contain an activation
     require_config(args)?;
+    // load our config from disk
+    let mut config = CtlConf::from_path(&args.config)?;
     // check if a scoped token is currently active
     match config.scoped_token.take() {
         // a scoped token was active so clear it from our config
@@ -290,7 +402,7 @@ async fn current(
             if scoped.token != active.token {
                 println!(
                     "WARNING: The activated value for {} is stale because this scoped token \
-                    was rotated; rerun 'thorctl scoped-tokens activate {}' to fix it",
+                    was rotated; rerun 'thorctl activate {}' to fix it",
                     active.name, active.name
                 );
             }
@@ -301,7 +413,7 @@ async fn current(
             if error.status() == Some(http::StatusCode::NOT_FOUND) {
                 println!(
                     "The activated scoped token {} no longer exists; run \
-                    'thorctl scoped-tokens deactivate' to clear it",
+                    'thorctl deactivate' to clear it",
                     active.name
                 );
                 return Ok(());
@@ -312,13 +424,13 @@ async fn current(
     }
 }
 
-/// Handle all scoped token commands
+/// Handle all tokens commands
 ///
 /// # Arguments
 ///
 /// * `args` - The arguments passed to Thorctl
-/// * `cmd` - The scoped tokens command to execute
-pub async fn handle(args: &Args, cmd: &ScopedTokens) -> Result<(), Error> {
+/// * `cmd` - The tokens command to execute
+pub async fn handle(args: &Args, cmd: &Tokens) -> Result<(), Error> {
     // load our config and instance a client that always uses our primary
     // credentials since scoped tokens cannot manage scoped tokens
     let (conf, thorium) = utils::get_primary_client(args).await?;
@@ -326,14 +438,13 @@ pub async fn handle(args: &Args, cmd: &ScopedTokens) -> Result<(), Error> {
     if !conf.skip_insecure_warning.unwrap_or_default() {
         utils::warn_insecure_conf(&conf)?;
     }
-    // call the right scoped tokens handler
+    // call the right tokens handler
     match cmd {
-        ScopedTokens::Create(cmd) => create(thorium, cmd).await,
-        ScopedTokens::List(cmd) => list(thorium, cmd).await,
-        ScopedTokens::Update(cmd) => update(thorium, cmd).await,
-        ScopedTokens::Delete(cmd) => delete(thorium, cmd).await,
-        ScopedTokens::Activate(cmd) => activate(args, conf, thorium, cmd).await,
-        ScopedTokens::Deactivate => deactivate(args, conf),
-        ScopedTokens::Current(cmd) => current(args, conf, thorium, cmd).await,
+        Tokens::Create(cmd) => create(thorium, cmd).await,
+        Tokens::Get(cmd) => get(thorium, cmd).await,
+        Tokens::Update(cmd) => update(thorium, cmd).await,
+        Tokens::Delete(cmd) => delete(thorium, cmd).await,
+        Tokens::Describe(cmd) => describe(thorium, cmd).await,
+        Tokens::Current(cmd) => current(args, conf, thorium, cmd).await,
     }
 }

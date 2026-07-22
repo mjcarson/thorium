@@ -2,27 +2,24 @@
 
 use clap::Parser;
 
-/// The commands to send to the scoped tokens task handler
+/// The commands to send to the tokens task handler
 #[derive(Parser, Debug)]
-pub enum ScopedTokens {
+pub enum Tokens {
     /// Create a new scoped token
     #[clap(version, author)]
     Create(CreateScopedToken),
-    /// List all available scoped tokens
+    /// Get a table of all available scoped tokens
     #[clap(version, author)]
-    List(ListScopedTokens),
+    Get(GetTokens),
     /// Update a scoped token
     #[clap(version, author)]
     Update(UpdateScopedToken),
     /// Delete scoped tokens
     #[clap(version, author)]
     Delete(DeleteScopedTokens),
-    /// Activate a scoped token making Thorctl authenticate with it
+    /// Describe specific scoped tokens, displaying details in JSON format
     #[clap(version, author)]
-    Activate(ActivateScopedToken),
-    /// Deactivate the currently activated scoped token
-    #[clap(version, author)]
-    Deactivate,
+    Describe(DescribeTokens),
     /// Get info on the currently activated scoped token if one is active
     #[clap(version, author)]
     Current(CurrentScopedToken),
@@ -44,18 +41,11 @@ pub struct CreateScopedToken {
     ///     (see <https://docs.rs/chrono/latest/chrono/format/strftime>)
     #[clap(long, default_value = "%Y-%m-%dT%H:%M:%S", verbatim_doc_comment)]
     pub date_fmt: String,
-    /// Show this scoped tokens value
-    #[clap(long)]
-    pub show_token: bool,
 }
 
-/// A command to list all available scoped tokens
+/// A command to get a table of all available scoped tokens
 #[derive(Parser, Debug)]
-pub struct ListScopedTokens {
-    /// Show each scoped tokens value
-    #[clap(long)]
-    pub show_token: bool,
-}
+pub struct GetTokens {}
 
 /// A command to update a scoped token
 #[derive(Parser, Debug)]
@@ -69,9 +59,6 @@ pub struct UpdateScopedToken {
     ///     (see <https://docs.rs/chrono/latest/chrono/format/strftime>)
     #[clap(long, default_value = "%Y-%m-%dT%H:%M:%S", verbatim_doc_comment)]
     pub date_fmt: String,
-    /// Show this scoped tokens value
-    #[clap(long)]
-    pub show_token: bool,
 }
 
 /// The set of possible updates to a scoped token where at least one is set
@@ -100,14 +87,24 @@ pub struct DeleteScopedTokens {
     pub names: Vec<String>,
 }
 
+/// A command to describe scoped tokens in full
+#[derive(Parser, Debug)]
+pub struct DescribeTokens {
+    /// Any specific scoped tokens to describe (describes all when omitted)
+    pub names: Vec<String>,
+    /// Show each scoped tokens value
+    #[clap(long)]
+    pub show_token: bool,
+    /// Output details in a condensed format (no formatting/whitespace)
+    #[clap(long)]
+    pub condensed: bool,
+}
+
 /// A command to activate a scoped token
 #[derive(Parser, Debug)]
 pub struct ActivateScopedToken {
     /// The name of the scoped token to activate
     pub name: String,
-    /// Show this scoped tokens value
-    #[clap(long)]
-    pub show_token: bool,
 }
 
 /// A command to get info on the currently activated scoped token
