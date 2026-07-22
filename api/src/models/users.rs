@@ -681,6 +681,158 @@ impl ScopedTokenRequest {
     }
 }
 
+/// An update to apply to a scoped token
+///
+/// Updates never change a scoped tokens value so activated tokens keep
+/// working after an update.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "api", derive(utoipa::ToSchema))]
+pub struct ScopedTokenUpdate {
+    /// The groups to add to this scoped tokens scope
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add_groups: Vec<String>,
+    /// The groups to remove from this scoped tokens scope
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remove_groups: Vec<String>,
+    /// The new date this scoped token permanently expires
+    ///
+    /// Incompatible with `clear_expires`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires: Option<DateTime<Utc>>,
+    /// Clear this scoped tokens expiration date making it no longer ephemeral
+    ///
+    /// Incompatible with `expires`
+    #[serde(default)]
+    pub clear_expires: bool,
+}
+
+impl ScopedTokenUpdate {
+    /// Check to see if this update is empty
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        // an update is empty if it matches the default update
+        *self == Self::default()
+    }
+
+    /// Add a group to this scoped tokens scope
+    ///
+    /// # Arguments
+    ///
+    /// * `group` - The group to add to this scoped tokens scope
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::ScopedTokenUpdate;
+    ///
+    /// ScopedTokenUpdate::default().add_group("CornPeeps");
+    /// ```
+    #[must_use]
+    pub fn add_group<T: Into<String>>(mut self, group: T) -> Self {
+        // add this group to the groups to add
+        self.add_groups.push(group.into());
+        self
+    }
+
+    /// Add multiple groups to this scoped tokens scope
+    ///
+    /// # Arguments
+    ///
+    /// * `groups` - The groups to add to this scoped tokens scope
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::ScopedTokenUpdate;
+    ///
+    /// ScopedTokenUpdate::default().add_groups(vec!("CornPeeps", "CornFans"));
+    /// ```
+    #[must_use]
+    pub fn add_groups<T: Into<String>>(mut self, groups: Vec<T>) -> Self {
+        // add these groups to the groups to add
+        self.add_groups.extend(groups.into_iter().map(Into::into));
+        self
+    }
+
+    /// Remove a group from this scoped tokens scope
+    ///
+    /// # Arguments
+    ///
+    /// * `group` - The group to remove from this scoped tokens scope
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::ScopedTokenUpdate;
+    ///
+    /// ScopedTokenUpdate::default().remove_group("CornPeeps");
+    /// ```
+    #[must_use]
+    pub fn remove_group<T: Into<String>>(mut self, group: T) -> Self {
+        // add this group to the groups to remove
+        self.remove_groups.push(group.into());
+        self
+    }
+
+    /// Remove multiple groups from this scoped tokens scope
+    ///
+    /// # Arguments
+    ///
+    /// * `groups` - The groups to remove from this scoped tokens scope
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::ScopedTokenUpdate;
+    ///
+    /// ScopedTokenUpdate::default().remove_groups(vec!("CornPeeps", "CornFans"));
+    /// ```
+    #[must_use]
+    pub fn remove_groups<T: Into<String>>(mut self, groups: Vec<T>) -> Self {
+        // add these groups to the groups to remove
+        self.remove_groups
+            .extend(groups.into_iter().map(Into::into));
+        self
+    }
+
+    /// Set a new date this scoped token permanently expires
+    ///
+    /// # Arguments
+    ///
+    /// * `expires` - The new date/time this scoped token permanently expires
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::{Utc, Duration};
+    /// use thorium::models::ScopedTokenUpdate;
+    ///
+    /// ScopedTokenUpdate::default().expires(Utc::now() + Duration::days(7));
+    /// ```
+    #[must_use]
+    pub fn expires(mut self, expires: DateTime<Utc>) -> Self {
+        // set the new date this token permanently expires
+        self.expires = Some(expires);
+        self
+    }
+
+    /// Clear this scoped tokens expiration date making it no longer ephemeral
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::ScopedTokenUpdate;
+    ///
+    /// ScopedTokenUpdate::default().clear_expires();
+    /// ```
+    #[must_use]
+    pub fn clear_expires(mut self) -> Self {
+        // clear this tokens expiration date
+        self.clear_expires = true;
+        self
+    }
+}
+
 /// A token tied to a user that is limited to a subset of that users groups
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[cfg_attr(feature = "api", derive(utoipa::ToSchema))]

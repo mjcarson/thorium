@@ -2,7 +2,8 @@ use base64::Engine as _;
 
 use super::{ClientSettings, Error, helpers};
 use crate::models::{
-    AuthResponse, ScopedToken, ScopedTokenRequest, ScrubbedUser, UserCreate, UserUpdate,
+    AuthResponse, ScopedToken, ScopedTokenRequest, ScopedTokenUpdate, ScrubbedUser, UserCreate,
+    UserUpdate,
 };
 use crate::{send, send_build};
 
@@ -535,6 +536,54 @@ impl Users {
         let url = format!("{}/api/users/tokens/{}", self.host, name);
         // build request
         let req = self.client.get(&url).header("authorization", &self.token);
+        // send request and build a scoped token
+        send_build!(self.client, req, ScopedToken)
+    }
+
+    /// Updates one of the current [`User`]s scoped tokens by name
+    ///
+    /// Updates never change a scoped tokens value so activated tokens keep
+    /// working after an update.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the scoped token to update
+    /// * `update` - The update to apply to this scoped token
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::Thorium;
+    /// use thorium::models::ScopedTokenUpdate;
+    /// # use thorium::Error;
+    ///
+    /// # async fn exec() -> Result<(), Error> {
+    /// // create Thorium client
+    /// let thorium = Thorium::build("http://127.0.0.1").token("<token>").build().await?;
+    /// // build a scoped token update
+    /// let update = ScopedTokenUpdate::default().add_group("CornFans");
+    /// // update one of our scoped tokens
+    /// let scoped = thorium.users.update_scoped_token("corn-harvester", &update).await?;
+    /// # // allow test code to be compiled but don't unwrap as no API instance would be up
+    /// # Ok(())
+    /// # }
+    /// # tokio_test::block_on(async {
+    /// #    exec().await
+    /// # });
+    /// ```
+    pub async fn update_scoped_token(
+        &self,
+        name: &str,
+        update: &ScopedTokenUpdate,
+    ) -> Result<ScopedToken, Error> {
+        // build url for updating a scoped token
+        let url = format!("{}/api/users/tokens/{}", self.host, name);
+        // build request
+        let req = self
+            .client
+            .patch(&url)
+            .json(update)
+            .header("authorization", &self.token);
         // send request and build a scoped token
         send_build!(self.client, req, ScopedToken)
     }

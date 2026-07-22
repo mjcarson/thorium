@@ -529,6 +529,29 @@ pub async fn save_scoped_token(
     Ok(())
 }
 
+/// Updates a scoped tokens data in Redis without changing its value
+///
+/// This must be used instead of [`save_scoped_token`] when a scoped tokens
+/// value is unchanged since that functions pipeline removes the old value
+/// from the scoped token map after adding the new one. With an unchanged
+/// value that would delete the entry that was just written and break auth
+/// for this scoped token.
+///
+/// # Arguments
+///
+/// * `token` - The scoped token to update
+/// * `shared` - Shared Thorium objects
+#[rustfmt::skip]
+#[instrument(name = "db::users::update_scoped_token", skip_all, fields(user = token.owner, name = token.name), err(Debug))]
+pub async fn update_scoped_token(token: &ScopedToken, shared: &Shared) -> Result<(), ApiError> {
+    // build the key to this users scoped token data
+    let data_key = UserKeys::scoped_data(&token.owner, shared);
+    // update this scoped tokens data
+    let _: () = redis::cmd("hset").arg(&data_key).arg(&token.name).arg(serialize!(token))
+        .query_async(conn!(shared)).await?;
+    Ok(())
+}
+
 /// Deletes a scoped token from Redis
 ///
 /// # Arguments

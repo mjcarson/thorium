@@ -21,8 +21,8 @@ use super::db;
 use crate::conf::Ldap;
 use crate::models::{
     AiEndpoint, AiEndpointUpdate, AiSettings, AiSettingsUpdate, AuthResponse, AuthedUser, Group,
-    ImageScaler, Key, ScopedToken, ScopedTokenRequest, ScopedUser, ScrubbedUser, UnixInfo, User,
-    UserCreate, UserRole, UserSettings, UserSettingsUpdate, UserUpdate,
+    ImageScaler, Key, ScopedToken, ScopedTokenRequest, ScopedTokenUpdate, ScopedUser, ScrubbedUser,
+    UnixInfo, User, UserCreate, UserRole, UserSettings, UserSettingsUpdate, UserUpdate,
 };
 use crate::utils::shared::EmailClient;
 use crate::utils::{ApiError, AppState, Shared, bounder};
@@ -1318,6 +1318,81 @@ impl ScopedToken {
         if scoped.token_expiration < Utc::now() {
             scoped.rotate(shared).await?;
         }
+        Ok(scoped)
+    }
+
+    /// Update one of a users scoped tokens by name
+    ///
+    /// Updates never change a scoped tokens value so activated tokens keep
+    /// working after an update.
+    ///
+    /// # Arguments
+    ///
+    /// * `user` - The user to update a scoped token for
+    /// * `name` - The name of the scoped token to update
+    /// * `update` - The update to apply to this scoped token
+    /// * `shared` - Shared Thorium objects
+    #[instrument(name = "ScopedToken::update", skip(user, update, shared), fields(user = user.username), err(Debug))]
+    pub async fn update(
+        user: &User,
+        name: &str,
+        update: ScopedTokenUpdate,
+        shared: &Shared,
+    ) -> Result<Self, ApiError> {
+        // make sure this update isn't empty
+        if update.is_empty() {
+            return bad!("Scoped token updates cannot be empty".to_owned());
+        }
+        // make sure this update doesn't both set and clear an expiration
+        if update.expires.is_some() && update.clear_expires {
+            return bad!("Scoped token updates cannot both set and clear an expiration".to_owned());
+        }
+        // make sure any added groups are a subset of this users groups
+        for group in &update.add_groups {
+            if !user.groups.contains(group) {
+                return unauthorized!(format!("{} is not one of your groups", group));
+            }
+        }
+        // if a new expiration was set then make sure it is in the future
+        if let Some(expires) = update.expires
+            && expires < Utc::now()
+        {
+            return bad!("Scoped tokens cannot expire in the past".to_owned());
+        }
+        // get this scoped tokens data
+        let mut scoped = db::users::get_scoped_token(&user.username, name, shared).await?;
+        // if this scoped token is ephemeral then check if it has permanently expired
+        if let Some(expires) = scoped.expires
+            && expires < Utc::now()
+        {
+            // this scoped token has permanently expired so remove it from redis
+            db::users::delete_scoped_token(&scoped, shared).await?;
+            return not_found!(format!("Scoped token {name} not found"));
+        }
+        // add any new groups to this scoped tokens scope skipping duplicates
+        for group in update.add_groups {
+            if !scoped.groups.contains(&group) {
+                scoped.groups.push(group);
+            }
+        }
+        // remove any groups from this scoped tokens scope
+        scoped
+            .groups
+            .retain(|group| !update.remove_groups.contains(group));
+        // make sure this scoped token still has at least one group in scope
+        if scoped.groups.is_empty() {
+            return bad!("Scoped tokens must be scoped to at least one group".to_owned());
+        }
+        // apply any expiration updates
+        if update.clear_expires {
+            // clear this scoped tokens expiration date
+            scoped.expires = None;
+        } else if update.expires.is_some() {
+            // set this scoped tokens new expiration date
+            scoped.expires = update.expires;
+        }
+        // save this scoped tokens updated data to the backend
+        db::users::update_scoped_token(&scoped, shared).await?;
         Ok(scoped)
     }
 

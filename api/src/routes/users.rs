@@ -13,8 +13,8 @@ use super::OpenApiSecurity;
 // our imports
 use crate::models::{
     AiEndpoint, AiEndpointUpdate, AiSettings, AiSettingsUpdate, AuthResponse, AuthedUser, Key,
-    ScopedToken, ScopedTokenRequest, ScrubbedUser, Theme, UnixInfo, User, UserCreate, UserRole,
-    UserSettings, UserSettingsUpdate, UserUpdate,
+    ScopedToken, ScopedTokenRequest, ScopedTokenUpdate, ScrubbedUser, Theme, UnixInfo, User,
+    UserCreate, UserRole, UserSettings, UserSettingsUpdate, UserUpdate,
 };
 use crate::utils::{ApiError, AppState};
 use crate::{conflict, is_admin, unauthorized, unavailable};
@@ -648,6 +648,48 @@ async fn get_scoped_token(
     Ok(Json(scoped))
 }
 
+/// Updates one of the current users scoped tokens by name
+///
+/// Updates never change a scoped tokens value so activated tokens keep
+/// working after an update.
+///
+/// # Arguments
+///
+/// * `user` - The user to update a scoped token for
+/// * `name` - The name of the scoped token to update
+/// * `state` - Shared Thorium objects
+/// * `update` - The update to apply to this scoped token
+#[utoipa::path(
+    patch,
+    path = "/api/users/tokens/:name",
+    params(
+        ("name" = String, Path, description = "The name of the scoped token to update"),
+        ("update" = ScopedTokenUpdate, description = "The update to apply to this scoped token"),
+    ),
+    responses(
+        (status = 200, description = "The updated scoped token", body=ScopedToken),
+        (status = 400, description = "This scoped token update is invalid"),
+        (status = 401, description = "This user is not authorized to access this route"),
+        (status = 404, description = "This scoped token does not exist"),
+    ),
+    security(
+        ("basic" = []),
+    )
+)]
+#[instrument(name = "routes::users::update_scoped_token", skip_all, err(Debug))]
+async fn update_scoped_token(
+    user: AuthedUser,
+    Path(name): Path<String>,
+    State(state): State<AppState>,
+    Json(update): Json<ScopedTokenUpdate>,
+) -> Result<Json<ScopedToken>, ApiError> {
+    // require a fully authed user since scoped tokens cannot manage scoped tokens
+    let user = user.require_full()?;
+    // update this scoped token
+    let scoped = ScopedToken::update(&user, &name, update, &state.shared).await?;
+    Ok(Json(scoped))
+}
+
 /// Deletes one of the current users scoped tokens by name
 ///
 /// # Arguments
@@ -686,8 +728,8 @@ async fn delete_scoped_token(
 /// The struct containing our openapi docs
 #[derive(OpenApi)]
 #[openapi(
-    paths(list, create, update, resend_email_verification, verify_email, list_details, auth, get_user, update_user, info, logout, logout_user, delete_user, sync_ldap, create_scoped_token, list_scoped_tokens, get_scoped_token, delete_scoped_token),
-    components(schemas(AuthResponse, ScrubbedUser, Theme, UnixInfo, User, UserCreate, UserRole, UserSettings, UserSettingsUpdate, UserUpdate, AiSettings, AiSettingsUpdate, AiEndpoint, AiEndpointUpdate, ScopedToken, ScopedTokenRequest)),
+    paths(list, create, update, resend_email_verification, verify_email, list_details, auth, get_user, update_user, info, logout, logout_user, delete_user, sync_ldap, create_scoped_token, list_scoped_tokens, get_scoped_token, update_scoped_token, delete_scoped_token),
+    components(schemas(AuthResponse, ScrubbedUser, Theme, UnixInfo, User, UserCreate, UserRole, UserSettings, UserSettingsUpdate, UserUpdate, AiSettings, AiSettingsUpdate, AiEndpoint, AiEndpointUpdate, ScopedToken, ScopedTokenRequest, ScopedTokenUpdate)),
     modifiers(&OpenApiSecurity),
 )]
 pub struct UserApiDocs;
@@ -722,7 +764,9 @@ pub fn mount(router: Router<AppState>) -> Router<AppState> {
         )
         .route(
             "/users/tokens/{name}",
-            get(get_scoped_token).delete(delete_scoped_token),
+            get(get_scoped_token)
+                .patch(update_scoped_token)
+                .delete(delete_scoped_token),
         )
         .route("/users/user/{username}", get(get_user).patch(update_user))
         .route("/users/whoami", get(info))

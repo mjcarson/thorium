@@ -19,6 +19,7 @@ use self::{
     repos::Repos,
     results::Results,
     run::Run,
+    scoped_tokens::ScopedTokens,
     tags::Tags,
     trees::Trees,
     uncart::Uncart,
@@ -39,6 +40,7 @@ pub mod reactions;
 pub mod repos;
 pub mod results;
 pub mod run;
+pub mod scoped_tokens;
 pub mod tags;
 pub mod toolbox;
 mod traits;
@@ -126,6 +128,9 @@ pub enum SubCommands {
     /// Perform result related tasks
     #[clap(version, author, subcommand)]
     Results(Results),
+    /// Perform scoped token related tasks
+    #[clap(version, author, subcommand)]
+    ScopedTokens(ScopedTokens),
     /// Perform tag related tasks
     #[clap(version, author, subcommand)]
     Tags(Tags),

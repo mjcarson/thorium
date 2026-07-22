@@ -18,6 +18,7 @@ pub mod reactions;
 pub mod repos;
 pub mod results;
 pub mod run;
+pub mod scoped_tokens;
 pub mod tags;
 pub mod toolbox;
 pub mod trees;

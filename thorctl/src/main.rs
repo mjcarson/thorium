@@ -28,6 +28,9 @@ async fn main() {
         SubCommands::Pipelines(pipelines) => handlers::pipelines::handle(&args, pipelines).await,
         SubCommands::Reactions(reactions) => handlers::reactions::handle(&args, reactions).await,
         SubCommands::Results(results) => handlers::results::handle(&args, results).await,
+        SubCommands::ScopedTokens(scoped_tokens) => {
+            handlers::scoped_tokens::handle(&args, scoped_tokens).await
+        }
         SubCommands::Tags(tags) => handlers::tags::handle(&args, tags).await,
         SubCommands::Repos(repos) => handlers::repos::handle(&args, repos).await,
         SubCommands::Trees(trees) => handlers::trees::handle(&args, trees).await,
