@@ -579,3 +579,183 @@ pub enum AuthResponse {
     /// This user successfully authenticated but needs to verify their email
     VerifyEmail(String),
 }
+
+/// A request to create a scoped token limited to a subset of a users groups
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[cfg_attr(feature = "api", derive(utoipa::ToSchema))]
+pub struct ScopedTokenRequest {
+    /// The name of this scoped token
+    pub name: String,
+    /// The groups this scoped token is limited to
+    pub groups: Vec<String>,
+    /// When this scoped token permanently expires if it is ephemeral
+    pub expires: Option<DateTime<Utc>>,
+}
+
+impl ScopedTokenRequest {
+    /// Creates a new scoped token request
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the scoped token to create
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::ScopedTokenRequest;
+    ///
+    /// ScopedTokenRequest::new("corn-harvester")
+    ///     .group("CornPeeps");
+    /// ```
+    pub fn new<T: Into<String>>(name: T) -> Self {
+        ScopedTokenRequest {
+            name: name.into(),
+            groups: Vec::default(),
+            expires: None,
+        }
+    }
+
+    /// Adds a group to limit this scoped token to
+    ///
+    /// # Arguments
+    ///
+    /// * `group` - The group to add to this scoped tokens scope
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::ScopedTokenRequest;
+    ///
+    /// ScopedTokenRequest::new("corn-harvester")
+    ///     .group("CornPeeps");
+    /// ```
+    #[must_use]
+    pub fn group<T: Into<String>>(mut self, group: T) -> Self {
+        // add this group to our scope
+        self.groups.push(group.into());
+        self
+    }
+
+    /// Adds multiple groups to limit this scoped token to
+    ///
+    /// # Arguments
+    ///
+    /// * `groups` - The groups to add to this scoped tokens scope
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::ScopedTokenRequest;
+    ///
+    /// ScopedTokenRequest::new("corn-harvester")
+    ///     .groups(vec!("CornPeeps", "CornFans"));
+    /// ```
+    #[must_use]
+    pub fn groups<T: Into<String>>(mut self, groups: Vec<T>) -> Self {
+        // add these groups to our scope
+        self.groups.extend(groups.into_iter().map(Into::into));
+        self
+    }
+
+    /// Sets the date this scoped token permanently expires making it ephemeral
+    ///
+    /// # Arguments
+    ///
+    /// * `expires` - The date/time this scoped token permanently expires
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::{Utc, Duration};
+    /// use thorium::models::ScopedTokenRequest;
+    ///
+    /// ScopedTokenRequest::new("corn-harvester")
+    ///     .group("CornPeeps")
+    ///     .expires(Utc::now() + Duration::days(7));
+    /// ```
+    #[must_use]
+    pub fn expires(mut self, expires: DateTime<Utc>) -> Self {
+        // set the date this token permanently expires
+        self.expires = Some(expires);
+        self
+    }
+}
+
+/// A token tied to a user that is limited to a subset of that users groups
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[cfg_attr(feature = "api", derive(utoipa::ToSchema))]
+pub struct ScopedToken {
+    /// The name of this scoped token
+    pub name: String,
+    /// The username of the user this scoped token is tied to
+    pub owner: String,
+    /// The groups this scoped token is limited to
+    pub groups: Vec<String>,
+    /// The current value of this scoped token
+    pub token: String,
+    /// When this scoped tokens current value expires and gets rotated
+    pub token_expiration: DateTime<Utc>,
+    /// When this scoped token permanently expires if it is ephemeral
+    pub expires: Option<DateTime<Utc>>,
+}
+
+/// A user that authenticated with a scoped token
+///
+/// The wrapped user has its groups limited to this scoped tokens scope and
+/// carries the scoped tokens value/expiration instead of the users primary
+/// token.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ScopedUser {
+    /// The user this scoped token is tied to with its groups limited to scope
+    pub user: User,
+    /// The name of the scoped token used to authenticate
+    pub name: String,
+}
+
+/// An authenticated user in Thorium
+///
+/// Users are either fully authenticated with their primary token/password or
+/// authenticated with a scoped token that limits them to a subset of their
+/// groups.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum AuthedUser {
+    /// A user authenticated with their primary token or password
+    Full(User),
+    /// A user authenticated with a scoped token limited to a subset of groups
+    Scoped(ScopedUser),
+}
+
+impl AuthedUser {
+    /// Convert this authenticated user into its effective [`User`]
+    ///
+    /// For scoped users this returns the user with its groups limited to the
+    /// scoped tokens scope.
+    #[must_use]
+    pub fn into_user(self) -> User {
+        // get the effective user for this authed user
+        match self {
+            AuthedUser::Full(user) => user,
+            AuthedUser::Scoped(scoped) => scoped.user,
+        }
+    }
+
+    /// Whether this user authenticated with a scoped token or not
+    #[must_use]
+    pub fn is_scoped(&self) -> bool {
+        // check if we are the scoped variant
+        matches!(self, AuthedUser::Scoped(_))
+    }
+}
+
+impl std::ops::Deref for AuthedUser {
+    type Target = User;
+
+    /// Deref to the effective [`User`] for this authenticated user
+    fn deref(&self) -> &Self::Target {
+        // get a reference to the effective user for this authed user
+        match self {
+            AuthedUser::Full(user) => user,
+            AuthedUser::Scoped(scoped) => &scoped.user,
+        }
+    }
+}
