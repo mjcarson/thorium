@@ -1,6 +1,8 @@
 //! Handles scoped token commands
 
 use chrono::{DateTime, NaiveDateTime, Utc};
+use tabled::settings::Style;
+use tabled::{Table, Tabled};
 use thorium::client::conf::ActiveScopedToken;
 use thorium::models::{ScopedToken, ScopedTokenRequest, ScopedTokenUpdate};
 use thorium::utils::helpers::human_duration;
@@ -49,6 +51,29 @@ fn time_until(target: DateTime<Utc>) -> Option<String> {
     Some(short.join(" "))
 }
 
+/// Get a human readable time until a scoped tokens value rotates
+///
+/// # Arguments
+///
+/// * `scoped` - The scoped token to get a refresh time for
+fn refresh_time(scoped: &ScopedToken) -> String {
+    // get the time until this scoped tokens value rotates
+    time_until(scoped.token_expiration).unwrap_or_else(|| "now".to_owned())
+}
+
+/// Get a human readable time until a scoped token permanently expires
+///
+/// # Arguments
+///
+/// * `scoped` - The scoped token to get an expiration time for
+fn expiration_time(scoped: &ScopedToken) -> String {
+    // get the time until this scoped token permanently expires
+    match scoped.expires {
+        Some(expires) => time_until(expires).unwrap_or_else(|| "expired".to_owned()),
+        None => "never".to_owned(),
+    }
+}
+
 /// Print a scoped tokens info
 ///
 /// The scoped tokens value is only printed when `show_token` is set.
@@ -62,13 +87,10 @@ fn print_token(scoped: &ScopedToken, show_token: bool) {
     println!("{}:", scoped.name);
     // print the groups this scoped token is limited to
     println!("  groups: {}", scoped.groups.join(", "));
-    // print when this scoped tokens value rotates
-    println!("  token expiration: {}", scoped.token_expiration);
-    // print when this scoped token permanently expires if its ephemeral
-    match scoped.expires {
-        Some(expires) => println!("  expires: {expires}"),
-        None => println!("  expires: never"),
-    }
+    // print the time until this scoped tokens value rotates
+    println!("  refresh: {}", refresh_time(scoped));
+    // print the time until this scoped token permanently expires
+    println!("  expires: {}", expiration_time(scoped));
     // only show this scoped tokens value if it was requested
     if show_token {
         println!("  token: {}", scoped.token);
@@ -134,43 +156,36 @@ async fn create(thorium: Thorium, cmd: &CreateScopedToken) -> Result<(), Error> 
     Ok(())
 }
 
-/// A line in the scoped token table printed by the get command
-struct TokenLine;
+/// A row in the scoped token table printed by the get command
+#[derive(Tabled)]
+struct TokenRow {
+    /// The name of this scoped token
+    #[tabled(rename = "NAME")]
+    name: String,
+    /// The human readable time until this scoped tokens value rotates
+    #[tabled(rename = "REFRESH")]
+    refresh: String,
+    /// The human readable time until this scoped token permanently expires
+    #[tabled(rename = "EXPIRATION")]
+    expiration: String,
+    /// The groups this scoped token is limited to
+    #[tabled(rename = "GROUPS")]
+    groups: String,
+}
 
-impl TokenLine {
-    /// Print the scoped token tables header
-    #[allow(clippy::print_literal)]
-    pub fn header() {
-        // print the header for the scoped token table
-        println!(
-            "{:<32} | {:<20} | {:<20} | {}",
-            "NAME", "REFRESH", "EXPIRATION", "GROUPS"
-        );
-        // print the separator under the header
-        println!("{:-<33}+{:-<22}+{:-<22}+{:-<32}", "", "", "", "");
-    }
-
-    /// Print a single scoped token as a table line
+impl From<&ScopedToken> for TokenRow {
+    /// Build a table row from a scoped token
     ///
     /// # Arguments
     ///
-    /// * `scoped` - The scoped token to print
-    pub fn list(scoped: &ScopedToken) {
-        // get the time until this scoped tokens value rotates
-        let refresh = time_until(scoped.token_expiration).unwrap_or_else(|| "now".to_owned());
-        // get the time until this scoped token permanently expires
-        let expiration = match scoped.expires {
-            Some(expires) => time_until(expires).unwrap_or_else(|| "expired".to_owned()),
-            None => "never".to_owned(),
-        };
-        // print this scoped tokens table line
-        println!(
-            "{:<32} | {:<20} | {:<20} | {}",
-            scoped.name,
-            refresh,
-            expiration,
-            scoped.groups.join(", ")
-        );
+    /// * `scoped` - The scoped token to build a table row from
+    fn from(scoped: &ScopedToken) -> Self {
+        TokenRow {
+            name: scoped.name.clone(),
+            refresh: refresh_time(scoped),
+            expiration: expiration_time(scoped),
+            groups: scoped.groups.join(", "),
+        }
     }
 }
 
@@ -183,12 +198,10 @@ impl TokenLine {
 async fn get(thorium: Thorium, _cmd: &GetTokens) -> Result<(), Error> {
     // list all of our scoped tokens
     let tokens = thorium.users.list_scoped_tokens().await?;
-    // print the header for the scoped token table
-    TokenLine::header();
-    // print each of our scoped tokens
-    for scoped in &tokens {
-        TokenLine::list(scoped);
-    }
+    // build a table row for each of our scoped tokens
+    let rows: Vec<TokenRow> = tokens.iter().map(TokenRow::from).collect();
+    // build and print our scoped token table
+    println!("{}", Table::new(rows).with(Style::psql()));
     Ok(())
 }
 
