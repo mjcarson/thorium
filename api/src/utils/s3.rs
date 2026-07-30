@@ -5,11 +5,14 @@ use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::primitives::SdkBody;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart, Delete, ObjectIdentifier};
 use aws_sdk_s3::{
-    Client, config::Credentials, operation::head_object::HeadObjectError, primitives::ByteStream,
+    Client,
+    config::{Credentials, retry::RetryConfig, timeout::TimeoutConfig},
+    operation::head_object::HeadObjectError,
+    primitives::ByteStream,
 };
 use axum::extract::multipart::Field;
 use base64::Engine as _;
-use bytes::{BytesMut, buf::Buf};
+use bytes::{Bytes, BytesMut};
 use cart_rs::{CartStreamManual, UncartStream};
 use data_encoding::HEXLOWER;
 use generic_array::{GenericArray, typenum::U16};
@@ -17,6 +20,8 @@ use md5::Md5;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::io::Write;
+use std::sync::Arc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{Level, event, instrument};
 use uuid::Uuid;
 use zip::unstable::write::FileOptionsExt;
@@ -24,7 +29,20 @@ use zip::write::ZipWriter;
 
 use super::{ApiError, Shared};
 use crate::models::ZipDownloadParams;
-use crate::{Conf, bad, unavailable};
+use crate::{Conf, bad, internal_err_unwrapped, unavailable};
+
+/// The size in bytes each non-carted multipart upload part should target (16 MiB)
+///
+/// Larger parts mean fewer round trips to s3 for a large upload. This must stay at or
+/// above the s3 minimum part size of 5 MiB for every part except the last.
+const PART_SIZE: usize = 16 * 1024 * 1024;
+
+/// The maximum number of part uploads that may be in flight at once
+///
+/// This bounds how much of the incoming file we hold in memory at any time (roughly
+/// `MAX_CONCURRENT_UPLOADS * PART_SIZE`) while still letting uploads overlap so we keep
+/// draining the incoming request body instead of stalling on each part upload.
+const MAX_CONCURRENT_UPLOADS: usize = 8;
 
 /// A tuple of hashes (sha256, sha1, md5)
 pub type Hashes = (String, String, String);
@@ -181,11 +199,20 @@ impl S3Client {
             GenericArray::clone_from_slice(&password.as_bytes()[..16]);
         // get our s3 credentials
         let creds = Credentials::new(&conf.access_key, &conf.secret_token, None, None, "Thorium");
-        // build our s3 config
+        // build our timeout config so a stalled request is bounded and retried instead of
+        // hanging or failing the entire (potentially very large) upload
+        let timeout_config = TimeoutConfig::builder()
+            .connect_timeout(std::time::Duration::from_secs(conf.connect_timeout))
+            .operation_attempt_timeout(std::time::Duration::from_secs(conf.attempt_timeout))
+            .build();
+        // build our s3 config, retrying transient failures so a single bad part upload
+        // doesn't fail a large multipart upload
         let mut s3_config_builder = aws_sdk_s3::config::Builder::new()
             .endpoint_url(&conf.endpoint)
             .credentials_provider(SharedCredentialsProvider::new(creds))
-            .force_path_style(conf.use_path_style);
+            .force_path_style(conf.use_path_style)
+            .timeout_config(timeout_config)
+            .retry_config(RetryConfig::standard().with_max_attempts(conf.max_attempts));
         // if we have a region set then add that to our config
         if let Some(region) = &conf.region {
             // set our region
@@ -282,6 +309,116 @@ impl S3Client {
         }
     }
 
+    /// Acquire a permit bounding the number of concurrent part uploads
+    ///
+    /// Acquiring before spawning an upload applies backpressure to the incoming request
+    /// body: once `MAX_CONCURRENT_UPLOADS` parts are in flight, the read loop waits here
+    /// rather than buffering the whole file in memory.
+    ///
+    /// # Arguments
+    ///
+    /// * `semaphore` - The semaphore bounding how many part uploads may run at once
+    async fn upload_permit(
+        &self,
+        semaphore: &Arc<Semaphore>,
+    ) -> Result<OwnedSemaphorePermit, ApiError> {
+        // the semaphore is never closed so this only errors if the runtime is shutting down
+        Arc::clone(semaphore)
+            .acquire_owned()
+            .await
+            .map_err(|err| internal_err_unwrapped!(format!("s3 upload semaphore closed: {err}")))
+    }
+
+    /// Spawn a background task that uploads a single part of a multipart upload to s3
+    ///
+    /// Uploading parts on their own tasks lets them make progress while we keep reading
+    /// the incoming request body, instead of stalling the read on each part upload. The
+    /// task holds `permit` for the duration of the upload so the number of parts in flight
+    /// at once (and therefore our memory usage) stays bounded.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The key in s3 this multipart upload is writing to
+    /// * `upload_id` - The id of the multipart upload these parts belong to
+    /// * `part_num` - The part number to assign to this part
+    /// * `body` - The bytes to upload for this part
+    /// * `permit` - The concurrency permit to hold until this part finishes uploading
+    fn spawn_upload_part(
+        &self,
+        path: &str,
+        upload_id: &str,
+        part_num: i32,
+        body: Bytes,
+        permit: OwnedSemaphorePermit,
+    ) -> tokio::task::JoinHandle<Result<CompletedPart, ApiError>> {
+        // clone the values the spawned task needs to own
+        let client = self.client.clone();
+        let bucket = self.bucket.clone();
+        let path = path.to_string();
+        let upload_id = upload_id.to_string();
+        // upload this part in the background so it overlaps with reading the incoming body
+        tokio::spawn(async move {
+            // hold our concurrency permit until this part is done uploading
+            let _permit = permit;
+            // upload this part to s3
+            let part = client
+                .upload_part()
+                .bucket(&bucket)
+                .key(&path)
+                .upload_id(&upload_id)
+                .body(ByteStream::from(SdkBody::from(body)))
+                .part_number(part_num)
+                .send()
+                .await?;
+            // build the completed part record so the caller can finish the upload
+            Ok(CompletedPart::builder()
+                .e_tag(part.e_tag.unwrap_or_default())
+                .part_number(part_num)
+                .build())
+        })
+    }
+
+    /// Wait for every spawned part upload to finish and complete the multipart upload
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The key in s3 this multipart upload is writing to
+    /// * `upload_id` - The id of the multipart upload to complete
+    /// * `tasks` - The part upload tasks spawned by [`S3Client::spawn_upload_part`]
+    #[instrument(name = "S3Client::complete_multipart", skip(self, tasks), err(Debug))]
+    async fn complete_multipart(
+        &self,
+        path: &str,
+        upload_id: &str,
+        tasks: Vec<tokio::task::JoinHandle<Result<CompletedPart, ApiError>>>,
+    ) -> Result<(), ApiError> {
+        // collect every uploaded part, surfacing any upload or task join error
+        let mut parts = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            // a join error means the upload task panicked or was cancelled
+            let part = task
+                .await
+                .map_err(|err| internal_err_unwrapped!(format!("s3 upload task failed: {err}")))??;
+            parts.push(part);
+        }
+        // parts can finish out of order so sort them by part number before completing
+        parts.sort_by_key(|part| part.part_number().unwrap_or_default());
+        // build our complete multipart upload object
+        let completed_parts = CompletedMultipartUpload::builder()
+            .set_parts(Some(parts))
+            .build();
+        // finish this multipart upload
+        self.client
+            .complete_multipart_upload()
+            .bucket(&self.bucket)
+            .key(path)
+            .multipart_upload(completed_parts)
+            .upload_id(upload_id)
+            .send()
+            .await?;
+        Ok(())
+    }
+
     /// Stream a file into s3 while hashing and carting it
     ///
     /// # Arguments
@@ -303,11 +440,13 @@ impl S3Client {
         // init our cart streamer and hashers
         let mut cart = CartStreamManual::new(&self.password, 7_242_880)?;
         let mut hashers = StandardHashers::default();
+        // limit how many part uploads are in flight at once so our memory usage stays bounded
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_UPLOADS));
+        // track the part upload tasks we have spawned
+        let mut tasks = Vec::new();
         // track what part number we are on
         let mut part_num = 1;
-        // keep a list of parts we have uploaded
-        let mut parts = Vec::with_capacity(10);
-        // stream this fields data through our hashers, cart, and to s3
+        // stream this fields data through our hashers, cart, and upload carted parts concurrently
         while let Some(raw) = field.chunk().await? {
             // pass this chunk through our hashers
             hashers.digest(&raw);
@@ -317,71 +456,28 @@ impl S3Client {
                 while cart.process()? {
                     // if our input buffer is full then pack
                     if cart.ready() >= 5_242_880 {
-                        // get the bytes we are ready to write to s3
-                        let writable = cart.carted_bytes();
-                        // pack our entire input buffer
-                        let carted = ByteStream::from(SdkBody::from(writable));
-                        // write this buffer to s3
-                        let part = self
-                            .client
-                            .upload_part()
-                            .bucket(&self.bucket)
-                            .key(path)
-                            .upload_id(upload_id)
-                            .body(carted)
-                            .part_number(part_num)
-                            .send()
-                            .await?;
-                        // add this chunk to our parts list
-                        parts.push(
-                            CompletedPart::builder()
-                                .e_tag(part.e_tag.unwrap_or_default())
-                                .part_number(part_num)
-                                .build(),
-                        );
-                        // consume the bytes we have written to s3
+                        // copy the carted bytes out so the upload task can own them while
+                        // we keep carting the rest of the file
+                        let chunk = Bytes::copy_from_slice(cart.carted_bytes());
+                        // consume the bytes we have copied out
                         cart.consume();
+                        // acquire a permit, applying backpressure to the incoming body if
+                        // too many uploads are already in flight
+                        let permit = self.upload_permit(&semaphore).await?;
+                        // upload this carted part in the background
+                        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
                         // increment our part number
                         part_num += 1;
                     }
                 }
             }
         }
-        // finish carting our file
-        let writable = cart.finish()?;
-        // finish our carted file
-        let carted = ByteStream::from(SdkBody::from(writable));
-        // write this final buffer to s3
-        let part = self
-            .client
-            .upload_part()
-            .bucket(&self.bucket)
-            .key(path)
-            .upload_id(upload_id)
-            .body(carted)
-            .part_number(part_num)
-            .send()
-            .await?;
-        // add this chunk to our parts list
-        parts.push(
-            CompletedPart::builder()
-                .e_tag(part.e_tag.unwrap_or_default())
-                .part_number(part_num)
-                .build(),
-        );
-        // build our complete multipart upload object
-        let completed_parts = CompletedMultipartUpload::builder()
-            .set_parts(Some(parts))
-            .build();
-        // finish this multipart upload
-        self.client
-            .complete_multipart_upload()
-            .bucket(&self.bucket)
-            .key(path)
-            .multipart_upload(completed_parts)
-            .upload_id(upload_id)
-            .send()
-            .await?;
+        // finish carting our file and upload the final part
+        let chunk = Bytes::copy_from_slice(cart.finish()?);
+        let permit = self.upload_permit(&semaphore).await?;
+        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
+        // wait for every part to finish uploading and complete the multipart upload
+        self.complete_multipart(path, upload_id, tasks).await?;
         Ok(hashers.finish())
     }
 
@@ -455,13 +551,15 @@ impl S3Client {
         // init our cart streamer and hashers
         let mut cart = CartStreamManual::new(&self.password, 7_242_880)?;
         let mut sha256 = Sha256::new();
+        // limit how many part uploads are in flight at once so our memory usage stays bounded
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_UPLOADS));
+        // track the part upload tasks we have spawned
+        let mut tasks = Vec::new();
         // track what part number we are on
         let mut part_num = 1;
-        // keep a list of parts we have uploaded
-        let mut parts = Vec::with_capacity(10);
-        // stream this fields data through our hashers, cart, and to s3
+        // stream this fields data through our hasher, cart, and upload carted parts concurrently
         while let Some(raw) = field.chunk().await? {
-            // pass this chunk through our hashers
+            // pass this chunk through our hasher
             sha256.update(&raw);
             // add this buffer to our cart streamer
             if cart.next_bytes(raw)? {
@@ -469,71 +567,28 @@ impl S3Client {
                 while cart.process()? {
                     // if our input buffer is full then pack
                     if cart.ready() >= 5_242_880 {
-                        // get the bytes we are ready to write to s3
-                        let writable = cart.carted_bytes();
-                        // pack our entire input buffer
-                        let carted = ByteStream::from(SdkBody::from(writable));
-                        // write this buffer to s3
-                        let part = self
-                            .client
-                            .upload_part()
-                            .bucket(&self.bucket)
-                            .key(path)
-                            .upload_id(upload_id)
-                            .body(carted)
-                            .part_number(part_num)
-                            .send()
-                            .await?;
-                        // add this chunk to our parts list
-                        parts.push(
-                            CompletedPart::builder()
-                                .e_tag(part.e_tag.unwrap_or_default())
-                                .part_number(part_num)
-                                .build(),
-                        );
-                        // consume the bytes we have written to s3
+                        // copy the carted bytes out so the upload task can own them while
+                        // we keep carting the rest of the file
+                        let chunk = Bytes::copy_from_slice(cart.carted_bytes());
+                        // consume the bytes we have copied out
                         cart.consume();
+                        // acquire a permit, applying backpressure to the incoming body if
+                        // too many uploads are already in flight
+                        let permit = self.upload_permit(&semaphore).await?;
+                        // upload this carted part in the background
+                        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
                         // increment our part number
                         part_num += 1;
                     }
                 }
             }
         }
-        // finish carting our file
-        let writable = cart.finish()?;
-        // finish our carted file
-        let carted = ByteStream::from(SdkBody::from(writable));
-        // write this final buffer to s3
-        let part = self
-            .client
-            .upload_part()
-            .bucket(&self.bucket)
-            .key(path)
-            .upload_id(upload_id)
-            .body(carted)
-            .part_number(part_num)
-            .send()
-            .await?;
-        // add this chunk to our parts list
-        parts.push(
-            CompletedPart::builder()
-                .e_tag(part.e_tag.unwrap_or_default())
-                .part_number(part_num)
-                .build(),
-        );
-        // build our complete multipart upload object
-        let completed_parts = CompletedMultipartUpload::builder()
-            .set_parts(Some(parts))
-            .build();
-        // finish this multipart upload
-        self.client
-            .complete_multipart_upload()
-            .bucket(&self.bucket)
-            .key(path)
-            .multipart_upload(completed_parts)
-            .upload_id(upload_id)
-            .send()
-            .await?;
+        // finish carting our file and upload the final part
+        let chunk = Bytes::copy_from_slice(cart.finish()?);
+        let permit = self.upload_permit(&semaphore).await?;
+        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
+        // wait for every part to finish uploading and complete the multipart upload
+        self.complete_multipart(path, upload_id, tasks).await?;
         // get our final sha256 hash
         Ok(HEXLOWER.encode(&sha256.finalize()))
     }
@@ -609,13 +664,15 @@ impl S3Client {
         upload_id: &str,
         mut field: Field<'a>,
     ) -> Result<(), ApiError> {
-        // init our cart streamer and hashers
+        // init our cart streamer
         let mut cart = CartStreamManual::new(&self.password, 7_242_880)?;
+        // limit how many part uploads are in flight at once so our memory usage stays bounded
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_UPLOADS));
+        // track the part upload tasks we have spawned
+        let mut tasks = Vec::new();
         // track what part number we are on
         let mut part_num = 1;
-        // keep a list of parts we have uploaded
-        let mut parts = Vec::with_capacity(10);
-        // stream this fields data through our hashers, cart, and to s3
+        // stream this fields data through our cart and upload carted parts concurrently
         while let Some(raw) = field.chunk().await? {
             // add this buffer to our cart streamer
             if cart.next_bytes(raw)? {
@@ -623,72 +680,28 @@ impl S3Client {
                 while cart.process()? {
                     // if our input buffer is full then pack
                     if cart.ready() >= 5_242_880 {
-                        // get the bytes we are ready to write to s3
-                        let writable = cart.carted_bytes();
-                        // pack our entire input buffer
-                        let carted = ByteStream::from(SdkBody::from(writable));
-                        // write this buffer to s3
-                        let part = self
-                            .client
-                            .upload_part()
-                            .bucket(&self.bucket)
-                            .key(path)
-                            .upload_id(upload_id)
-                            .body(carted)
-                            .part_number(part_num)
-                            .send()
-                            .await?;
-                        // add this chunk to our parts list
-                        parts.push(
-                            CompletedPart::builder()
-                                .e_tag(part.e_tag.unwrap_or_default())
-                                .part_number(part_num)
-                                .build(),
-                        );
-                        // consume the bytes we have written to s3
+                        // copy the carted bytes out so the upload task can own them while
+                        // we keep carting the rest of the file
+                        let chunk = Bytes::copy_from_slice(cart.carted_bytes());
+                        // consume the bytes we have copied out
                         cart.consume();
+                        // acquire a permit, applying backpressure to the incoming body if
+                        // too many uploads are already in flight
+                        let permit = self.upload_permit(&semaphore).await?;
+                        // upload this carted part in the background
+                        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
                         // increment our part number
                         part_num += 1;
                     }
                 }
             }
         }
-        // finish carting our file
-        let writable = cart.finish()?;
-        // finish our carted file
-        let carted = ByteStream::from(SdkBody::from(writable));
-        // write this final buffer to s3
-        let part = self
-            .client
-            .upload_part()
-            .bucket(&self.bucket)
-            .key(path)
-            .upload_id(upload_id)
-            .body(carted)
-            .part_number(part_num)
-            .send()
-            .await?;
-        // add this chunk to our parts list
-        parts.push(
-            CompletedPart::builder()
-                .e_tag(part.e_tag.unwrap_or_default())
-                .part_number(part_num)
-                .build(),
-        );
-        // build our complete multipart upload object
-        let completed_parts = CompletedMultipartUpload::builder()
-            .set_parts(Some(parts))
-            .build();
-        // finish this multipart upload
-        self.client
-            .complete_multipart_upload()
-            .bucket(&self.bucket)
-            .key(path)
-            .multipart_upload(completed_parts)
-            .upload_id(upload_id)
-            .send()
-            .await?;
-        Ok(())
+        // finish carting our file and upload the final part
+        let chunk = Bytes::copy_from_slice(cart.finish()?);
+        let permit = self.upload_permit(&semaphore).await?;
+        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
+        // wait for every part to finish uploading and complete the multipart upload
+        self.complete_multipart(path, upload_id, tasks).await
     }
 
     /// Stream a file into s3 after carting it
@@ -751,78 +764,39 @@ impl S3Client {
         upload_id: &str,
         mut field: Field<'a>,
     ) -> Result<(), ApiError> {
+        // limit how many part uploads are in flight at once so our memory usage stays
+        // bounded while still overlapping uploads with reading the incoming body
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_UPLOADS));
+        // track the part upload tasks we have spawned
+        let mut tasks = Vec::new();
         // track what part number we are on
         let mut part_num = 1;
-        // keep a list of parts we have uploaded
-        let mut parts = Vec::with_capacity(1);
-        // build our buffer so we can have at least 5 mebibytes of chunks to send
-        let mut stream = BytesMut::with_capacity(7_242_880);
-        // stream this fields data through our hashers, cart, and to s3
+        // buffer incoming bytes until we have a full part sized chunk to upload
+        let mut buffer = BytesMut::with_capacity(PART_SIZE);
+        // stream this fields data into part sized buffers and upload them concurrently
         while let Some(raw) = field.chunk().await? {
-            // add our chunk to our stream buffer
-            stream.extend_from_slice(&raw);
-            // add this buffer to our cart streamer
-            if stream.remaining() >= 5_242_880 {
-                // pack our entire input buffer
-                let carted = ByteStream::from(SdkBody::from(&stream[..]));
-                // write this buffer to s3
-                let part = self
-                    .client
-                    .upload_part()
-                    .bucket(&self.bucket)
-                    .key(path)
-                    .upload_id(upload_id)
-                    .body(carted)
-                    .part_number(part_num)
-                    .send()
-                    .await?;
-                // add this chunk to our parts list
-                parts.push(
-                    CompletedPart::builder()
-                        .e_tag(part.e_tag.unwrap_or_default())
-                        .part_number(part_num)
-                        .build(),
-                );
-                // reset our packable and writable number of bytes to 0
-                stream.clear();
+            // add our chunk to our part buffer
+            buffer.extend_from_slice(&raw);
+            // once we have a full part upload it in the background
+            if buffer.len() >= PART_SIZE {
+                // take the buffered bytes as an owned chunk, leaving capacity for the next part
+                let chunk = buffer.split().freeze();
+                // acquire a permit, applying backpressure to the incoming body if too many
+                // uploads are already in flight
+                let permit = self.upload_permit(&semaphore).await?;
+                // upload this part in the background
+                tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
                 // increment our part number
                 part_num += 1;
             }
         }
-        // finish our stream
-        let carted = ByteStream::from(SdkBody::from(&stream[..]));
-        // write this buffer to s3
-        let part = self
-            .client
-            .upload_part()
-            .bucket(&self.bucket)
-            .key(path)
-            .upload_id(upload_id)
-            .body(carted)
-            .part_number(part_num)
-            .send()
-            .await?;
-        // add this chunk to our parts list
-        parts.push(
-            CompletedPart::builder()
-                .e_tag(part.e_tag.unwrap_or_default())
-                .part_number(part_num)
-                .build(),
-        );
-        // build our complete multipart upload object
-        let completed_parts = CompletedMultipartUpload::builder()
-            .set_parts(Some(parts))
-            .build();
-        // finish this multipart upload
-        self.client
-            .complete_multipart_upload()
-            .bucket(&self.bucket)
-            .key(path)
-            .multipart_upload(completed_parts)
-            .upload_id(upload_id)
-            .send()
-            .await?;
-        Ok(())
+        // upload whatever is left as the final part; it has the highest part number so s3
+        // allows it to be smaller than the 5 MiB minimum
+        let chunk = buffer.split().freeze();
+        let permit = self.upload_permit(&semaphore).await?;
+        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
+        // wait for every part to finish uploading and complete the multipart upload
+        self.complete_multipart(path, upload_id, tasks).await
     }
 
     /// Stream a file into s3

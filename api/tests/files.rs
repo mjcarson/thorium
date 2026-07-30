@@ -840,6 +840,58 @@ async fn create_result_files() -> Result<(), thorium::Error> {
     Ok(())
 }
 
+/// Result files larger than the s3 multipart part size are uploaded to s3 across multiple
+/// parts. Make sure a large result file survives that multipart upload and downloads back
+/// byte for byte identically.
+#[tokio::test]
+async fn create_large_result_file() -> Result<(), thorium::Error> {
+    // build a result file larger than the 16 MiB multipart part size so the upload spans
+    // several parts, exercising the concurrent multipart upload path and part ordering
+    let mut data = vec![0u8; 40 * 1024 * 1024];
+    let mut rng = rand::rng();
+    rng.fill_bytes(&mut data);
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // upload a sample to attach a result to
+    let file_req = SampleRequest::new_buffer(Buffer::new("LargeResultFileSample"), vec![group])
+        .description("test file")
+        .tag("test", "file");
+    let hashes = client.files.create(file_req).await?;
+    // the name to store this large result file under
+    let file_name = "large_result.bin";
+    // build a result with this large result file attached
+    let output_req = OutputRequest::new(
+        hashes.sha256.clone(),
+        "TestTool",
+        "large result file",
+        OutputDisplayType::String,
+    )
+    .buffer(Buffer::new(data.clone()).name(file_name))
+    .tool_version(ImageVersion::SemVer(
+        semver::Version::parse("1.0.0").unwrap(),
+    ));
+    // send this result to the API (streams the result file to s3 as a multipart upload)
+    let resp = client.files.create_result(output_req).await?;
+    // download the result file back out of s3
+    let attachment = client
+        .files
+        .download_result_file(&hashes.sha256, "TestTool", &resp.id, file_name)
+        .await?;
+    // make sure the downloaded result file is byte for byte identical to what we uploaded
+    is!(attachment.data.len(), data.len());
+    // compare digests instead of the raw bytes so a mismatch doesn't dump 40 MiB of output
+    let mut original_hasher = Sha256::new();
+    original_hasher.update(&data);
+    let original = HEXLOWER.encode(&original_hasher.finalize());
+    let mut downloaded_hasher = Sha256::new();
+    downloaded_hasher.update(&attachment.data);
+    let downloaded = HEXLOWER.encode(&downloaded_hasher.finalize());
+    is!(downloaded, original);
+    Ok(())
+}
+
 #[tokio::test]
 async fn get_result() -> Result<(), thorium::Error> {
     // get admin client

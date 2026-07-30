@@ -2,6 +2,14 @@ use reqwest::{Certificate, ClientBuilder, NoProxy, Proxy};
 
 use super::{ClientSettings, Error};
 
+/// The per-request timeout (in seconds) to use for large file transfers
+///
+/// Large bodies (samples, repos, result files, and cache files) can take far longer to
+/// upload or download than the default client timeout allows. These endpoints override
+/// the per-request timeout with this generous value (24 hours) so that a slow-but-healthy
+/// transfer is never aborted by the client's default deadline.
+pub(crate) const LARGE_UPLOAD_TIMEOUT_SECS: u64 = 86_400;
+
 /// Apply our proxy settings to a [`reqwest::ClientBuilder`]
 ///
 /// The precedence is:
