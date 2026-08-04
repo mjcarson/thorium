@@ -25,6 +25,15 @@ pub trait ResultsClientHelper: GenericClient {
     /// # Arguments
     ///
     /// * `output_req` - The output request to use to add output from a tool
+    #[cfg_attr(
+        feature = "client-trace",
+        tracing::instrument(
+            name = "ResultsClientHelper::create_result_generic",
+            skip_all,
+            fields(tool = output_req.tool.as_str(), files = output_req.files.len()),
+            err(Debug)
+        )
+    )]
     async fn create_result_generic(
         &self,
         output_req: OutputRequest<Self::OutputSupport>,
@@ -36,6 +45,9 @@ pub trait ResultsClientHelper: GenericClient {
             key = Self::OutputSupport::key_url(&output_req.key, None)
         );
         // build request
+        //
+        // every file added by path is wrapped in a progress tracker as this form is built, and
+        // each of those trackers hangs its events off of this functions span
         let req = self
             .client()
             .post(&url)
@@ -46,8 +58,17 @@ pub trait ResultsClientHelper: GenericClient {
             .timeout(std::time::Duration::from_secs(
                 crate::client::helpers::LARGE_UPLOAD_TIMEOUT_SECS,
             ));
+        // start reporting on this request
+        //
+        // the last files tracker dies the moment its stream ends, but the request is not over.
+        // The API still has to finish its own multipart upload to s3 before it answers us and
+        // that window would otherwise be completely dark.
+        let watch = crate::client::stream_progress::RequestWatch::start(&url);
         // send this request
-        send_build!(self.client(), req, OutputResponse)
+        let resp = send_build!(self.client(), req, OutputResponse);
+        // log how long this request took and stop reporting on it
+        watch.finish(resp.is_ok());
+        resp
     }
 
     /// Gets results for the `Self::OutputSupport`

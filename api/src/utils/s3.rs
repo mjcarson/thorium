@@ -19,10 +19,13 @@ use generic_array::{GenericArray, typenum::U16};
 use md5::Md5;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
+use std::collections::BTreeMap;
 use std::io::Write;
-use std::sync::Arc;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tracing::{Level, event, instrument};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
+use tokio::task::JoinHandle;
+use tracing::{Level, Span, event, instrument, span};
 use uuid::Uuid;
 use zip::unstable::write::FileOptionsExt;
 use zip::write::ZipWriter;
@@ -43,6 +46,13 @@ const PART_SIZE: usize = 16 * 1024 * 1024;
 /// `MAX_CONCURRENT_UPLOADS * PART_SIZE`) while still letting uploads overlap so we keep
 /// draining the incoming request body instead of stalling on each part upload.
 const MAX_CONCURRENT_UPLOADS: usize = 8;
+
+/// How often the stall watchdog logs the parts still in flight for an upload
+///
+/// A stalled part eventually blocks the read loop on the upload semaphore, so anything logged
+/// from the submission loop goes silent exactly when an upload hangs. This watchdog ticks on
+/// its own task so a stalled upload keeps reporting which parts it is waiting on.
+const STALL_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
 /// A tuple of hashes (sha256, sha1, md5)
 pub type Hashes = (String, String, String);
@@ -99,6 +109,303 @@ impl Default for StandardHashers {
             sha1: Sha1::new(),
             md5: Md5::new(),
         }
+    }
+}
+
+/// Get how many milliseconds have elapsed since an instant
+///
+/// [`Duration::as_millis`] returns a `u128` which cannot be logged as a tracing field, so this
+/// saturates to a `u64` instead. No upload is going to run for the ~584 million years that
+/// would take.
+///
+/// # Arguments
+///
+/// * `since` - The instant to measure from
+fn elapsed_ms(since: Instant) -> u64 {
+    u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The mutable progress of a single multipart upload
+struct ProgressState {
+    /// The parts that have been submitted to s3 but have not finished yet and when each started
+    in_flight: BTreeMap<i32, Instant>,
+    /// The number of parts that have finished uploading
+    completed: usize,
+    /// The total number of bytes read from the incoming request body so far
+    bytes_read: u64,
+    /// The total number of bytes handed to s3 across every part so far
+    bytes_sent: u64,
+    /// When we last read a chunk from the incoming request body
+    last_read: Instant,
+    /// Whether the read loop is currently blocked waiting for an upload permit
+    awaiting_permit: bool,
+}
+
+/// The progress of a single multipart upload
+///
+/// This is shared between the loop reading the incoming request body, every spawned part
+/// upload task, and the stall watchdog, so all of its mutable state sits behind a lock. That
+/// lock is only ever held for a handful of field updates and is never held across an await
+/// point, so a blocking mutex is safe here.
+struct MultipartProgress {
+    /// The key in s3 this multipart upload is writing to
+    path: String,
+    /// The id of the multipart upload we are tracking
+    upload_id: String,
+    /// When this multipart upload started
+    start: Instant,
+    /// The mutable progress shared with the part upload tasks and the stall watchdog
+    state: Mutex<ProgressState>,
+}
+
+impl MultipartProgress {
+    /// Build the progress tracker for a new multipart upload
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The key in s3 this multipart upload is writing to
+    /// * `upload_id` - The id of the multipart upload to track
+    fn new(path: &str, upload_id: &str) -> Self {
+        MultipartProgress {
+            path: path.to_owned(),
+            upload_id: upload_id.to_owned(),
+            start: Instant::now(),
+            state: Mutex::new(ProgressState {
+                in_flight: BTreeMap::default(),
+                completed: 0,
+                bytes_read: 0,
+                bytes_sent: 0,
+                last_read: Instant::now(),
+                awaiting_permit: false,
+            }),
+        }
+    }
+
+    /// Lock our progress state, recovering from a poisoned lock
+    ///
+    /// This state only exists to diagnose stalled uploads, so a part upload task panicking and
+    /// poisoning this lock should not take down every upload that comes after it.
+    fn state(&self) -> MutexGuard<'_, ProgressState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Render the parts currently in flight as `<part number>:<age>ms` pairs
+    ///
+    /// The upload semaphore caps this at `MAX_CONCURRENT_UPLOADS` entries so it is always small
+    /// enough to log in full.
+    fn in_flight(&self) -> String {
+        // render each in flight part alongside how long it has been in flight
+        self.state()
+            .in_flight
+            .iter()
+            .map(|(part_num, started)| format!("{part_num}:{}ms", elapsed_ms(*started)))
+            .collect::<Vec<String>>()
+            .join(",")
+    }
+
+    /// Get the total number of bytes that have been handed to s3 for this upload
+    fn bytes_sent(&self) -> u64 {
+        self.state().bytes_sent
+    }
+
+    /// Record that a chunk was read from the incoming request body
+    ///
+    /// # Arguments
+    ///
+    /// * `read` - The number of bytes that were read
+    fn record_read(&self, read: usize) {
+        // track how much we have read and when we last read anything
+        let mut state = self.state();
+        state.bytes_read += read as u64;
+        state.last_read = Instant::now();
+    }
+
+    /// Record that we have started or stopped waiting on an upload permit
+    ///
+    /// # Arguments
+    ///
+    /// * `waiting` - Whether the read loop is currently waiting on a permit
+    fn permit_wait(&self, waiting: bool) {
+        self.state().awaiting_permit = waiting;
+    }
+
+    /// Record that a part has been submitted to s3
+    ///
+    /// # Arguments
+    ///
+    /// * `part_num` - The part number that was submitted
+    /// * `size` - The size in bytes of the part that was submitted
+    fn start_part(&self, part_num: i32, size: usize) {
+        // this part is now in flight
+        let mut state = self.state();
+        state.in_flight.insert(part_num, Instant::now());
+        state.bytes_sent += size as u64;
+    }
+
+    /// Record that a part finished uploading and get how long it took in milliseconds
+    ///
+    /// # Arguments
+    ///
+    /// * `part_num` - The part number that finished uploading
+    fn finish_part(&self, part_num: i32) -> u64 {
+        // this part is no longer in flight
+        let mut state = self.state();
+        let elapsed = state.in_flight.remove(&part_num).map_or(0, elapsed_ms);
+        // count this part towards the ones we have finished
+        state.completed += 1;
+        elapsed
+    }
+
+    /// Record that a part failed to upload and get how long it was in flight in milliseconds
+    ///
+    /// # Arguments
+    ///
+    /// * `part_num` - The part number that failed to upload
+    fn fail_part(&self, part_num: i32) -> u64 {
+        // this part is no longer in flight
+        self.state()
+            .in_flight
+            .remove(&part_num)
+            .map_or(0, elapsed_ms)
+    }
+
+    /// Log the parts this upload is still waiting on
+    ///
+    /// A hung upload shows up here as a part whose age keeps growing while nothing else makes
+    /// progress. `awaiting_permit` and `last_read_ms_ago` separate the two ways an upload can
+    /// stall: s3 not finishing a part we already sent, or the client not sending us any more
+    /// of the request body.
+    ///
+    /// # Arguments
+    ///
+    /// * `span` - The span to log this report under
+    fn log_stall(&self, span: &Span) {
+        // render our in flight parts before we lock so we don't try to lock twice
+        let in_flight = self.in_flight();
+        // copy out the rest of the values we want to report on
+        let state = self.state();
+        let (completed, bytes_read, bytes_sent) =
+            (state.completed, state.bytes_read, state.bytes_sent);
+        let (last_read_ms_ago, awaiting_permit) =
+            (elapsed_ms(state.last_read), state.awaiting_permit);
+        // drop our lock before logging
+        drop(state);
+        // report on what this upload is still waiting on
+        event!(
+            parent: span,
+            Level::INFO,
+            msg = "Multipart upload in progress",
+            path = self.path.as_str(),
+            upload_id = self.upload_id.as_str(),
+            in_flight,
+            parts_completed = completed,
+            bytes_read,
+            bytes_sent,
+            last_read_ms_ago,
+            awaiting_permit,
+            elapsed_ms = elapsed_ms(self.start),
+        );
+    }
+}
+
+/// A guard over the background task reporting on a multipart upload's progress
+///
+/// The watchdog is aborted when this guard is dropped so it can never outlive the upload it is
+/// reporting on, including on the paths where an upload errors out part way through.
+struct StallWatchdog {
+    /// The handle of the spawned watchdog task
+    handle: JoinHandle<()>,
+}
+
+impl StallWatchdog {
+    /// Spawn a watchdog that periodically logs the parts an upload is still waiting on
+    ///
+    /// # Arguments
+    ///
+    /// * `progress` - The progress of the upload to report on
+    fn spawn(progress: &Arc<MultipartProgress>) -> Self {
+        // clone the progress the watchdog task needs to own
+        let progress = Arc::clone(progress);
+        // build a span so our reports stay attached to the trace of the request being uploaded
+        let span = span!(Level::INFO, "S3Client::stall_watchdog");
+        // report on this upload until it finishes and we get aborted
+        let handle = tokio::spawn(async move {
+            // build the interval we report on
+            let mut interval = tokio::time::interval(STALL_LOG_INTERVAL);
+            // the first tick of an interval completes immediately so burn it
+            interval.tick().await;
+            loop {
+                // wait until its time for our next report
+                interval.tick().await;
+                // log the parts this upload is still waiting on
+                progress.log_stall(&span);
+            }
+        });
+        StallWatchdog { handle }
+    }
+}
+
+impl Drop for StallWatchdog {
+    /// Abort our watchdog task so it never outlives the upload it is reporting on
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+/// The state used to upload the parts of a single multipart upload
+///
+/// Every multipart upload in this module shares the same plumbing: a semaphore bounding how
+/// many parts may be in flight, the handles of the part uploads that have been spawned, and
+/// the next part number to hand out. Bundling them keeps that plumbing, and all of the
+/// progress logging that goes with it, in one place instead of duplicated in every helper.
+struct MultipartTracker {
+    /// The semaphore bounding how many part uploads may be in flight at once
+    semaphore: Arc<Semaphore>,
+    /// The progress of this upload shared with the part tasks and the stall watchdog
+    progress: Arc<MultipartProgress>,
+    /// The watchdog reporting on this upload, aborted when this tracker is dropped
+    _watchdog: StallWatchdog,
+    /// The part upload tasks that have been spawned
+    tasks: Vec<JoinHandle<Result<CompletedPart, ApiError>>>,
+    /// The part number to assign to the next part we upload
+    part_num: i32,
+}
+
+impl MultipartTracker {
+    /// Start tracking a new multipart upload
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The key in s3 this multipart upload is writing to
+    /// * `upload_id` - The id of the multipart upload to track
+    fn new(path: &str, upload_id: &str) -> Self {
+        // build the progress shared by this uploads parts and its watchdog
+        let progress = Arc::new(MultipartProgress::new(path, upload_id));
+        // start reporting on this upload so a stall doesn't just go silent
+        let watchdog = StallWatchdog::spawn(&progress);
+        // log that this upload started so it can be matched against the s3 access logs
+        event!(
+            Level::INFO,
+            msg = "Started multipart upload",
+            path,
+            upload_id
+        );
+        MultipartTracker {
+            semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_UPLOADS)),
+            progress,
+            _watchdog: watchdog,
+            tasks: Vec::new(),
+            part_num: 1,
+        }
+    }
+
+    /// Record that a chunk was read from the incoming request body
+    ///
+    /// # Arguments
+    ///
+    /// * `read` - The number of bytes that were read
+    fn record_read(&self, read: usize) {
+        self.progress.record_read(read);
     }
 }
 
@@ -309,89 +616,137 @@ impl S3Client {
         }
     }
 
-    /// Acquire a permit bounding the number of concurrent part uploads
+    /// Upload a single part of a multipart upload in the background
     ///
-    /// Acquiring before spawning an upload applies backpressure to the incoming request
-    /// body: once `MAX_CONCURRENT_UPLOADS` parts are in flight, the read loop waits here
-    /// rather than buffering the whole file in memory.
+    /// Acquiring a permit before spawning applies backpressure to the incoming request body:
+    /// once `MAX_CONCURRENT_UPLOADS` parts are in flight, the read loop waits here rather than
+    /// buffering the whole file in memory. Uploading on its own task then lets the part make
+    /// progress while we keep reading the incoming body instead of stalling the read on it.
     ///
     /// # Arguments
     ///
-    /// * `semaphore` - The semaphore bounding how many part uploads may run at once
-    async fn upload_permit(
+    /// * `tracker` - The tracker for the multipart upload this part belongs to
+    /// * `body` - The bytes to upload for this part
+    async fn submit_part(
         &self,
-        semaphore: &Arc<Semaphore>,
-    ) -> Result<OwnedSemaphorePermit, ApiError> {
-        // the semaphore is never closed so this only errors if the runtime is shutting down
-        Arc::clone(semaphore)
+        tracker: &mut MultipartTracker,
+        body: Bytes,
+    ) -> Result<(), ApiError> {
+        // flag that we are waiting on a permit so a stall here shows up in our stall reports
+        tracker.progress.permit_wait(true);
+        // wait until fewer than MAX_CONCURRENT_UPLOADS parts are in flight; the semaphore is
+        // never closed so this only errors if the runtime is shutting down
+        let permit = Arc::clone(&tracker.semaphore)
             .acquire_owned()
             .await
-            .map_err(|err| internal_err_unwrapped!(format!("s3 upload semaphore closed: {err}")))
-    }
-
-    /// Spawn a background task that uploads a single part of a multipart upload to s3
-    ///
-    /// Uploading parts on their own tasks lets them make progress while we keep reading
-    /// the incoming request body, instead of stalling the read on each part upload. The
-    /// task holds `permit` for the duration of the upload so the number of parts in flight
-    /// at once (and therefore our memory usage) stays bounded.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - The key in s3 this multipart upload is writing to
-    /// * `upload_id` - The id of the multipart upload these parts belong to
-    /// * `part_num` - The part number to assign to this part
-    /// * `body` - The bytes to upload for this part
-    /// * `permit` - The concurrency permit to hold until this part finishes uploading
-    fn spawn_upload_part(
-        &self,
-        path: &str,
-        upload_id: &str,
-        part_num: i32,
-        body: Bytes,
-        permit: OwnedSemaphorePermit,
-    ) -> tokio::task::JoinHandle<Result<CompletedPart, ApiError>> {
+            .map_err(|err| internal_err_unwrapped!(format!("s3 upload semaphore closed: {err}")))?;
+        // we have our permit so we are no longer waiting on one
+        tracker.progress.permit_wait(false);
         // clone the values the spawned task needs to own
         let client = self.client.clone();
         let bucket = self.bucket.clone();
-        let path = path.to_string();
-        let upload_id = upload_id.to_string();
+        let progress = Arc::clone(&tracker.progress);
+        // grab the part number and size we are uploading
+        let part_num = tracker.part_num;
+        let part_size = body.len();
+        // build a span so this parts events stay attached to the trace of the request it came from
+        let span = span!(Level::INFO, "S3Client::upload_part", part_num);
+        // record that this part is now in flight
+        tracker.progress.start_part(part_num, part_size);
+        // log that this part is on its way to s3
+        event!(
+            parent: &span,
+            Level::INFO,
+            msg = "Submitting part",
+            part_num,
+            part_size,
+            in_flight = tracker.progress.in_flight(),
+        );
         // upload this part in the background so it overlaps with reading the incoming body
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             // hold our concurrency permit until this part is done uploading
             let _permit = permit;
             // upload this part to s3
-            let part = client
+            let uploaded = client
                 .upload_part()
                 .bucket(&bucket)
-                .key(&path)
-                .upload_id(&upload_id)
+                .key(&progress.path)
+                .upload_id(&progress.upload_id)
                 .body(ByteStream::from(SdkBody::from(body)))
                 .part_number(part_num)
                 .send()
-                .await?;
-            // build the completed part record so the caller can finish the upload
-            Ok(CompletedPart::builder()
-                .e_tag(part.e_tag.unwrap_or_default())
-                .part_number(part_num)
-                .build())
-        })
+                .await;
+            // log whether this part made it to s3 before handing it back
+            match uploaded {
+                Ok(part) => {
+                    // this part is done so take it out of flight
+                    let elapsed_ms = progress.finish_part(part_num);
+                    // log that this part made it to s3
+                    event!(
+                        parent: &span,
+                        Level::INFO,
+                        msg = "Part uploaded",
+                        part_num,
+                        part_size,
+                        elapsed_ms,
+                        e_tag = part.e_tag().unwrap_or_default(),
+                        in_flight = progress.in_flight(),
+                    );
+                    // build the completed part record so the caller can finish the upload
+                    Ok(CompletedPart::builder()
+                        .e_tag(part.e_tag.unwrap_or_default())
+                        .part_number(part_num)
+                        .build())
+                }
+                Err(error) => {
+                    // this part is done so take it out of flight
+                    let elapsed_ms = progress.fail_part(part_num);
+                    // convert this into an api error so we get the full s3 error message
+                    let error = ApiError::from(error);
+                    // log that this part failed instead of waiting for the caller to join us
+                    event!(
+                        parent: &span,
+                        Level::ERROR,
+                        msg = "Part upload failed",
+                        part_num,
+                        part_size,
+                        elapsed_ms,
+                        error = error.to_string(),
+                    );
+                    Err(error)
+                }
+            }
+        });
+        // track this part upload so we can wait on it when completing this upload
+        tracker.tasks.push(handle);
+        // move on to the next part number
+        tracker.part_num += 1;
+        Ok(())
     }
 
     /// Wait for every spawned part upload to finish and complete the multipart upload
     ///
     /// # Arguments
     ///
-    /// * `path` - The key in s3 this multipart upload is writing to
-    /// * `upload_id` - The id of the multipart upload to complete
-    /// * `tasks` - The part upload tasks spawned by [`S3Client::spawn_upload_part`]
-    #[instrument(name = "S3Client::complete_multipart", skip(self, tasks), err(Debug))]
-    async fn complete_multipart(
-        &self,
-        path: &str,
-        upload_id: &str,
-        tasks: Vec<tokio::task::JoinHandle<Result<CompletedPart, ApiError>>>,
-    ) -> Result<(), ApiError> {
+    /// * `tracker` - The tracker for the multipart upload to complete
+    #[rustfmt::skip]
+    #[instrument(name = "S3Client::complete_multipart", skip_all, fields(path = tracker.progress.path.as_str(), upload_id = tracker.progress.upload_id.as_str()), err(Debug))]
+    async fn complete_multipart(&self, tracker: MultipartTracker) -> Result<(), ApiError> {
+        // break our tracker apart, keeping the watchdog alive so a part that stalls while we
+        // wait here keeps getting reported instead of the logs just going quiet
+        let MultipartTracker {
+            progress,
+            _watchdog,
+            tasks,
+            ..
+        } = tracker;
+        // log that every part has been submitted and we are just waiting on them now
+        event!(
+            Level::INFO,
+            msg = "Waiting on parts to finish uploading",
+            parts = tasks.len(),
+            in_flight = progress.in_flight(),
+        );
         // collect every uploaded part, surfacing any upload or task join error
         let mut parts = Vec::with_capacity(tasks.len());
         for task in tasks {
@@ -403,20 +758,77 @@ impl S3Client {
         }
         // parts can finish out of order so sort them by part number before completing
         parts.sort_by_key(|part| part.part_number().unwrap_or_default());
+        // grab how many parts we uploaded before we hand them off
+        let uploaded = parts.len();
         // build our complete multipart upload object
         let completed_parts = CompletedMultipartUpload::builder()
             .set_parts(Some(parts))
             .build();
+        // log that every part is uploaded and we are about to complete this upload; pairing this
+        // with the event below tells us whether a hang is in our parts or in the complete call
+        event!(
+            Level::INFO,
+            msg = "Completing multipart upload",
+            parts = uploaded,
+            bytes_sent = progress.bytes_sent(),
+            elapsed_ms = elapsed_ms(progress.start),
+        );
         // finish this multipart upload
         self.client
             .complete_multipart_upload()
             .bucket(&self.bucket)
-            .key(path)
+            .key(&progress.path)
             .multipart_upload(completed_parts)
-            .upload_id(upload_id)
+            .upload_id(&progress.upload_id)
             .send()
             .await?;
+        // log that this upload is fully done
+        event!(
+            Level::INFO,
+            msg = "Multipart upload complete",
+            parts = uploaded,
+            bytes_sent = progress.bytes_sent(),
+            elapsed_ms = elapsed_ms(progress.start),
+        );
         Ok(())
+    }
+
+    /// Abort a multipart upload that failed part way through
+    ///
+    /// The error that caused the abort is always the one returned. An abort failing is worth
+    /// logging but it must not replace the error that actually failed the upload.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The key in s3 the aborted multipart upload was writing to
+    /// * `upload_id` - The id of the multipart upload to abort
+    /// * `error` - The error that caused this upload to be aborted
+    #[instrument(name = "S3Client::abort_multipart", skip(self, error))]
+    async fn abort_multipart(&self, path: &str, upload_id: &str, error: ApiError) -> ApiError {
+        // log the failure that is causing us to abort this upload
+        event!(
+            Level::ERROR,
+            msg = "Aborting multipart upload",
+            error = error.to_string(),
+        );
+        // abort this multipart upload so s3 doesn't hold onto its parts
+        let aborted = self
+            .client
+            .abort_multipart_upload()
+            .bucket(&self.bucket)
+            .key(path)
+            .upload_id(upload_id)
+            .send()
+            .await;
+        // log any abort failure but keep returning the error that failed this upload
+        if let Err(abort_error) = aborted {
+            event!(
+                Level::ERROR,
+                msg = "Failed to abort multipart upload",
+                error = ApiError::from(abort_error).to_string(),
+            );
+        }
+        error
     }
 
     /// Stream a file into s3 while hashing and carting it
@@ -440,14 +852,12 @@ impl S3Client {
         // init our cart streamer and hashers
         let mut cart = CartStreamManual::new(&self.password, 7_242_880)?;
         let mut hashers = StandardHashers::default();
-        // limit how many part uploads are in flight at once so our memory usage stays bounded
-        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_UPLOADS));
-        // track the part upload tasks we have spawned
-        let mut tasks = Vec::new();
-        // track what part number we are on
-        let mut part_num = 1;
+        // track this uploads parts so we can bound, log, and wait on them
+        let mut tracker = MultipartTracker::new(path, upload_id);
         // stream this fields data through our hashers, cart, and upload carted parts concurrently
         while let Some(raw) = field.chunk().await? {
+            // track how much of the incoming body we have read
+            tracker.record_read(raw.len());
             // pass this chunk through our hashers
             hashers.digest(&raw);
             // add this buffer to our cart streamer
@@ -461,23 +871,18 @@ impl S3Client {
                         let chunk = Bytes::copy_from_slice(cart.carted_bytes());
                         // consume the bytes we have copied out
                         cart.consume();
-                        // acquire a permit, applying backpressure to the incoming body if
-                        // too many uploads are already in flight
-                        let permit = self.upload_permit(&semaphore).await?;
-                        // upload this carted part in the background
-                        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
-                        // increment our part number
-                        part_num += 1;
+                        // upload this carted part in the background, applying backpressure to
+                        // the incoming body if too many uploads are already in flight
+                        self.submit_part(&mut tracker, chunk).await?;
                     }
                 }
             }
         }
         // finish carting our file and upload the final part
         let chunk = Bytes::copy_from_slice(cart.finish()?);
-        let permit = self.upload_permit(&semaphore).await?;
-        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
+        self.submit_part(&mut tracker, chunk).await?;
         // wait for every part to finish uploading and complete the multipart upload
-        self.complete_multipart(path, upload_id, tasks).await?;
+        self.complete_multipart(tracker).await?;
         Ok(hashers.finish())
     }
 
@@ -515,18 +920,8 @@ impl S3Client {
             .await
         {
             Ok(hashes) => Ok(hashes),
-            Err(error) => {
-                // abort this multipart upload
-                self.client
-                    .abort_multipart_upload()
-                    .bucket(&self.bucket)
-                    .key(path)
-                    .upload_id(upload_id)
-                    .send()
-                    .await?;
-                // return our error
-                return Err(error);
-            }
+            // abort this multipart upload and return the error that failed it
+            Err(error) => Err(self.abort_multipart(&path, upload_id, error).await),
         }
     }
 
@@ -551,14 +946,12 @@ impl S3Client {
         // init our cart streamer and hashers
         let mut cart = CartStreamManual::new(&self.password, 7_242_880)?;
         let mut sha256 = Sha256::new();
-        // limit how many part uploads are in flight at once so our memory usage stays bounded
-        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_UPLOADS));
-        // track the part upload tasks we have spawned
-        let mut tasks = Vec::new();
-        // track what part number we are on
-        let mut part_num = 1;
+        // track this uploads parts so we can bound, log, and wait on them
+        let mut tracker = MultipartTracker::new(path, upload_id);
         // stream this fields data through our hasher, cart, and upload carted parts concurrently
         while let Some(raw) = field.chunk().await? {
+            // track how much of the incoming body we have read
+            tracker.record_read(raw.len());
             // pass this chunk through our hasher
             sha256.update(&raw);
             // add this buffer to our cart streamer
@@ -572,23 +965,18 @@ impl S3Client {
                         let chunk = Bytes::copy_from_slice(cart.carted_bytes());
                         // consume the bytes we have copied out
                         cart.consume();
-                        // acquire a permit, applying backpressure to the incoming body if
-                        // too many uploads are already in flight
-                        let permit = self.upload_permit(&semaphore).await?;
-                        // upload this carted part in the background
-                        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
-                        // increment our part number
-                        part_num += 1;
+                        // upload this carted part in the background, applying backpressure to
+                        // the incoming body if too many uploads are already in flight
+                        self.submit_part(&mut tracker, chunk).await?;
                     }
                 }
             }
         }
         // finish carting our file and upload the final part
         let chunk = Bytes::copy_from_slice(cart.finish()?);
-        let permit = self.upload_permit(&semaphore).await?;
-        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
+        self.submit_part(&mut tracker, chunk).await?;
         // wait for every part to finish uploading and complete the multipart upload
-        self.complete_multipart(path, upload_id, tasks).await?;
+        self.complete_multipart(tracker).await?;
         // get our final sha256 hash
         Ok(HEXLOWER.encode(&sha256.finalize()))
     }
@@ -631,18 +1019,8 @@ impl S3Client {
             .await
         {
             Ok(sha256) => Ok(sha256),
-            Err(error) => {
-                // abort this multipart upload
-                self.client
-                    .abort_multipart_upload()
-                    .bucket(&self.bucket)
-                    .key(path)
-                    .upload_id(upload_id)
-                    .send()
-                    .await?;
-                // return our error
-                return Err(error);
-            }
+            // abort this multipart upload and return the error that failed it
+            Err(error) => Err(self.abort_multipart(&path, upload_id, error).await),
         }
     }
 
@@ -666,14 +1044,12 @@ impl S3Client {
     ) -> Result<(), ApiError> {
         // init our cart streamer
         let mut cart = CartStreamManual::new(&self.password, 7_242_880)?;
-        // limit how many part uploads are in flight at once so our memory usage stays bounded
-        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_UPLOADS));
-        // track the part upload tasks we have spawned
-        let mut tasks = Vec::new();
-        // track what part number we are on
-        let mut part_num = 1;
+        // track this uploads parts so we can bound, log, and wait on them
+        let mut tracker = MultipartTracker::new(path, upload_id);
         // stream this fields data through our cart and upload carted parts concurrently
         while let Some(raw) = field.chunk().await? {
+            // track how much of the incoming body we have read
+            tracker.record_read(raw.len());
             // add this buffer to our cart streamer
             if cart.next_bytes(raw)? {
                 // keep processing these bytes until they are finished
@@ -685,23 +1061,18 @@ impl S3Client {
                         let chunk = Bytes::copy_from_slice(cart.carted_bytes());
                         // consume the bytes we have copied out
                         cart.consume();
-                        // acquire a permit, applying backpressure to the incoming body if
-                        // too many uploads are already in flight
-                        let permit = self.upload_permit(&semaphore).await?;
-                        // upload this carted part in the background
-                        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
-                        // increment our part number
-                        part_num += 1;
+                        // upload this carted part in the background, applying backpressure to
+                        // the incoming body if too many uploads are already in flight
+                        self.submit_part(&mut tracker, chunk).await?;
                     }
                 }
             }
         }
         // finish carting our file and upload the final part
         let chunk = Bytes::copy_from_slice(cart.finish()?);
-        let permit = self.upload_permit(&semaphore).await?;
-        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
+        self.submit_part(&mut tracker, chunk).await?;
         // wait for every part to finish uploading and complete the multipart upload
-        self.complete_multipart(path, upload_id, tasks).await
+        self.complete_multipart(tracker).await
     }
 
     /// Stream a file into s3 after carting it
@@ -735,18 +1106,8 @@ impl S3Client {
         // cart and stream this file to s3
         match self.cart_and_stream_helper(&path, upload_id, field).await {
             Ok(()) => Ok(()),
-            Err(error) => {
-                // abort this multipart upload
-                self.client
-                    .abort_multipart_upload()
-                    .bucket(&self.bucket)
-                    .key(path)
-                    .upload_id(upload_id)
-                    .send()
-                    .await?;
-                // return our error
-                return Err(error);
-            }
+            // abort this multipart upload and return the error that failed it
+            Err(error) => Err(self.abort_multipart(&path, upload_id, error).await),
         }
     }
 
@@ -764,39 +1125,31 @@ impl S3Client {
         upload_id: &str,
         mut field: Field<'a>,
     ) -> Result<(), ApiError> {
-        // limit how many part uploads are in flight at once so our memory usage stays
-        // bounded while still overlapping uploads with reading the incoming body
-        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_UPLOADS));
-        // track the part upload tasks we have spawned
-        let mut tasks = Vec::new();
-        // track what part number we are on
-        let mut part_num = 1;
+        // track this uploads parts so we can bound, log, and wait on them
+        let mut tracker = MultipartTracker::new(path, upload_id);
         // buffer incoming bytes until we have a full part sized chunk to upload
         let mut buffer = BytesMut::with_capacity(PART_SIZE);
         // stream this fields data into part sized buffers and upload them concurrently
         while let Some(raw) = field.chunk().await? {
+            // track how much of the incoming body we have read
+            tracker.record_read(raw.len());
             // add our chunk to our part buffer
             buffer.extend_from_slice(&raw);
             // once we have a full part upload it in the background
             if buffer.len() >= PART_SIZE {
                 // take the buffered bytes as an owned chunk, leaving capacity for the next part
                 let chunk = buffer.split().freeze();
-                // acquire a permit, applying backpressure to the incoming body if too many
-                // uploads are already in flight
-                let permit = self.upload_permit(&semaphore).await?;
-                // upload this part in the background
-                tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
-                // increment our part number
-                part_num += 1;
+                // upload this part in the background, applying backpressure to the incoming
+                // body if too many uploads are already in flight
+                self.submit_part(&mut tracker, chunk).await?;
             }
         }
         // upload whatever is left as the final part; it has the highest part number so s3
         // allows it to be smaller than the 5 MiB minimum
         let chunk = buffer.split().freeze();
-        let permit = self.upload_permit(&semaphore).await?;
-        tasks.push(self.spawn_upload_part(path, upload_id, part_num, chunk, permit));
+        self.submit_part(&mut tracker, chunk).await?;
         // wait for every part to finish uploading and complete the multipart upload
-        self.complete_multipart(path, upload_id, tasks).await
+        self.complete_multipart(tracker).await
     }
 
     /// Stream a file into s3
@@ -828,18 +1181,8 @@ impl S3Client {
         // cart and stream this file to s3
         match self.stream_helper(path, upload_id, field).await {
             Ok(()) => Ok(()),
-            Err(error) => {
-                // abort this multipart upload
-                self.client
-                    .abort_multipart_upload()
-                    .bucket(&self.bucket)
-                    .key(path)
-                    .upload_id(upload_id)
-                    .send()
-                    .await?;
-                // return our error
-                return Err(error);
-            }
+            // abort this multipart upload and return the error that failed it
+            Err(error) => Err(self.abort_multipart(path, upload_id, error).await),
         }
     }
 
@@ -882,18 +1225,8 @@ impl S3Client {
         // cart and stream this file to s3
         match self.stream_helper(path, upload_id, field).await {
             Ok(()) => Ok(()),
-            Err(err) => {
-                // abort this multipart upload
-                self.client
-                    .abort_multipart_upload()
-                    .bucket(&self.bucket)
-                    .key(path)
-                    .upload_id(upload_id)
-                    .send()
-                    .await?;
-                // return our error
-                return Err(err);
-            }
+            // abort this multipart upload and return the error that failed it
+            Err(error) => Err(self.abort_multipart(path, upload_id, error).await),
         }
     }
 

@@ -402,16 +402,20 @@ macro_rules! multipart_file {
         let file = tokio::fs::File::open(&$path).await?;
         // get the length of this file so we can size our buffer correctly
         let len = file.metadata().await?.len();
+        // get the name this file is going to be uploaded under
+        let file_name = $path.to_string_lossy().to_string();
         // convert our file into a framed read stream
         let codec = tokio_util::codec::BytesCodec::new();
         let stream = tokio_util::codec::FramedRead::new(file, codec);
+        // track this files progress so a stalled upload tells us which file it stalled on
+        let stream = $crate::client::stream_progress::track(stream, &file_name, len);
         // convert our stream to a body to pass to reqwest
         let body = reqwest::Body::wrap_stream(stream);
         // build the form part that contains this file
         let file_part = reqwest::multipart::Part::stream_with_length(body, len)
             .mime_str("multipart/form-data")?
             // set this files name
-            .file_name($path.to_string_lossy().to_string());
+            .file_name(file_name);
         // add the file to upload
         let form = $form.part($key, file_part);
         form
@@ -421,21 +425,26 @@ macro_rules! multipart_file {
         let file = tokio::fs::File::open(&$path).await?;
         // get the length of this file so we can size our buffer correctly
         let len = file.metadata().await?.len();
+        // get the name this file is going to be uploaded under trimming any prefix that was set
+        //
+        // the API derives this result files key in s3 from this name and logs it, so tracking the
+        // trimmed name is what lets our events and the API's be joined for the same file
+        let file_name = match $prefix {
+            Some(prefix) => $path.strip_prefix(prefix)?.to_string_lossy().to_string(),
+            None => $path.to_string_lossy().to_string(),
+        };
         // convert our file into a framed read stream
         let codec = tokio_util::codec::BytesCodec::new();
         let stream = tokio_util::codec::FramedRead::new(file, codec);
+        // track this files progress so a stalled upload tells us which file it stalled on
+        let stream = $crate::client::stream_progress::track(stream, &file_name, len);
         // convert our stream to a body to pass to reqwest
         let body = reqwest::Body::wrap_stream(stream);
         // build the form part that contains this file
         let file_part = reqwest::multipart::Part::stream_with_length(body, len)
-            .mime_str("multipart/form-data")?;
-        // if a trim prefix was set then trim it
-        let file_part = match $prefix {
-            Some(prefix) => {
-                file_part.file_name($path.strip_prefix(prefix)?.to_string_lossy().to_string())
-            }
-            None => file_part.file_name($path.to_string_lossy().to_string()),
-        };
+            .mime_str("multipart/form-data")?
+            // set this files name
+            .file_name(file_name);
         // add the file to upload
         let form = $form.part($key, file_part);
         form

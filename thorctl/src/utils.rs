@@ -160,6 +160,7 @@ pub mod pipelines;
 pub mod reactions;
 pub mod render;
 pub mod repos;
+pub mod trace;
 
 /// Get a Thorium client or setup keys
 ///

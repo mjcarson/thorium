@@ -24,6 +24,9 @@ mod pipelines;
 mod reactions;
 mod repos;
 mod search;
+// this is public so the multipart_file! macro can reach it from other crates
+#[doc(hidden)]
+pub mod stream_progress;
 mod streams;
 mod system;
 mod traits;

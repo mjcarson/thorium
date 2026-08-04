@@ -12,8 +12,10 @@ license-file = "../LICENSE"
 vendored-openssl = ["openssl/vendored"]
 
 [dependencies]
-thorium-api = { workspace = true, features = ["client", "kanal-err", "dialoguer-err", "openai", "rmcp-err", "ai"]}
+thorium-api = { workspace = true, features = ["client", "client-trace", "kanal-err", "dialoguer-err", "openai", "rmcp-err", "ai"]}
 clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = "0.3"
 tokio = { workspace = true }
 tokio-stream = { version = "0.1", features = ["io-util"] }
 config = { version = "0.15", features = ["yaml"] }

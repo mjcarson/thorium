@@ -18,6 +18,8 @@ use args::{Args, SubCommands};
 async fn main() {
     // get the command line args that were passed in
     let args = Args::parse();
+    // setup logging if the user asked for any
+    utils::trace::setup(&args);
     // fall into the right handler and execute this users command
     let thorctl_result = match &args.cmd {
         SubCommands::Login(login) => handlers::clusters::login(&args, login).await,

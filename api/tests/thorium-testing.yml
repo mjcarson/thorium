@@ -1,47 +1,248 @@
-thorium:
-  interface: "127.0.0.1"
-  port: 38000
-  namespace: "<NAMESPACE>"
-  secret_key: "<SECRET_KEY>"
-  tracing:
-    local:
-      level: "Off"
-  files:
-    password: "SecretCornIsBest"
-    bucket: "<BUCKET>"
+elastic:
+  cert_validation: null
+  insecure_certificates: false
+  max_analyzed_offset: 1000000
+  node: https://127.0.0.1:9200
+  password: 2tgnaYewaK7t8W9lgo8V1tv4cZxu3EuQ
   results:
-    bucket: "<BUCKET>"
-  ephemeral:
-    bucket: "<BUCKET>"
+    repos: thorium_repo_results
+    samples: thorium_sample_results
+  tags:
+    repos: thorium_repo_tags
+    samples: thorium_sample_tags
+  username: thorium
+redis:
+  host: 127.0.0.1
+  password: Xte0yfiyiTsrEz0gIyMx9ihlYibKqeFh
+  port: 6379
+scylla:
+  auth:
+    password: dKio4HAop5NOtNRUbp74oTsX6jDu0RD5
+    username: thorium
+  nodes:
+    - 10.107.190.178
+  replication: 1
+  setup_time: 120
+thorium:
+  assets:
+    binaries: binaries
+    dev_docs: docs/dev
+    not_found: docs/user/static_resources/mascot.png
+    user_docs: docs/user
+  associations:
+    earliest: 1748736000
+    partition_size: 180
   attachments:
-    bucket: "<BUCKET>"
+    bucket: thorium-attachments
+  auth:
+    email: null
+    local_user_ids:
+      group: 1879048192
+      user: 1879048192
+    token_expire: 90
+  base_network_policies:
+  - egress:
+    - allowed_all: false
+      allowed_custom:
+      - namespace_labels:
+        - key: kubernetes.io/metadata.name
+          value: thorium
+        pod_labels:
+        - key: app
+          value: api
+      allowed_groups: []
+      allowed_internet: false
+      allowed_ips: []
+      allowed_local: false
+      allowed_tools: []
+      ports: []
+    - allowed_all: false
+      allowed_custom:
+      - namespace_labels:
+        - key: kubernetes.io/metadata.name
+          value: kube-system
+        pod_labels:
+        - key: k8s-app
+          value: kube-dns
+      - namespace_labels:
+        - key: kubernetes.io/metadata.name
+          value: kube-system
+        pod_labels:
+        - key: k8s-app
+          value: node-local-dns
+      allowed_groups: []
+      allowed_internet: false
+      allowed_ips:
+      - cidr: 169.254.0.0/16
+        except: null
+      - cidr: fe80::/10
+        except: null
+      allowed_local: false
+      allowed_tools: []
+      ports:
+      - port: 53
+        protocol: UDP
+    ingress:
+    - allowed_all: false
+      allowed_custom:
+      - namespace_labels:
+        - key: kubernetes.io/metadata.name
+          value: thorium
+        pod_labels:
+        - key: app
+          value: api
+      allowed_groups: []
+      allowed_internet: false
+      allowed_ips: []
+      allowed_local: false
+      allowed_tools: []
+      ports: []
+    name: thorium-default
+  cors:
+    domains: []
+    insecure: true
+  entities:
+    earliest: 1748736000
+    partition_size: 180
+  ephemeral:
+    bucket: thorium-ephemeral
+  events:
+    max_depth: 5
+    partition_size: 10
+    retention: 604800
+  files:
+    bucket: thorium-files
+    earliest: 1610596807
+    partition_size: 3600
+    password: SecretCornIsBest
+  graphics:
+    bucket: thorium-graphics
+  interface: 0.0.0.0
+  namespace: testing_thorium
+  namespace_blacklist:
+  - jaeger
+  - redis
+  - cert-manager
+  - elastic-system
+  - scylla-operator
+  - quickwit
+  - thorium
+  - scylla
+  port: 8081
+  reaction_cache:
+    bucket: thorium-reaction-cache-files
+    password: SecretCornIsBest
   repos:
-    bucket: "<BUCKET>"
-  s3:
-    access_key: "<ACCESS_KEY>"
-    secret_token: "<SECRET_TOKEN>"
-    endpoint: "<S3_ENDPOINT>"
-    region: "<REGION>"
-    use_path_style: false
+    bucket: thorium-repos
+    earliest: 946684801
+    partition_size: 3600
+  request_size_limits:
+    data: 1024
+    form: 1024
+    json: 1024
+  results:
+    bucket: thorium-results
+    earliest: 1610596807
+    partition_size: 3600
   retention:
     data: 10
     logs: 10
-  web_ui:
-    version: "0.0.0"
-redis:
-  host: "<REDIS_IP>"
-  port: 6379
-scylla:
-  nodes:
-    - "<IP>"
-  replication: 1
-elastic:
-  node: "<ELASTIC_IP>"
-  username: "<ELASTIC_USERNAME>"
-  password: "<ELASTIC_PASSWORD>"
-  results:
-    samples: "<ELASTIC_SAMPLE_RESULTS_INDEX>"
-    repos: "<ELASTIC_REPO_RESULTS_INDEX>"
+    notifications: 604800
+    results: 3
+  s3:
+    access_key: QvvyBRZwdV2u77LvdfyR4sCHx9UEC2Oo
+    endpoint: http://127.0.0.1:9000
+    region: us-east-1
+    secret_token: Zge5w3yZfVOd0uOMeA9zwmXeGzI1b1ih
+    skip_bucket_auto_create: false
+    use_path_style: true
+  scaler:
+    bare_metal:
+      clusters: {}
+      dwell: 5
+      fair_share:
+        cpu: 2
+        memory: 1
+      fair_share_divisor: 1
+    cache_lifetime: 600
+    crane:
+      insecure: true
+      path: /app/crane
+    deadline_window: 100000
+    k8s:
+      clear_proxy: false
+      clusters:
+        kubernetes-admin@cluster.local:
+          alias: dev
+          api_url: null
+          burstable:
+            cpu: 0.0
+            memory: 0.0
+          filters:
+            custom: []
+            master: false
+          groups: []
+          host_aliases: {}
+          image_restrictions: {}
+          insecure: false
+          nodes:
+          - minikube
+          restricted: false
+          spawn_slots:
+            deadlines: 2
+            fairshare: 2
+          tls_server_name: null
+      dwell: 5
+      fair_share:
+        cpu: 2
+        memory: 1
+      fair_share_divisor: 1
+      ignored_contexts: []
+      limbo: 5
+      primary_cluster: kubernetes-admin@cluster.local
+    kvm:
+      clusters: {}
+      dwell: 5
+      fair_share:
+        cpu: 2
+        memory: 1
+      fair_share_divisor: 1
+    tasks:
+      cache_reload: 600
+      cleanup: 25
+      decrease_fair_share: 600
+      image_runtimes: 300
+      ldap_sync: 600
+      resources: 120
+      zombies: 30
+    windows:
+      clusters: []
+      dwell: 5
+      fair_share:
+        cpu: 2
+        memory: 1
+      fair_share_divisor: 1
+  search_streamer:
+    init:
+      chunks_per_worker: 10000
+    max_document_size: 100.0 MiB
+    max_request_size: 100.0 MiB
+    workers: 5
+  secret_key: vlbmPMoxkeTXULSdyQpk1uAfRer4l1ge
   tags:
-    samples: "<ELASTIC_SAMPLE_TAGS_INDEX>"
-    repos: "<ELASTIC_REPO_TAGS_INDEX>"
+    entities:
+      earliest: 1748736000
+      partition_size: 600
+    files:
+      earliest: 1609459201
+      partition_size: 180
+    repos:
+      earliest: 1609459201
+      partition_size: 180
+  tracing:
+    external:
+      Grpc:
+        endpoint: http://quickwit-indexer.quickwit.svc.cluster.local:7281
+        level: Info
+    local:
+      level: Info
