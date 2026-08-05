@@ -131,6 +131,62 @@ async fn download_large() -> Result<(), thorium::Error> {
     Ok(())
 }
 
+/// Carted samples flush a part every 16 MiB, so `download_large` only spans a couple of parts and
+/// can't catch a bug that only shows up once several parts are in flight at the same time. This
+/// uploads a sample large enough to saturate the concurrency limit and hold the read loop on the
+/// upload semaphore, which is the path a stalled production upload actually takes.
+///
+/// This is ignored by default because it moves 256 MiB through s3; run it with
+/// `cargo test -p thorium-api --features test-utilities --test files upload_saturates_parts -- --ignored`.
+#[tokio::test]
+#[ignore = "moves 256 MiB through s3, run manually when touching the multipart upload path"]
+async fn upload_saturates_parts() -> Result<(), thorium::Error> {
+    // build a sample large enough that its carted parts outnumber the concurrency limit, so the
+    // read loop has to block on the upload semaphore instead of just queueing every part at once
+    let mut random_data = vec![0u8; 256 * 1024 * 1024];
+    let mut rng = rand::rng();
+    rng.fill_bytes(&mut random_data);
+    // hash our data so we can check the hashes the api calculated while streaming
+    let mut sha256_hasher = Sha256::new();
+    sha256_hasher.update(&random_data);
+    let sha256 = HEXLOWER.encode(&sha256_hasher.finalize());
+    // save our uploaded size so we can compare it after we hand our data off
+    let uploaded_size = random_data.len();
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // build a sample request
+    let file_req = SampleRequest::new_buffer(Buffer::new(random_data), vec![group])
+        .description("saturating test file")
+        .tag("corn", "yes");
+    // upload this file
+    let resp = client.files.create(file_req).await?;
+    // make sure the api hashed the whole stream and not just part of it
+    is!(resp.sha256, sha256);
+    // download the file and check that it's valid
+    let temp_path = std::env::temp_dir().join("UNCARTED_SATURATING_MAL");
+    // build the options for downloading this file
+    let mut opts = FileDownloadOpts::default().uncart();
+    // download this file
+    client
+        .files
+        .download(&resp.sha256, &temp_path, &mut opts)
+        .await?;
+    // read in our uncarted file
+    let data = tokio::fs::read(&temp_path).await?;
+    // delete the uncarted malware file
+    tokio::fs::remove_file(&temp_path).await?;
+    // make sure our uncarted file is the same size as what we uploaded
+    is!(data.len(), uploaded_size);
+    // compare digests instead of the raw bytes so a mismatch doesn't dump 256 MiB of output
+    let mut downloaded_hasher = Sha256::new();
+    downloaded_hasher.update(&data);
+    let downloaded_sha256 = HEXLOWER.encode(&downloaded_hasher.finalize());
+    is!(downloaded_sha256, sha256);
+    Ok(())
+}
+
 #[tokio::test]
 async fn get() -> Result<(), thorium::Error> {
     // get admin client

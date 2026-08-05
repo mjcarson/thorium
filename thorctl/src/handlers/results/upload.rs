@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use thorium::client::ResultsClient;
 use thorium::models::{OnDiskFile, OutputRequest, Sample};
 use thorium::{Error, Thorium};
-use tracing::instrument;
 
 use crate::args::results::UploadResults;
 
@@ -96,12 +95,6 @@ fn is_sha256<T: AsRef<str>>(s: T) -> bool {
 /// * `cmd` - The upload results command
 /// * `sha256` - The SHA256 of the file to upload results to
 /// * `tool_subdirs` - The list of tool sub-directories to upload
-#[instrument(
-    name = "results::upload_tool_subdirs",
-    skip_all,
-    fields(sha256, tools = tool_subdirs.len()),
-    err(Debug)
-)]
 async fn upload_tool_subdirs(
     thorium: &Thorium,
     cmd: &UploadResults,
@@ -202,12 +195,6 @@ async fn upload_tool_subdirs(
 /// * `sha256` - The SHA256 of the file to upload results to
 /// * `path` - The path to the results
 /// * `unnested_result_files` - The result files found in the path collected previously
-#[instrument(
-    name = "results::upload_tool_flags",
-    skip_all,
-    fields(sha256, files = unnested_result_files.len()),
-    err(Debug)
-)]
 async fn upload_tool_flags(
     thorium: &Thorium,
     cmd: &UploadResults,
@@ -276,12 +263,6 @@ async fn upload_tool_flags(
 /// * `cmd` - The upload results command
 /// * `sha256` - The SHA256 of the file to upload results to
 /// * `path` - The path to the results
-#[instrument(
-    name = "results::upload_helper",
-    skip_all,
-    fields(sha256, path = path.display().to_string()),
-    err(Debug)
-)]
 async fn upload_helper(
     thorium: &Thorium,
     cmd: &UploadResults,

@@ -8531,8 +8531,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "toml 0.8.23",
- "tracing",
- "tracing-subscriber",
  "tui-banner",
  "tui-markdown",
  "unicode-segmentation",

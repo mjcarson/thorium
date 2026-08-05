@@ -61,15 +61,8 @@ rustix-err = ["rustix"]
 # include the dialoguer errors
 dialoguer-err = ["dialoguer"]
 
-# include tracing in the client without the opentelemetry exporters
-#
-# CLIs like Thorctl want the client's spans and events but have nowhere to ship otlp traces to,
-# so this pulls in tracing on its own instead of the whole trace stack. This intentionally does
-# not depend on "client" so an api only build can still enable "trace" without dragging in reqwest.
-client-trace = ["tracing"]
-
 # include tracing support
-trace = ["client-trace", "tracing-opentelemetry", "opentelemetry", "opentelemetry_sdk", "opentelemetry-jaeger", "opentelemetry-otlp", "opentelemetry-semantic-conventions", "tracing", "tracing-subscriber", "tracing-core", "valuable"]
+trace = ["tracing-opentelemetry", "opentelemetry", "opentelemetry_sdk", "opentelemetry-jaeger", "opentelemetry-otlp", "opentelemetry-semantic-conventions", "tracing", "tracing-subscriber", "tracing-core", "valuable"]
 
 # include features required for integration tests
 test-utilities = ["api"]

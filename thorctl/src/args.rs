@@ -24,10 +24,7 @@ use self::{
     trees::Trees,
     uncart::Uncart,
 };
-use crate::{
-    args::toolbox::Toolbox,
-    utils::{repos::validate_repo_url, trace::LogLevel},
-};
+use crate::{args::toolbox::Toolbox, utils::repos::validate_repo_url};
 
 pub mod ai;
 pub mod cart;
@@ -97,13 +94,6 @@ pub struct Args {
     /// Disable progress tracking and only print errors to stderr
     #[clap(short, long)]
     pub quiet: bool,
-    /// How much logging to print to stderr
-    ///
-    /// This is off by default. Logs are written to stderr so they never mix into the output
-    /// Thorctl prints to stdout, but they will interleave with the progress bars the commands
-    /// that use them draw.
-    #[clap(long, value_enum, ignore_case = true, default_value_t = LogLevel::Off)]
-    pub log_level: LogLevel,
     /// Container CLI to use for image pull/save/load/tag/push/build
     ///
     /// Overrides the `container_runtime` config value; auto-detected when neither is set.
