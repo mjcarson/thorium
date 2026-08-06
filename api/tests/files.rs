@@ -863,7 +863,7 @@ async fn comment_attachment_prune() -> Result<(), thorium::Error> {
     .await?;
     // try to retrieve the attachment
     let attachment_path = format!("{}/{}/{}", &hashes.sha256, &comment_id, attachment_id);
-    let s3 = S3::new(&test_utilities::CONF);
+    let s3 = S3::new(&test_utilities::CONF)?;
     let attachment_resp = s3.attachments.download(&attachment_path).await;
     // ensure the attachment has been deleted
     match attachment_resp {

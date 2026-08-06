@@ -123,7 +123,7 @@ impl SystemStats {
                 // crawl over each user and its stage map
                 for (user, stage_map) in &user_map.stages {
                     // crawl over each stage
-                    for (stage, _) in stage_map.iter() {
+                    for stage in stage_map.keys() {
                         unique.insert(format!("{group}:{pipeline}:{user}:{stage}"));
                     }
                 }

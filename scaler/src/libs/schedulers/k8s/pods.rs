@@ -183,19 +183,22 @@ impl Pods {
                             if let Some(state) = &container_status.state {
                                 // check if we have a terminated state
                                 if let Some(terminated) = &state.terminated {
-                                    // check if this pod OOMd
-                                    if terminated.reason.as_deref() == Some("OOMKilled") {
-                                        // log that we found an oomed worker
-                                        event!(
-                                            Level::INFO,
-                                            worker = pod_name,
-                                            reason = "OOMKilled"
-                                        );
-                                        // build the error out reason for this worker
-                                        let reason = ErrorOutKinds::oom(pod_name);
-                                        // set this pods job to be failed out instead of reset
-                                        error_out.push(reason);
-                                    }
+                                    // check why this image failed
+                                    let reason = match terminated.reason.as_deref() {
+                                        Some("OOMKilled") => ErrorOutKinds::oom(pod_name),
+                                        Some("ImagePullBackoff") => {
+                                            ErrorOutKinds::image_pull_backoff(pod_name)
+                                        }
+                                        _ => continue,
+                                    };
+                                    // log that we found a dead worker
+                                    event!(
+                                        Level::INFO,
+                                        worker = pod_name,
+                                        reason = reason.reason_as_str(),
+                                    );
+                                    // set this pods job to be failed out instead of reset
+                                    error_out.push(reason);
                                 }
                             }
                         }

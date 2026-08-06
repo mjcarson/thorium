@@ -1,5 +1,6 @@
 //! The shared config for Thorium
 use bytesize::ByteSize;
+use cart_rs::CartVersion;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
@@ -1755,6 +1756,13 @@ fn default_files_partition_size() -> u16 {
     180
 }
 
+/// Helps serde default the `CaRT` version to write to V1
+///
+/// Eventually this will change to V2.
+fn default_cart_version() -> CartVersion {
+    CartVersion::V1
+}
+
 /// The settings for saving/Carting files to the backend
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 pub struct Files {
@@ -1764,6 +1772,13 @@ pub struct Files {
     /// The bucket to write carted files too
     #[serde(default = "default_files_bucket")]
     pub bucket: String,
+    /// The `CaRT` version to write new files with
+    ///
+    /// Reads always detect the version from the file itself, so lowering this never makes an
+    /// already stored file unreadable. Repos are carted with this too since they share the
+    /// files password.
+    #[serde(default = "default_cart_version")]
+    pub cart_version: CartVersion,
     /// The earliest date a file will have a submission date for as a unix epoch
     #[serde(default = "default_files_earliest")]
     pub earliest: i64,
@@ -1777,6 +1792,7 @@ impl Default for Files {
         Files {
             password: default_files_password(),
             bucket: default_files_bucket(),
+            cart_version: default_cart_version(),
             earliest: default_files_earliest(),
             partition_size: default_files_partition_size(),
         }
@@ -1862,6 +1878,12 @@ pub struct ReactionCache {
     /// The bucket to write extras files to
     #[serde(default = "default_reaction_cache_bucket")]
     pub bucket: String,
+    /// The `CaRT` version to write new reaction cache files with
+    ///
+    /// Reads always detect the version from the file itself, so lowering this never makes an
+    /// already cached object unreadable.
+    #[serde(default = "default_cart_version")]
+    pub cart_version: CartVersion,
 }
 
 impl Default for ReactionCache {
@@ -1869,6 +1891,7 @@ impl Default for ReactionCache {
         ReactionCache {
             password: default_reaction_cache_password(),
             bucket: default_reaction_cache_bucket(),
+            cart_version: default_cart_version(),
         }
     }
 }
