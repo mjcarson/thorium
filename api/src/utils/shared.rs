@@ -321,8 +321,9 @@ impl Shared {
         let elastic = retry!(setup::elastic(&config), 60, "Elastic setup", &config);
         // build an email client if its configured
         let email = EmailClient::new(&config).await;
-        // setup s3 clients
-        let s3 = S3::new(&config);
+        // setup s3 clients; a cart password that cannot be a key is unusable config, and this
+        // whole startup path already aborts rather than limping along on config it cannot use
+        let s3 = S3::new(&config).expect("Failed to build s3 clients from the Thorium config");
         // setup our oauth clients
         let oauth = setup_oauth_providers(&config).await;
         // read banner from local path

@@ -30,8 +30,21 @@ pub static CONF: LazyLock<Conf> = LazyLock::new(|| {
 });
 
 /// The addr to talk to the api at
-static ADDR: LazyLock<String> =
-    LazyLock::new(|| format!("http://{}:{}", CONF.thorium.interface, CONF.thorium.port));
+///
+/// The config's interface is the address the API *binds* to, which is usually a wildcard so it
+/// answers on every interface. A wildcard is not a destination though: dialing it either fails
+/// outright or, when an http proxy is configured in the environment, gets handed to a proxy that
+/// cannot route it. The tests only ever talk to the API running in their own process, so rewrite
+/// a wildcard bind to loopback rather than dialing it.
+static ADDR: LazyLock<String> = LazyLock::new(|| {
+    // pick a host we can actually connect to, since a wildcard bind is not a destination
+    let host = match CONF.thorium.interface.as_str() {
+        "0.0.0.0" => "127.0.0.1",
+        "::" | "[::]" => "[::1]",
+        interface => interface,
+    };
+    format!("http://{}:{}", host, CONF.thorium.port)
+});
 
 /// Build a scylla client for a specific cluster
 ///
@@ -318,12 +331,17 @@ async fn bootstrap_test_api() -> Result<String, Error> {
         match attempt {
             Ok(resp) => break resp,
             // this attempt failed so sleep for 1 second
-            Err(_) => {
+            Err(error) => {
                 // increment our attempts by 1
                 attempts += 1;
                 // check if we have used up all of our attempts yet
                 if attempts == 300 {
-                    return Err(Error::new("Failed to bootstrap Thorium"));
+                    // report the address we dialed and why the last try failed, since without
+                    // them every cause looks identical from five minutes away
+                    return Err(Error::new(format!(
+                        "Failed to bootstrap Thorium at {} after {attempts} attempts: {error:#?}",
+                        *ADDR
+                    )));
                 }
                 // sleep for 1 second
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;

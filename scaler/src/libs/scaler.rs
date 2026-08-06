@@ -93,10 +93,12 @@ macro_rules! update_resources {
 #[derive(Debug, Clone, Eq)]
 pub enum ErrorOutKinds {
     /// This worker exceeded its memory allocations/limits
-    OOM(String),
+    Oom(String),
     /// This worker cannot be created due to a missing prereq
     #[allow(dead_code)]
     StuckCreating(String),
+    /// This worker cannot be created as its image cannot be pulled
+    ImagePullBackoff(String),
 }
 
 impl ErrorOutKinds {
@@ -106,7 +108,7 @@ impl ErrorOutKinds {
     ///
     /// * `worker` - The worker that has been oomed
     pub fn oom<W: Into<String>>(worker: W) -> Self {
-        ErrorOutKinds::OOM(worker.into())
+        ErrorOutKinds::Oom(worker.into())
     }
 
     /// create a report that a worker is stuck creating
@@ -119,19 +121,31 @@ impl ErrorOutKinds {
         ErrorOutKinds::StuckCreating(worker.into())
     }
 
+    /// create a report that a worker's image cannot be pulled
+    ///
+    /// # Arguments
+    ///
+    /// * `worker` - The worker whose image cannot be pulled
+    #[allow(dead_code)]
+    pub fn image_pull_backoff<W: Into<String>>(worker: W) -> Self {
+        ErrorOutKinds::ImagePullBackoff(worker.into())
+    }
+
     /// Get the name of the worker regardless of reason
     pub fn worker(&self) -> &String {
         match self {
-            Self::OOM(worker) => worker,
+            Self::Oom(worker) => worker,
             Self::StuckCreating(worker) => worker,
+            Self::ImagePullBackoff(worker) => worker,
         }
     }
 
     /// Get our reason as a string
     pub fn reason_as_str(&self) -> &'static str {
         match self {
-            Self::OOM(_) => "OOM",
+            Self::Oom(_) => "OOM",
             Self::StuckCreating(_) => "StuckCreating",
+            Self::ImagePullBackoff(_) => "ImagePullBackoff",
         }
     }
 }
@@ -701,13 +715,26 @@ impl Scaler {
                         // try to fail out this job
                         if let Err(error) = self.thorium.jobs.error(&active.job, &add).await {
                             // we failed to error out this job
-                            event!(Level::ERROR, worker = worker.name, error = error.msg());
+                            event!(
+                                Level::ERROR,
+                                worker = worker.name,
+                                error = error.msg(),
+                                active = format!("{active:?}")
+                            );
                         }
                         // log that we are erroring out this job
                         event!(
                             Level::INFO,
                             worker = worker.name,
                             job = active.job.to_string(),
+                            reason = reason.reason_as_str(),
+                        );
+                    } else {
+                        // log that we are erroring out this job
+                        event!(
+                            Level::INFO,
+                            worker = worker.name,
+                            active = "None",
                             reason = reason.reason_as_str(),
                         );
                     }
