@@ -1,6 +1,6 @@
 [package]
 name = "cart-rs"
-version = "1.2.5"
+version = "2.0.0"
 description = "A cart library that can cart/uncart data in a high performance streaming fashion"
 readme = "README.md"
 license-file = "../LICENSE"
@@ -9,18 +9,54 @@ edition = { workspace = true }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["v1", "v2"]
+# The official CaRT format: RC4 + DEFLATE
+v1 = ["dep:rc4", "dep:miniz_oxide"]
+# The Thorium specific CaRT format: AES-128-GCM + Zstd
+v2 = ["dep:aes-gcm", "dep:zstd", "dep:getrandom"]
+# Derive serde impls on the public config types
+serde = ["dep:serde"]
+# Derive JsonSchema on the public config types
+schemars = ["dep:schemars", "serde"]
+
 [dependencies]
-rust-crypto = "^0.2"
-tokio = { version = "1.45", features = ["full", "fs", "io-util"] }
-bincode = "2.0"
-flate2 = "1"
-miniz_oxide = "0.8"
-rc4 = "0.1"
-generic-array = "0.14"
 bytes = "1.10"
-futures-core = "0.3"
-pin-project = "1.1"
+thiserror = "2.0"
+strum = { workspace = true }
+# We only ever touch the `AsyncRead`/`AsyncBufRead`/`ReadBuf` traits, all of which are
+# available with no tokio features at all. `io-util` is only here for `AsyncReadExt` in tests.
+tokio = { version = "1.45", default-features = false, features = ["io-util"] }
+
+# --- v1 ---------------------------------------------------------------------------------
+# NOT flate2. flate2 picks its DEFLATE backend with a cargo feature, and cargo features are
+# additive across the whole workspace, so `zip`'s `deflate-flate2-zlib-rs` silently overrode
+# anything cart-rs declared. That meant the shipped binaries compressed with zlib-rs while
+# `cargo test -p cart-rs` compressed with miniz_oxide, and the decompressor always used
+# miniz_oxide. A direct dependency on a backend is the only way to pin the implementation of
+# a byte-exact format. See the "backend drift canary" test.
+miniz_oxide = { version = "0.8", optional = true }
+rc4 = { version = "0.1", optional = true }
+
+# --- v2 ---------------------------------------------------------------------------------
+# zstd's cargo features (legacy/zdict_builder/...) do not select between implementations the
+# way flate2's do, so the additive-features hazard above does not apply here. zstd-sys is
+# also already in every Thorium binary's dependency graph via kube -> tower-http ->
+# async-compression, so this adds no new C toolchain requirement to any cross build.
+zstd = { version = "0.13", optional = true, default-features = false }
+aes-gcm = { version = "0.10", optional = true, default-features = false, features = [
+  "aes",
+  "alloc",
+] }
+getrandom = { version = "0.3", optional = true }
+
+# --- optional integrations ---------------------------------------------------------------
+serde = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+
+[dev-dependencies]
+hex = "0.4"
+proptest = "1.7"
+tempfile = "3"
+tokio = { version = "1.45", features = ["fs", "io-util", "macros", "rt-multi-thread"] }
 tokio-test = "0.4"
-futures-util = "0.3"
-tokio-util = { version = "0.7", features = ["io"] }
-futures-task = "0.3"

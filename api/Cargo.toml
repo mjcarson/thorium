@@ -99,7 +99,7 @@ hex = "^0.4"
 regex = "1"
 cfg-if = "1"
 bytes = { version = "1", features = ["serde"] }
-cart-rs = { workspace = true }
+cart-rs = { workspace = true, features = ["schemars"] }
 base64 = { version = "0.22" }
 url = "2"
 schemars = { workspace = true }

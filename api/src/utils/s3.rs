@@ -13,9 +13,8 @@ use aws_sdk_s3::{
 use axum::extract::multipart::Field;
 use base64::Engine as _;
 use bytes::{Bytes, BytesMut};
-use cart_rs::{CartStreamManual, UncartStream};
+use cart_rs::{CartKey, CartManual, CartVersion, UncartStream};
 use data_encoding::HEXLOWER;
-use generic_array::{GenericArray, typenum::U16};
 use md5::Md5;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
@@ -40,35 +39,21 @@ use super::{ApiError, Shared};
 use crate::models::ZipDownloadParams;
 use crate::{Conf, bad, internal_err_unwrapped, unavailable};
 
-/// The size in bytes each non-carted multipart upload part should target (16 MiB)
+/// The size in bytes each multipart upload part should target (16 MiB)
 ///
 /// Larger parts mean fewer round trips to s3 for a large upload. This must stay at or
 /// above the s3 minimum part size of 5 MiB for every part except the last.
+///
+/// Carted and non carted uploads both use it. [`CartManual::take_up_to`] hands over exactly this
+/// many bytes without copying them, so a carted part is the same size as an uncarted one instead
+/// of being whatever cart's internal buffer happened to hold.
 const PART_SIZE: usize = 16 * 1024 * 1024;
 
-/// The size of the output buffer to allocate for a cart stream
+/// The hard s3 limit on how many parts a single multipart upload may have
 ///
-/// This is what actually sets the size of a carted part. [`CartStreamManual`] allocates its
-/// output buffer once from this and never grows it, and it stops carting the moment that buffer
-/// is full, so every flush drains the whole buffer rather than [`CART_FLUSH_SIZE`] worth of it.
-/// cart adds a header and a compression allowance on top of what we ask for, so a part lands a
-/// little over this. Matching [`PART_SIZE`] keeps the carted and non carted paths on the same
-/// memory budget.
-///
-/// s3 caps a multipart upload at 10,000 parts. The old 7.6 MiB buffer capped a carted upload at
-/// roughly 75 GiB and cost twice the round trips the non carted path pays for the same file;
-/// this raises that ceiling to roughly 163 GiB.
-const CART_BUFFER_SIZE: usize = PART_SIZE;
-
-/// The number of carted bytes that must be ready before we flush them to s3 as a part
-///
-/// This is only a floor. [`CartStreamManual`] hands us a full buffer or nothing, so in practice
-/// we always flush [`CART_BUFFER_SIZE`] plus cart's own overhead. What matters is that this stays
-/// strictly below the length of the buffer cart allocates: if the buffer could fill before we
-/// reach this threshold then `cart.process` would report "more to do" forever while `cart.ready`
-/// never crossed the threshold, spinning the read loop on a core with the request hung. Half the
-/// buffer leaves no way for that to happen without depending on cart's internal overhead.
-const CART_FLUSH_SIZE: usize = CART_BUFFER_SIZE / 2;
+/// At [`PART_SIZE`] this caps one upload at roughly 156 GiB. Nothing checked this before, so
+/// exceeding it produced an opaque s3 rejection on the *last* part of a very long upload.
+const MAX_PARTS: usize = 10_000;
 
 /// The maximum number of part uploads that may be in flight at once
 ///
@@ -568,50 +553,70 @@ pub struct S3 {
 
 impl S3 {
     /// Build all of our s3 clients
-    pub fn new(config: &Conf) -> Self {
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The Thorium config to build these clients from
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either cart password is longer than a `CaRT` key.
+    pub fn new(config: &Conf) -> Result<Self, cart_rs::Error> {
         // build our clients
         let files = S3Client::new(
             &config.thorium.files.bucket,
             &config.thorium.files.password,
+            config.thorium.files.cart_version,
             &config.thorium.s3,
-        );
+        )?;
         let results = S3Client::new(
             &config.thorium.results.bucket,
             // these aren't password protected so just use the files password
             &config.thorium.files.password,
+            // results are never carted so this is only here to satisfy the constructor
+            config.thorium.files.cart_version,
             &config.thorium.s3,
-        );
+        )?;
         let ephemeral = S3Client::new(
             &config.thorium.ephemeral.bucket,
             // these aren't password protected so just use the files password
             &config.thorium.files.password,
+            // ephemeral files are never carted so this is only here to satisfy the constructor
+            config.thorium.files.cart_version,
             &config.thorium.s3,
-        );
+        )?;
         let reaction_cache = S3Client::new(
             &config.thorium.reaction_cache.bucket,
             &config.thorium.reaction_cache.password,
+            config.thorium.reaction_cache.cart_version,
             &config.thorium.s3,
-        );
+        )?;
         let attachments = S3Client::new(
             &config.thorium.attachments.bucket,
             // these aren't password protected so just use the files password
             &config.thorium.files.password,
+            // attachments are never carted so this is only here to satisfy the constructor
+            config.thorium.files.cart_version,
             &config.thorium.s3,
-        );
+        )?;
         let repos = S3Client::new(
             &config.thorium.repos.bucket,
             // these aren't password protected so just use the files password
             &config.thorium.files.password,
+            // repos share the files password so they share the files cart version too
+            config.thorium.files.cart_version,
             &config.thorium.s3,
-        );
+        )?;
         // build all of the graphics s3 clients
         let graphics = S3Client::new(
             &config.thorium.graphics.bucket,
             // these aren't password protected so just use the files password
             &config.thorium.files.password,
+            // graphics are never carted so this is only here to satisfy the constructor
+            config.thorium.files.cart_version,
             &config.thorium.s3,
-        );
-        S3 {
+        )?;
+        Ok(S3 {
             files,
             results,
             ephemeral,
@@ -619,15 +624,20 @@ impl S3 {
             attachments,
             repos,
             graphics,
-        }
+        })
     }
 }
 
 pub struct S3Client {
     /// The bucket to write files too
     pub bucket: String,
-    /// The password used to encrypt files
-    password: GenericArray<u8, U16>,
+    /// The key used to cart files
+    key: CartKey,
+    /// The `CaRT` version to write new files with
+    ///
+    /// Only the `files`, `repos`, and `reaction_cache` clients ever cart anything, so this is
+    /// ignored by the rest. Reads never consult it; the version comes from the file's header.
+    cart_version: CartVersion,
     /// The test aws sdk s3 client
     pub client: Client,
 }
@@ -637,12 +647,24 @@ impl S3Client {
     ///
     /// # Arguments
     ///
-    /// * `config` - Thorium config options
-    #[must_use]
-    pub fn new(bucket: &str, password: &str, conf: &crate::conf::S3) -> Self {
-        // build our generic array
-        let gen_array: GenericArray<u8, U16> =
-            GenericArray::clone_from_slice(&password.as_bytes()[..16]);
+    /// * `bucket` - The bucket this client reads and writes
+    /// * `password` - The password to derive the cart key from
+    /// * `cart_version` - The `CaRT` version to write new files with
+    /// * `conf` - Thorium config options
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `password` is longer than a `CaRT` key. It is rejected rather than
+    /// truncated because silently truncating a password is how you write files that nothing can
+    /// read back.
+    pub fn new(
+        bucket: &str,
+        password: &str,
+        cart_version: CartVersion,
+        conf: &crate::conf::S3,
+    ) -> Result<Self, cart_rs::Error> {
+        // derive our cart key, rejecting a password that cannot be one
+        let key = CartKey::from_password(password)?;
         // get our s3 credentials
         let creds = Credentials::new(&conf.access_key, &conf.secret_token, None, None, "Thorium");
         // build our timeout config so a stalled request is bounded and retried instead of
@@ -669,11 +691,12 @@ impl S3Client {
         let s3_config = s3_config_builder.build();
         // build our s3 client
         let client = Client::from_conf(s3_config);
-        S3Client {
+        Ok(S3Client {
             bucket: bucket.to_owned(),
-            password: gen_array,
+            key,
+            cart_version,
             client,
-        }
+        })
     }
 
     /// Check if a file exists in s3 by path
@@ -771,6 +794,15 @@ impl S3Client {
         tracker: &mut MultipartTracker,
         body: Bytes,
     ) -> Result<(), ApiError> {
+        // s3 caps a multipart upload at MAX_PARTS parts and nothing used to check that, so an
+        // over long upload was rejected opaquely by s3 on its very last part after we had
+        // already streamed the whole file; say what actually went wrong instead
+        if tracker.part_num as usize > MAX_PARTS {
+            return bad!(format!(
+                "This file is too large to upload; it needs more than the {MAX_PARTS} parts s3 \
+                 allows in a single multipart upload"
+            ));
+        }
         // flag that we are waiting on a permit so a stall here shows up in our stall reports
         tracker.progress.permit_wait(true);
         // wait until fewer than MAX_CONCURRENT_UPLOADS parts are in flight; the semaphore is
@@ -975,6 +1007,67 @@ impl S3Client {
         error
     }
 
+    /// Cart a multipart field into s3 as a sequence of parts
+    ///
+    /// This is the one carted upload loop. The three carted upload paths differ only in what
+    /// they hash on the way past, so they all pass a different `digest` into this rather than
+    /// each keeping their own near identical copy of the loop.
+    ///
+    /// Two properties are worth calling out because their absence used to be a hazard:
+    ///
+    /// * [`CartManual::push`] always consumes everything it is handed, so there is no "carted
+    ///   some of it" state to loop on and no way for the loop to spin without making progress.
+    ///   The old API could report "more to do" forever while never crossing the flush threshold,
+    ///   which pinned a tokio worker at 100% with the request hung.
+    /// * [`CartManual::take_up_to`] hands over a slice of cart's own buffer as an owned
+    ///   [`Bytes`], so building a part costs no copy. The old API only exposed a borrow, which
+    ///   meant a `Bytes::copy_from_slice` of the whole buffer for every part of every upload.
+    ///
+    /// # Arguments
+    ///
+    /// * `tracker` - The tracker for this multipart upload
+    /// * `field` - The field to cart and stream to s3
+    /// * `digest` - Called with each chunk of the *original* file before it is carted
+    async fn cart_field_to_parts<'a, D>(
+        &self,
+        tracker: &mut MultipartTracker,
+        mut field: Field<'a>,
+        mut digest: D,
+    ) -> Result<(), ApiError>
+    where
+        D: FnMut(&[u8]),
+    {
+        // init our cart streamer for the version this deployment writes
+        let mut cart = CartManual::builder(self.key)
+            .version(self.cart_version)
+            .build()?;
+        // stream this fields data through the callers hashers, cart, and upload parts concurrently
+        while let Some(raw) = field.chunk().await? {
+            // track how much of the incoming body we have read
+            tracker.record_read(raw.len());
+            // pass this chunk through the callers hashers before we cart it
+            digest(&raw);
+            // cart this chunk; every byte is always consumed so there is nothing to loop on
+            cart.push(&raw)?;
+            // flush whole parts to s3 for as long as we have them
+            while cart.ready() >= PART_SIZE {
+                // take exactly one parts worth of carted bytes without copying them
+                let chunk = cart.take_up_to(PART_SIZE);
+                // upload this carted part in the background, applying backpressure to the
+                // incoming body if too many uploads are already in flight
+                self.submit_part(tracker, chunk).await?;
+            }
+        }
+        // flush the compressor and write the footer now that the body is complete
+        cart.finish()?;
+        // upload whatever is left as the final part; the loop above kept the buffer below a
+        // part, so this is always under the 5 GiB s3 allows a single part and always the last
+        // part, where s3's 5 MiB minimum does not apply. A zero byte file still lands here with
+        // a header and a footer to upload, which is why it no longer fails the whole request
+        let chunk = cart.take();
+        self.submit_part(tracker, chunk).await
+    }
+
     /// Stream a file into s3 while hashing and carting it
     ///
     /// # Arguments
@@ -991,41 +1084,16 @@ impl S3Client {
         &self,
         path: &str,
         upload_id: &str,
-        mut field: Field<'a>,
+        field: Field<'a>,
     ) -> Result<StandardHashes, ApiError> {
-        // init our cart streamer and hashers
-        let mut cart = CartStreamManual::new(&self.password, CART_BUFFER_SIZE)?;
+        // build the hashers this path reports on
         let mut hashers = StandardHashers::default();
         // track this uploads parts so we can bound, log, and wait on them, hanging every span it
         // spawns off of ours instead of off of whatever span happens to be current at that point
         let mut tracker = MultipartTracker::new(path, upload_id, &Span::current());
-        // stream this fields data through our hashers, cart, and upload carted parts concurrently
-        while let Some(raw) = field.chunk().await? {
-            // track how much of the incoming body we have read
-            tracker.record_read(raw.len());
-            // pass this chunk through our hashers
-            hashers.digest(&raw);
-            // add this buffer to our cart streamer
-            if cart.next_bytes(raw)? {
-                // keep processing these bytes until they are finished
-                while cart.process()? {
-                    // if we have a full parts worth of carted bytes then flush them to s3
-                    if cart.ready() >= CART_FLUSH_SIZE {
-                        // copy the carted bytes out so the upload task can own them while
-                        // we keep carting the rest of the file
-                        let chunk = Bytes::copy_from_slice(cart.carted_bytes());
-                        // consume the bytes we have copied out
-                        cart.consume();
-                        // upload this carted part in the background, applying backpressure to
-                        // the incoming body if too many uploads are already in flight
-                        self.submit_part(&mut tracker, chunk).await?;
-                    }
-                }
-            }
-        }
-        // finish carting our file and upload the final part
-        let chunk = Bytes::copy_from_slice(cart.finish()?);
-        self.submit_part(&mut tracker, chunk).await?;
+        // cart this field into s3, hashing every chunk on its way past
+        self.cart_field_to_parts(&mut tracker, field, |raw| hashers.digest(raw))
+            .await?;
         // wait for every part to finish uploading and complete the multipart upload
         self.complete_multipart(tracker).await?;
         Ok(hashers.finish())
@@ -1086,41 +1154,16 @@ impl S3Client {
         &self,
         path: &str,
         upload_id: &str,
-        mut field: Field<'a>,
+        field: Field<'a>,
     ) -> Result<String, ApiError> {
-        // init our cart streamer and hashers
-        let mut cart = CartStreamManual::new(&self.password, CART_BUFFER_SIZE)?;
+        // build the hasher this path reports on
         let mut sha256 = Sha256::new();
         // track this uploads parts so we can bound, log, and wait on them, hanging every span it
         // spawns off of ours instead of off of whatever span happens to be current at that point
         let mut tracker = MultipartTracker::new(path, upload_id, &Span::current());
-        // stream this fields data through our hasher, cart, and upload carted parts concurrently
-        while let Some(raw) = field.chunk().await? {
-            // track how much of the incoming body we have read
-            tracker.record_read(raw.len());
-            // pass this chunk through our hasher
-            sha256.update(&raw);
-            // add this buffer to our cart streamer
-            if cart.next_bytes(raw)? {
-                // keep processing these bytes until they are finished
-                while cart.process()? {
-                    // if we have a full parts worth of carted bytes then flush them to s3
-                    if cart.ready() >= CART_FLUSH_SIZE {
-                        // copy the carted bytes out so the upload task can own them while
-                        // we keep carting the rest of the file
-                        let chunk = Bytes::copy_from_slice(cart.carted_bytes());
-                        // consume the bytes we have copied out
-                        cart.consume();
-                        // upload this carted part in the background, applying backpressure to
-                        // the incoming body if too many uploads are already in flight
-                        self.submit_part(&mut tracker, chunk).await?;
-                    }
-                }
-            }
-        }
-        // finish carting our file and upload the final part
-        let chunk = Bytes::copy_from_slice(cart.finish()?);
-        self.submit_part(&mut tracker, chunk).await?;
+        // cart this field into s3, hashing every chunk on its way past
+        self.cart_field_to_parts(&mut tracker, field, |raw| sha256.update(raw))
+            .await?;
         // wait for every part to finish uploading and complete the multipart upload
         self.complete_multipart(tracker).await?;
         // get our final sha256 hash
@@ -1186,38 +1229,14 @@ impl S3Client {
         &self,
         path: &str,
         upload_id: &str,
-        mut field: Field<'a>,
+        field: Field<'a>,
     ) -> Result<(), ApiError> {
-        // init our cart streamer
-        let mut cart = CartStreamManual::new(&self.password, CART_BUFFER_SIZE)?;
         // track this uploads parts so we can bound, log, and wait on them, hanging every span it
         // spawns off of ours instead of off of whatever span happens to be current at that point
         let mut tracker = MultipartTracker::new(path, upload_id, &Span::current());
-        // stream this fields data through our cart and upload carted parts concurrently
-        while let Some(raw) = field.chunk().await? {
-            // track how much of the incoming body we have read
-            tracker.record_read(raw.len());
-            // add this buffer to our cart streamer
-            if cart.next_bytes(raw)? {
-                // keep processing these bytes until they are finished
-                while cart.process()? {
-                    // if we have a full parts worth of carted bytes then flush them to s3
-                    if cart.ready() >= CART_FLUSH_SIZE {
-                        // copy the carted bytes out so the upload task can own them while
-                        // we keep carting the rest of the file
-                        let chunk = Bytes::copy_from_slice(cart.carted_bytes());
-                        // consume the bytes we have copied out
-                        cart.consume();
-                        // upload this carted part in the background, applying backpressure to
-                        // the incoming body if too many uploads are already in flight
-                        self.submit_part(&mut tracker, chunk).await?;
-                    }
-                }
-            }
-        }
-        // finish carting our file and upload the final part
-        let chunk = Bytes::copy_from_slice(cart.finish()?);
-        self.submit_part(&mut tracker, chunk).await?;
+        // cart this field into s3; nothing hashes it on this path
+        self.cart_field_to_parts(&mut tracker, field, |_| {})
+            .await?;
         // wait for every part to finish uploading and complete the multipart upload
         self.complete_multipart(tracker).await
     }
@@ -1610,14 +1629,25 @@ pub struct GraphicsS3Client {
 }
 
 impl GraphicsS3Client {
-    pub fn new(config: &Conf) -> Self {
+    /// Build the s3 clients for graphics
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The Thorium config to build these clients from
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the files cart password is longer than a `CaRT` key.
+    pub fn new(config: &Conf) -> Result<Self, cart_rs::Error> {
         // build all of the graphics s3 clients
         let client = S3Client::new(
             &config.thorium.graphics.bucket,
             // these aren't password protected so just use the files password
             &config.thorium.files.password,
+            // graphics are never carted so this is only here to satisfy the constructor
+            config.thorium.files.cart_version,
             &config.thorium.s3,
-        );
-        Self { client }
+        )?;
+        Ok(Self { client })
     }
 }

@@ -1,5 +1,4 @@
-use cart_rs::CartStream;
-use generic_array::{GenericArray, typenum::U16};
+use cart_rs::{CartKey, CartStream};
 use regex::RegexSet;
 use std::{
     path::{Path, PathBuf},
@@ -28,9 +27,8 @@ pub async fn handle(args: &Args, cmd: &Cart) -> Result<(), Error> {
     let skip = RegexSet::new(&cmd.skip)?;
     // prepare data for saving to between tasks
     let cmd = Arc::new(cmd.clone());
-    let password_array: Arc<GenericArray<u8, U16>> = Arc::new(GenericArray::clone_from_slice(
-        &pad_zeroes(cmd.password.as_bytes())?,
-    ));
+    // derive our cart key; CartKey is Copy and 16 bytes so it needs no Arc to share between tasks
+    let key = CartKey::from_password(&cmd.password)?;
     // construct base output path
     let base_out_path = if cmd.in_place {
         &cmd.temp_dir
@@ -49,11 +47,10 @@ pub async fn handle(args: &Args, cmd: &Cart) -> Result<(), Error> {
             // copy data for this task
             let base_out_path = base_out_path.clone();
             let cmd = cmd.clone();
-            let password = password_array.clone();
             async move {
                 // cart the entry in a new task
                 let cart_result: Result<Result<PathBuf, Error>, JoinError> =
-                    tokio::spawn(cart_path(path, base_out_path, cmd, password)).await;
+                    tokio::spawn(cart_path(path, base_out_path, cmd, key)).await;
                 // log the result
                 match cart_result {
                     Ok(Ok(out_path)) => CartLine::success(&path_copy, &out_path),
@@ -87,12 +84,12 @@ pub async fn handle(args: &Args, cmd: &Cart) -> Result<(), Error> {
 /// * `target_path` - The path to the target
 /// * `base_out_path` - The base output path
 /// * `cmd` - The cart command including user options
-/// * `password` - The password used to encrypt the cart file
+/// * `key` - The key used to cart the file
 async fn cart_path(
     path: PathBuf,
     base_out_path: PathBuf,
     cmd: Arc<Cart>,
-    password: Arc<GenericArray<u8, U16>>,
+    key: CartKey,
 ) -> Result<PathBuf, Error> {
     // read input file
     let input: File = OpenOptions::new()
@@ -120,7 +117,9 @@ async fn cart_path(
         .open(&out_path)
         .await?;
     // create a stream to cart the file and copy the stream's contents to the output path
-    let mut cart_stream = CartStream::new(BufStream::new(input), &password)?;
+    let mut cart_stream = CartStream::builder(key, BufStream::new(input))
+        .version(cmd.cart_version)
+        .build()?;
     if let Err(err) = tokio::io::copy(&mut cart_stream, &mut output_cart).await {
         // if an error occurred while carting, delete the output file and return the error
         drop(output_cart);
@@ -141,28 +140,6 @@ async fn cart_path(
         }
     }
     Ok(out_path)
-}
-
-/// Pad the given byte array with 0's to create a 16-byte array
-///
-/// # Arguments
-///
-/// * `arr` - The input byte array
-fn pad_zeroes(arr: &[u8]) -> Result<[u8; 16], Error> {
-    match arr.len() {
-        len if len > 16 => Err(Error::new("Password is greater than 16 characters!")),
-        16 => match arr.try_into() {
-            Ok(arr) => Ok(arr),
-            _ => Err(Error::new(
-                "Unable to statically size 16-byte array to 16 bytes",
-            )),
-        },
-        _ => {
-            let mut padded: [u8; 16] = [0; 16];
-            padded[..arr.len()].copy_from_slice(arr);
-            Ok(padded)
-        }
-    }
 }
 
 /// Construct the output path for the carted file

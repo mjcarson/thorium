@@ -1,0 +1,9 @@
+# build output
+target
+
+# libFuzzer's working state. The corpus is machine generated and grows without bound, and the
+# artifacts directory only ever holds reproducers for a crash that has not been fixed yet, so
+# neither belongs in the repo. A crash worth keeping becomes a unit test in cart-rs instead.
+corpus
+artifacts
+coverage

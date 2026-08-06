@@ -8,6 +8,81 @@ on:
       - '[0-9]+.[0-9]+.[0-9]+*'
 
 jobs:
+  # Test cart-rs on every OS we ship binaries for.
+  #
+  # This job exists because CaRT is a byte-exact container format and nothing used to run its
+  # tests at all. macOS is the important half: the format's worst bug to date was a macOS-only
+  # behavioural difference in the DEFLATE backend, and macOS only ever appeared in this
+  # workflow as a cross-build target, so CI structurally could not see it. Cross-building
+  # proves the code compiles; it proves nothing about whether it round trips.
+  #
+  # This is deliberately scoped to `-p cart-rs` rather than the workspace. The other crates
+  # need live Scylla/Redis/Elastic/s3 to test, and they carry pre-existing clippy and fmt
+  # findings that are not this job's to gate on.
+  test-cart-rs:
+    name: Test cart-rs - ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macOS-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain
+        run: |
+          rustup default nightly
+          rustup component add clippy rustfmt
+      # Each feature combination is a different crate: `v1` and `v2` gate whole codecs in and
+      # out, so a default-features-only run leaves the single-codec builds untested. There is
+      # no `--no-default-features` case on purpose, since a CaRT library with no codec is a
+      # `compile_error!`.
+      - name: Test the feature matrix
+        run: |
+          set -e
+          cargo test -p cart-rs --all-features
+          cargo test -p cart-rs --no-default-features --features v1
+          cargo test -p cart-rs --no-default-features --features v2
+      - name: Clippy
+        run: cargo clippy -p cart-rs --all-targets --all-features -- -D warnings
+      - name: Rustfmt
+        run: cargo fmt -p cart-rs -- --check
+
+  # Smoke run the fuzz targets.
+  #
+  # Split out from `test-cart-rs` because it costs a few minutes of `cargo install cargo-fuzz`
+  # and only runs on Linux, so folding it in would have doubled the macOS leg's runtime for a
+  # sanitizer configuration macOS does not share anyway.
+  #
+  # A minute per target finds nothing new on its own — libFuzzer needs hours and a persisted
+  # corpus for that. What this catches is the failure mode that actually happens: a target that
+  # stopped compiling, or a change that makes a target fail on the very first inputs it tries.
+  # Fuzzers that silently rot are worse than no fuzzers, because everyone assumes they ran.
+  #
+  # Unlike `test-cart-rs` this deliberately does *not* gate `build-core-container`. A time
+  # budgeted fuzz run is not a deterministic pass/fail the way a test suite is, so it turns the
+  # run red and asks a human to look rather than blocking a release on a stopwatch.
+  fuzz-cart-rs:
+    name: Fuzz cart-rs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # cargo-fuzz needs nightly for `-Z sanitizer=address`
+      - name: Install the toolchain
+        run: rustup default nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Smoke run every target
+        working-directory: cart-rs/fuzz
+        run: |
+          set -e
+          for target in $(cargo fuzz list); do
+            echo "::group::$target"
+            cargo fuzz run "$target" -- -max_total_time=60 -max_len=16384 -rss_limit_mb=4096
+            echo "::endgroup::"
+          done
+
   build-mdbook-docs:
     runs-on: ubuntu-latest
     steps:
@@ -104,7 +179,11 @@ jobs:
           - os-name: macOS-aarch64
             runs-on: macOS-latest
             target: aarch64-apple-darwin
-            flags: ""
+            # aes 0.8 only compiles its ARMv8 AES intrinsics behind `--cfg aes_armv8`, so
+            # without this Apple Silicon silently falls back to software AES and CaRT V2
+            # runs at a fraction of the speed every other target gets. The x86_64 entries
+            # get the equivalent from `-C target-feature=+aes`.
+            flags: "--cfg aes_armv8"
     runs-on: ${{ matrix.platform.runs-on }}
     steps:
       - uses: actions/checkout@v4
@@ -168,6 +247,9 @@ jobs:
 
   build-core-container:
     needs:
+      # a cart-rs that cannot round trip corrupts every file the deployment stores, so it
+      # blocks the image rather than just turning the run red
+      - test-cart-rs
       - build-mdbook-docs
       - build-ui-bundle
       - build-glibc-binaries

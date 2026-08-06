@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use cart_rs::CartVersion;
 use clap::Parser;
 
 /// Provide a default output directory
@@ -28,6 +29,15 @@ pub struct Cart {
     ///           the password is stored in plaintext in the cart header
     #[clap(short, long, default_value = "SecretCornIsBest", verbatim_doc_comment)]
     pub password: String,
+    /// The CaRT version to write
+    ///     V1: the official CaRT format (RC4 + DEFLATE), readable by every CaRT tool
+    ///     V2: a Thorium specific format (AES-128-GCM + Zstd), faster and authenticated
+    ///         but only readable by Thorium
+    ///     Note: `uncart` always detects the version from the file, so this only affects writes.
+    ///           This is `--cart-version` rather than `--version` because `--version` is already
+    ///           clap's own flag on this subcommand.
+    #[clap(long, default_value_t = CartVersion::V1, verbatim_doc_comment)]
+    pub cart_version: CartVersion,
     /// The output directory to save the carted file(s) to
     #[clap(short, long, default_value = default_output_path().into_os_string(), conflicts_with = "in_place")]
     pub output: PathBuf,

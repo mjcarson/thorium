@@ -1,0 +1,82 @@
+[package]
+name = "cart-rs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+# detached from the Thorium workspace on purpose. The fuzz targets are built by cargo-fuzz with
+# a sanitizer and a nightly only `-Z` flag, which nothing else in the workspace wants, and
+# libfuzzer-sys should never end up in the dependency graph of a shipped binary.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+libfuzzer-sys = "0.4"
+tokio = { version = "1", default-features = false, features = ["rt", "io-util"] }
+
+[dependencies.cart-rs]
+path = ".."
+
+# the targets all need the same stalling reader and drain loop, so they share one
+[lib]
+name = "cart_rs_fuzz"
+path = "src/lib.rs"
+
+# debug assertions catch the overflow and slicing mistakes that are the whole point of fuzzing,
+# and overflow checks turn a silently wrapping length into a crash the fuzzer can report
+[profile.release]
+debug = true
+debug-assertions = true
+overflow-checks = true
+
+[[bin]]
+name = "fuzz_uncart"
+path = "fuzz_targets/fuzz_uncart.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_chunked_uncart"
+path = "fuzz_targets/fuzz_chunked_uncart.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_header_footer"
+path = "fuzz_targets/fuzz_header_footer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_roundtrip"
+path = "fuzz_targets/fuzz_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_manual_vs_stream"
+path = "fuzz_targets/fuzz_manual_vs_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_manual_schedule"
+path = "fuzz_targets/fuzz_manual_schedule.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_tamper"
+path = "fuzz_targets/fuzz_tamper.rs"
+test = false
+doc = false
+bench = false
