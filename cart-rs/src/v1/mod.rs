@@ -406,7 +406,12 @@ impl V1Decoder {
         self.rc4.apply_keystream(&mut self.scratch);
         // and inflate whatever of it belongs to the body
         let mut pos = 0;
-        while pos < self.scratch.len() {
+        // This loops on the decompressor making progress rather than on there being input left.
+        // `miniz` parks finished output in its own 32 KiB dictionary whenever the slice it was
+        // handed fills up, and reports `Ok` instead of `StreamEnd` while any of it is pending.
+        // Stopping the moment the input runs out would strand that data, and since the mandatory
+        // footer is withheld from the body there would be no later call to hand it over.
+        loop {
             // DEFLATE can expand a great deal, so ask for several times the input and loop
             let want = (self.scratch.len() - pos)
                 .saturating_mul(4)
@@ -437,11 +442,17 @@ impl V1Decoder {
                     )));
                 }
             }
-            // `out` grew this round, so making no progress at all means the stream is stuck
             if result.bytes_consumed == 0 && result.bytes_written == 0 {
-                return Err(Error::Corrupt(
-                    "the zlib stream stopped making progress".to_string(),
-                ));
+                // `out` grew this round, so with input still in hand a completely idle call means
+                // the stream is stuck
+                if pos < self.scratch.len() {
+                    return Err(Error::Corrupt(
+                        "the zlib stream stopped making progress".to_string(),
+                    ));
+                }
+                // otherwise the decompressor has handed back everything it had buffered and is
+                // waiting on bytes we have not been given yet
+                break;
             }
         }
         self.offset += data.len() as u64;
@@ -637,6 +648,46 @@ mod tests {
         );
         // and it is still our own output, so it must still decode
         assert_eq!(uncart(CANARY_CART, 8192).unwrap(), canary_plaintext());
+    }
+
+    /// Output the decompressor is holding internally is never stranded
+    ///
+    /// `miniz` parks finished output in its own 32 KiB dictionary whenever the slice it was handed
+    /// fills up, and reports `Ok` rather than `StreamEnd` while any of it is still pending. A
+    /// decompression loop driven by remaining input stops as soon as a chunk is consumed, so it
+    /// walks away from that data and never comes back for it: the mandatory footer is withheld
+    /// from the body, so there is no later chunk to trigger another call. The file then comes out
+    /// short *and* reports itself truncated, because the stream end that sets `body_end` was one
+    /// call away. It needs a payload that expands past the room `inflate_body` asks for, which is
+    /// why every payload here is compressible and larger than `MIN_INFLATE_ROOM`.
+    #[test]
+    fn output_buffered_inside_the_decompressor_is_never_stranded() {
+        // whether the bug fires depends on where the chunk boundaries land, so each of these
+        // failed in a narrow band of chunk sizes: 102..=172, 445..=570 and 900..=934 respectively
+        let payloads: [Vec<u8>; 3] = [
+            vec![0_u8; 256 * 1024],
+            (0..131_072).map(|i| (i % 251) as u8).collect(),
+            (0..262_144)
+                .map(|i| if i % 64 < 60 { 0 } else { (i % 7) as u8 })
+                .collect(),
+        ];
+        for plain in payloads {
+            let carted = cart(&plain, 4096, V1Options::default());
+            // every chunking has to recover the file, not just the lucky ones
+            for chunk in 1..=carted.len() {
+                let recovered = uncart(&carted, chunk)
+                    .unwrap_or_else(|err| panic!("chunks of {chunk} bytes failed: {err}"));
+                assert_eq!(
+                    recovered.len(),
+                    plain.len(),
+                    "chunks of {chunk} bytes came up short"
+                );
+                assert!(
+                    recovered == plain,
+                    "chunks of {chunk} bytes changed the contents"
+                );
+            }
+        }
     }
 
     #[test]

@@ -235,21 +235,58 @@ fn schedule() -> impl Strategy<Value = Schedule> {
     })
 }
 
+/// How far past the decompressor's output room a compressible payload is drawn
+///
+/// The V1 decoder always offers `miniz` at least 64 KiB of room, so a file that decompresses to
+/// less than that can never fill the slice it was handed and can never leave anything parked in
+/// `miniz`'s internal dictionary. A payload has to clear that floor by a wide margin before the
+/// interesting path is reachable at all. It costs almost nothing to go there: 256 KiB of one
+/// repeated byte carts down to a few hundred bytes.
+const EXPANSION_FLOOR: usize = 256 * 1024;
+
+/// Build a strategy over payloads, compressible and not
+///
+/// Drawing every byte from `any::<u8>()` gives data that `DEFLATE` cannot shrink, so the
+/// decompressor can never produce meaningfully more output than the room it was handed. Half of
+/// the streaming surface only exists on the other side of that: the decompressor parks finished
+/// output in its own dictionary when the slice it was given fills up, and a decoder that does not
+/// go back for it loses the tail. The three compressible shapes here reach it; `max` only bounds
+/// the incompressible one, which is the only shape whose cost scales with its length.
+fn payload(min: usize, max: usize) -> impl Strategy<Value = Vec<u8>> {
+    // compressible payloads are cheap to carry, so they ignore `max` and go past the room instead
+    let big = min..max.max(EXPANSION_FLOOR);
+    prop_oneof![
+        // incompressible, which is what this file used to test exclusively
+        prop::collection::vec(any::<u8>(), min..max),
+        // one enormous run, the most compressible thing there is
+        (any::<u8>(), big.clone()).prop_map(|(byte, len)| vec![byte; len]),
+        // a short pattern repeated, which compresses very well but not perfectly
+        (prop::collection::vec(any::<u8>(), 1..64), big.clone())
+            .prop_map(|(seed, len)| seed.into_iter().cycle().take(len).collect()),
+        // runs broken up by noise, so the expansion ratio swings around mid stream
+        (prop::collection::vec(any::<u8>(), 1..64), big).prop_map(|(seed, len)| (0..len)
+            .map(|i| if i % 64 < 56 { 0 } else { seed[i % seed.len()] })
+            .collect()),
+    ]
+}
+
 proptest! {
-    // these cases carry up to 64 KiB through a possibly one byte wide buffer, so they are far
+    // these cases carry up to 256 KiB through a possibly one byte wide buffer, so they are far
     // more expensive than a default proptest case; the count is tuned to keep the suite quick
-    // enough to gate CI on
+    // enough to gate CI on. Raise it with PROPTEST_CASES when hunting rather than here; the
+    // seeds in `streaming_properties.proptest-regressions` are what make past failures
+    // deterministic at this count
     #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
 
     /// A file survives a round trip no matter how the bytes arrive on either side
     ///
     /// This single property covers every historical streaming defect at once: the lost tail on
     /// the uncommitted return path, the phantom end of file when the decompressor wanted more
-    /// input, the missing waker on the stalled path, and the hard failure when a header arrived
-    /// in pieces.
+    /// input, the missing waker on the stalled path, the hard failure when a header arrived in
+    /// pieces, and the output stranded inside the decompressor's own dictionary.
     #[test]
     fn a_carted_file_always_uncarts_to_the_original(
-        plain in prop::collection::vec(any::<u8>(), 0..65_536),
+        plain in payload(0, 65_536),
         version in version(),
         log2 in 10_u8..=13,
         write in schedule(),
@@ -271,7 +308,7 @@ proptest! {
     /// byte; for V2 the length is the strongest claim available.
     #[test]
     fn the_read_schedule_never_changes_the_output(
-        plain in prop::collection::vec(any::<u8>(), 0..32_768),
+        plain in payload(0, 32_768),
         version in version(),
         log2 in 10_u8..=13,
         awkward in schedule(),
@@ -299,7 +336,7 @@ proptest! {
     /// a successful download of a corrupted file.
     #[test]
     fn a_truncated_cart_is_an_error_rather_than_a_short_read(
-        plain in prop::collection::vec(any::<u8>(), 1..16_384),
+        plain in payload(1, 16_384),
         version in version(),
         cut_at in any::<prop::sample::Index>(),
         read in schedule(),
