@@ -28,17 +28,33 @@ pub(super) use events::{AppEvent, ScrollEvent};
 pub(super) use home::Home;
 pub(super) use tabs::{ActiveTabKind, Tab};
 
-async fn refresh(sender: AsyncSender<AppEvent>, should_refresh: Arc<AtomicBool>) {
-    // keep refreshing every 50ms
+use components::SharedChatStatus;
+
+/// Redraw the tui every 50ms while anything on screen is animating
+///
+/// Two things animate: the banner on the home page and the spinner we show
+/// while our chat worker is busy. We skip the redraw when neither is running so
+/// an idle chat page isn't repainted 20 times a second.
+///
+/// # Arguments
+///
+/// * `sender` - The channel to send redraw events over
+/// * `should_refresh` - Whether the home page banner is still animating
+/// * `status` - What our chat worker is currently doing
+async fn refresh(
+    sender: AsyncSender<AppEvent>,
+    should_refresh: Arc<AtomicBool>,
+    status: SharedChatStatus,
+) {
+    // keep refreshing until our app shuts down
     loop {
-        // check if we should exit
-        if !should_refresh.load(Ordering::Relaxed) {
-            // stop sending refresh events
-            break;
+        // check if anything on screen is currently animating
+        if should_refresh.load(Ordering::Relaxed) || status.snapshot().activity.is_busy() {
+            // try to send a redraw event and stop if our app has shut down
+            if sender.send(AppEvent::Redraw).await.is_err() {
+                break;
+            }
         }
-        // try to send a redraw event
-        // we don't care if this fails since it would just break the animation
-        let _ = sender.send(AppEvent::Redraw).await;
         // sleep for 50 ms
         tokio::time::sleep(StdDuration::from_millis(50)).await;
     }
@@ -173,8 +189,12 @@ impl<A: AiSupport + 'static> App<A> {
         events::spawn_forwarders(&self.event_tx);
         // draw an initial frame until we get an event to handle
         terminal.draw(|frame| self.render(frame))?;
-        // TODO only send this when we are on the home page
-        tokio::task::spawn(refresh(self.event_tx.clone(), self.should_refresh.clone()));
+        // keep redrawing while our banner or our chat spinner is animating
+        tokio::task::spawn(refresh(
+            self.event_tx.clone(),
+            self.should_refresh.clone(),
+            self.tab.status(),
+        ));
         // draw an initial frame until we get an event to handle
         while !self.should_quit {
             // get the next event to handle
@@ -194,7 +214,9 @@ impl<A: AiSupport + 'static> App<A> {
                             self.should_refresh.store(false, Ordering::Relaxed);
                         }
                         // process a tool call failure
-                        AppEvent::ToolCallFailure { error } => (),
+                        // we have nowhere to show this yet but our spinner has
+                        // already cleared so the user isn't left waiting forever
+                        AppEvent::ToolCallFailure { error: _error } => (),
                         // Change our active tab kind
                         AppEvent::SetActiveTabKind(kind) => self.set_active_tab_kind(kind),
                         // don't do anything just redraw the tui

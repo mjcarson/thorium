@@ -8,7 +8,7 @@ use thorium::ai::{AiSupport, ThorChat};
 use uuid::Uuid;
 
 use crate::handlers::ai::chat::Mode;
-use crate::handlers::ai::chat::components::ThorChatClient;
+use crate::handlers::ai::chat::components::{SharedChatStatus, ThorChatClient};
 
 use super::{AppEvent, Chat, Home, ScrollEvent};
 
@@ -137,6 +137,11 @@ impl<A: AiSupport + 'static> Tab<A> {
             thor_chat,
             event_tx: event_tx.clone(),
         }
+    }
+
+    /// Get a handle to what this tabs chat worker is currently doing
+    pub fn status(&self) -> SharedChatStatus {
+        self.thor_chat.status.clone()
     }
 
     /// Handle key input when the query box is focused

@@ -6,7 +6,7 @@ use ratatui::layout::{Constraint, Layout};
 use std::sync::Arc;
 use thorium::ai::AiSupport;
 
-use super::components::{MessageLog, ShortcutMenu, TextBox, ThorChatClient, status_bar};
+use super::components::{MessageLog, ShortcutMenu, TextBox, ThorChatClient, spinner, status_bar};
 use super::{ActiveTabKind, AppEvent, Mode, ScrollEvent};
 
 pub struct Chat<A: AiSupport + 'static> {
@@ -125,22 +125,29 @@ impl<A: AiSupport + 'static> Chat<A> {
     /// * `frame` - The frame to render to
     /// * `area` - The area to render the input in
     pub fn render(&mut self, mode: Mode, frame: &mut Frame) {
-        // split the frame into four vertical chunks: tabs, content, query input, and status bar
+        // get a snapshot of what our chat worker is currently doing
+        let status = self.thor_chat.status.snapshot();
+        // only reserve a row for our spinner when our worker is busy
+        let spinner_height = u16::from(status.activity.is_busy());
+        // split the frame into five vertical chunks: tabs, content, spinner, prompt, and status bar
         let chunks = Layout::vertical([
-            Constraint::Length(3), // tabs
-            Constraint::Min(0),    // content
-            Constraint::Length(8), // promp input
-            Constraint::Length(2), // status bar
+            Constraint::Length(3),              // tabs
+            Constraint::Min(0),                 // content
+            Constraint::Length(spinner_height), // activity spinner
+            Constraint::Length(8),              // promp input
+            Constraint::Length(2),              // status bar
         ])
         .split(frame.area());
         // get a guard to our shared context
         let guard = self.thor_chat.context.access();
         // render any visible messages
         self.messages.render(frame, chunks[1], &guard.history);
+        // render our spinner if our worker is busy
+        spinner::render(frame, chunks[2], &status);
         // render our prompt
-        self.prompt.render(frame, chunks[2]);
+        self.prompt.render(frame, chunks[3]);
         // render our status bar
-        status_bar::render(frame, chunks[3], mode);
+        status_bar::render(frame, chunks[4], mode);
         // render our shortcut menu if its active
         self.shortcuts.render(frame);
     }
