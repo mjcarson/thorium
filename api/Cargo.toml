@@ -64,7 +64,11 @@ dialoguer-err = ["dialoguer"]
 trace = ["tracing-opentelemetry", "opentelemetry", "opentelemetry_sdk", "opentelemetry-jaeger", "opentelemetry-otlp", "opentelemetry-semantic-conventions", "tracing", "tracing-subscriber", "tracing-core", "valuable"]
 
 # include features required for integration tests
-test-utilities = ["api"]
+#
+# The client is required because the test harness builds `Thorium` clients, ai is required because
+# the MCP integration tests drive their requests through `ThorChat`, and trace is required because
+# the api code imports `tracing` unconditionally.
+test-utilities = ["api", "client", "ai", "trace"]
 
 # Force openssl-sys to staticly link in the openssl library. Necessary when
 # cross compiling to x86_64-unknown-linux-musl.

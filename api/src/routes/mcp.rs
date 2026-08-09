@@ -45,8 +45,17 @@ impl McpConfig {
         // get our authorizaton header if it exists
         match parts.headers.get("Authorization") {
             Some(value) => {
-                // get our value as a str
-                let value_str = value.to_str().unwrap();
+                // get our value as a str, rejecting headers that aren't visible ascii
+                let value_str = match value.to_str() {
+                    Ok(value_str) => value_str,
+                    Err(_) => {
+                        return Err(ErrorData {
+                            code: rmcp::model::ErrorCode::INVALID_PARAMS,
+                            message: "Authorization header is not valid ascii".into(),
+                            data: None,
+                        });
+                    }
+                };
                 // split this on spaces and get our token
                 // if there isn't a space then assume they passed just a token
                 match value_str.split_once(' ') {

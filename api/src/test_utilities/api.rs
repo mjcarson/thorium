@@ -363,6 +363,20 @@ pub async fn admin_client() -> Result<Thorium, Error> {
         .await
 }
 
+/// Get the raw token for the admin user, bootstrapping the API if needed
+///
+/// This is the raw token, not the base64 encoded `token <b64>` auth string a [`Thorium`] client
+/// stores internally. MCP clients send `Authorization: Bearer <raw token>` and the MCP handlers
+/// hand whatever follows the first space straight to `Thorium::build(..).token(..)`, which does
+/// its own base64 encoding. Handing an already encoded token to an MCP client would double
+/// encode it.
+pub async fn admin_token() -> Result<String, Error> {
+    // start the API if it hasn't been started already and get a token
+    let token = ADMIN_TOKEN.get_or_try_init(bootstrap_test_api).await?;
+    // hand back an owned copy so callers don't hold a borrow on our static cell
+    Ok(token.clone())
+}
+
 cfg_if::cfg_if! {
     if #[cfg(all(feature = "sync"), not(feature = "python"))] {
         use crate::ThoriumBlocking;

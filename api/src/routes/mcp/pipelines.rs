@@ -20,10 +20,11 @@ pub struct ListPipelines {
 
 #[tool_router(router = pipelines_router, vis = "pub")]
 impl ThoriumMCP {
-    /// Get weather information for a city (returns structured data)
+    /// Get the pipelines in Thorium in a specific group
     ///
     /// # Arguments
     ///
+    /// * `params` - The parameters required for this tool
     /// * `parts` - The request parts required to get a token for this tool
     #[tool(
         name = "list_pipelines",

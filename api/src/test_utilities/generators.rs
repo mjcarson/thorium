@@ -13,7 +13,8 @@ use crate::models::entities::network_activity::{
 };
 use crate::models::entities::rules::{SigmaActionToTake, SigmaAutoFlag};
 use crate::models::{
-    ArgStrategy, Buffer, BulkReactionResponse, ChildFilters, Cleanup, CollectionEntityRequest,
+    ArgStrategy, AuthResponse, Buffer, BulkReactionResponse, ChildFilters, Cleanup,
+    CollectionEntityRequest,
     CollectionKind, CompiledFunction, CompiledInstruction, Confidence, CriticalSector,
     DecompiledFunction, Dependencies, DependencyPassStrategy, DeviceEntityRequest, Entity,
     EntityMetadata, EntityMetadataRequest, EntityMetadataUpdate, EntityRequest,
@@ -169,6 +170,42 @@ pub async fn client(client: &Thorium) -> Result<Thorium, Error> {
         .basic_auth(username, password)
         .build()
         .await
+}
+
+/// Create a new plain user and return both a client for them and their raw token
+///
+/// The raw token is needed to build an MCP client for this user, since MCP clients authenticate
+/// with `Authorization: Bearer <raw token>` instead of the base64 encoded auth string a
+/// [`Thorium`] client keeps internally.
+///
+/// # Arguments
+///
+/// * `client` - The client to get a host string from when creating this user
+#[allow(dead_code)]
+pub async fn client_with_token(client: &Thorium) -> Result<(Thorium, String), Error> {
+    // generate username and password
+    let username = gen_string(24);
+    let password = gen_string(64);
+    // build user create blueprint for a plain user with no elevated permissions
+    let bp = UserCreate::new(&username, &password, "fake@fake.gov")
+        .skip_verification()
+        .role(UserRole::User);
+    // use default client settings
+    let settings = ClientSettings::default();
+    // get our secret key
+    let secret_key = Some(&test_utilities::CONF.thorium.secret_key);
+    // create user in Thorium and keep the token we get back
+    let resp = Users::create(&client.host, bp, secret_key, &settings).await?;
+    // get the raw token for this user
+    let token = match resp {
+        AuthResponse::Authed { token, .. } => token,
+        AuthResponse::VerifyEmail(_) => {
+            return Err(Error::new("Generated user needs to verify their email?"));
+        }
+    };
+    // build a client for this user
+    let user_client = Thorium::build(&client.host).token(&token).build().await?;
+    Ok((user_client, token))
 }
 
 /// Generate a random image request
