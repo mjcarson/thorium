@@ -14,7 +14,8 @@ use super::backends::OutputSupport;
 use super::{Buffer, ImageVersion, InvalidEnum};
 use crate::models::EntityKinds;
 use crate::{
-    matches_adds, matches_clear, matches_removes, matches_update, matches_update_opt, same,
+    matches_adds, matches_clear, matches_clear_opt, matches_removes, matches_update,
+    matches_update_opt, matches_vec, same,
 };
 
 #[cfg(feature = "client")]
@@ -963,9 +964,19 @@ impl PartialEq<FilesHandlerUpdate> for FilesHandler {
         // make sure any updates were applied
         matches_update!(self.results, update.results);
         matches_update!(self.result_files, update.result_files);
-        matches_adds!(self.names, update.add_names);
-        // make sure we removed any requested names
-        matches_removes!(self.names, update.remove_names);
+        matches_update!(self.tags, update.tags);
+        // the names list is wiped after any adds/removes have been applied
+        if update.clear_names {
+            // every name should have been removed
+            if !self.names.is_empty() {
+                return false;
+            }
+        } else {
+            // make sure we added any requested names
+            matches_adds!(self.names, update.add_names);
+            // make sure we removed any requested names
+            matches_removes!(self.names, update.remove_names);
+        }
         true
     }
 }
@@ -1035,8 +1046,8 @@ impl PartialEq<AutoTagUpdate> for AutoTag {
     fn eq(&self, update: &AutoTagUpdate) -> bool {
         // makes sure the logic and key are the same
         matches_update!(self.logic, update.logic);
-        matches_update_opt!(self.key, update.key);
-        matches_clear!(self.key, update.clear_key);
+        // the key is cleared after any update to it has been applied
+        matches_clear_opt!(self.key, update.key, update.clear_key);
         true
     }
 }
@@ -1118,7 +1129,37 @@ impl PartialEq<OutputCollectionUpdate> for OutputCollection {
     fn eq(&self, update: &OutputCollectionUpdate) -> bool {
         // make sure any updates were applied
         matches_update!(self.handler, update.handler);
-        same!(self.files, update.files);
+        matches_update!(self.children, update.children);
+        matches_update!(self.as_filesystem, update.as_filesystem);
+        // the entire files handler is reset to its defaults when a clear is requested
+        if update.clear_files {
+            same!(self.files, FilesHandler::default());
+        } else {
+            same!(self.files, update.files);
+        }
+        // the group restrictions are cleared after any new restrictions are set
+        if update.clear_groups {
+            // every group restriction should have been removed
+            if !self.groups.is_empty() {
+                return false;
+            }
+        } else if !update.groups.is_empty() {
+            // the group restrictions are replaced wholesale when any are given
+            matches_vec!(self.groups, update.groups);
+        }
+        // make sure each auto tag setting was created, updated, or deleted
+        for (key, auto_tag_update) in &update.auto_tag {
+            match (self.auto_tag.get(key), auto_tag_update.delete) {
+                // this auto tag setting should have been deleted
+                (Some(_), true) => return false,
+                // this auto tag setting should have been created
+                (None, false) => return false,
+                // make sure this auto tag settings updates were applied
+                (Some(auto_tag), false) => same!(auto_tag, auto_tag_update),
+                // this auto tag setting was correctly deleted or never existed
+                (None, true) => (),
+            }
+        }
         true
     }
 }
@@ -1277,6 +1318,21 @@ impl FilesHandlerUpdate {
         self.remove_names.extend(names.into_iter().map(Into::into));
         self
     }
+
+    /// Sets the list of file names to restrict this handler to to be cleared
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::FilesHandlerUpdate;
+    ///
+    /// FilesHandlerUpdate::default().clear_names();
+    /// ```
+    #[must_use]
+    pub fn clear_names(mut self) -> Self {
+        self.clear_names = true;
+        self
+    }
 }
 
 impl PartialEq<FilesHandler> for FilesHandlerUpdate {
@@ -1286,13 +1342,8 @@ impl PartialEq<FilesHandler> for FilesHandlerUpdate {
     ///
     /// * `update` - The updated files handler to compare against
     fn eq(&self, handler: &FilesHandler) -> bool {
-        // make sure any updates were applied
-        matches_update!(handler.results, self.results);
-        matches_update!(handler.result_files, self.result_files);
-        matches_adds!(handler.names, self.add_names);
-        // make sure we removed any requested names
-        matches_removes!(handler.names, self.remove_names);
-        true
+        // defer to the other direction so both impls stay in sync
+        handler == self
     }
 }
 
@@ -1357,11 +1408,8 @@ impl PartialEq<AutoTag> for AutoTagUpdate {
     ///
     /// * `settings` - The auto tag settings to compare against
     fn eq(&self, settings: &AutoTag) -> bool {
-        // makes sure the logic and key are the same
-        matches_update!(settings.logic, self.logic);
-        matches_update_opt!(settings.key, self.key);
-        matches_clear!(settings.key, self.clear_key);
-        true
+        // defer to the other direction so both impls stay in sync
+        settings == self
     }
 }
 
@@ -1456,6 +1504,86 @@ impl OutputCollectionUpdate {
         self
     }
 
+    /// Sets where to look for child files to ingest
+    ///
+    /// # Arguments
+    ///
+    /// * `children` - The path to look for child files at
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::OutputCollectionUpdate;
+    ///
+    /// OutputCollectionUpdate::default().children("/data/children");
+    /// ```
+    #[must_use]
+    pub fn children<T: Into<String>>(mut self, children: T) -> Self {
+        self.children = Some(children.into());
+        self
+    }
+
+    /// Sets whether to collect any children as a filesystem
+    ///
+    /// # Arguments
+    ///
+    /// * `as_filesystem` - Whether to collect children as a filesystem
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::OutputCollectionUpdate;
+    ///
+    /// OutputCollectionUpdate::default().as_filesystem(true);
+    /// ```
+    #[must_use]
+    pub fn as_filesystem(mut self, as_filesystem: bool) -> Self {
+        self.as_filesystem = Some(as_filesystem);
+        self
+    }
+
+    /// Adds a group to restrict result uploads too
+    ///
+    /// Any groups set here replace the existing group restrictions entirely.
+    ///
+    /// # Arguments
+    ///
+    /// * `group` - The group to restrict result uploads too
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::OutputCollectionUpdate;
+    ///
+    /// OutputCollectionUpdate::default().group("CornPeeps");
+    /// ```
+    #[must_use]
+    pub fn group<T: Into<String>>(mut self, group: T) -> Self {
+        self.groups.push(group.into());
+        self
+    }
+
+    /// Adds multiple groups to restrict result uploads too
+    ///
+    /// Any groups set here replace the existing group restrictions entirely.
+    ///
+    /// # Arguments
+    ///
+    /// * `groups` - The groups to restrict result uploads too
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::OutputCollectionUpdate;
+    ///
+    /// OutputCollectionUpdate::default().groups(vec!("CornPeeps", "SoyPeeps"));
+    /// ```
+    #[must_use]
+    pub fn groups<T: Into<String>>(mut self, groups: Vec<T>) -> Self {
+        self.groups.extend(groups.into_iter().map(Into::into));
+        self
+    }
+
     /// Sets files handler settings to be cleared
     ///
     /// # Examples
@@ -1494,25 +1622,8 @@ impl PartialEq<OutputCollection> for OutputCollectionUpdate {
     ///
     /// * `update` - The updates to compare against
     fn eq(&self, collection: &OutputCollection) -> bool {
-        // make sure any updates were applied
-        matches_update!(collection.handler, self.handler);
-        same!(collection.files, self.files);
-        // make sure that all auto tag updates are applied
-        for (key, update) in &self.auto_tag {
-            // determine if this update was properly applied
-            if let Some(applied) = collection.auto_tag.get(key) {
-                // return false if our updates were not applied
-                if applied != update {
-                    return false;
-                }
-            } else {
-                // if this auto tag was not deleted then return false as its missing
-                if !update.delete {
-                    return false;
-                }
-            }
-        }
-        true
+        // defer to the other direction so both impls stay in sync
+        collection == self
     }
 }
 

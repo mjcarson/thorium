@@ -14,9 +14,9 @@ use uuid::Uuid;
 use super::db::{self};
 use crate::models::backends::OutputSupport;
 use crate::models::{
-    AutoTag, AutoTagUpdate, EntityKinds, ImageVersion, Output, OutputChunk, OutputCollection,
-    OutputCollectionUpdate, OutputDisplayType, OutputForm, OutputFormBuilder, OutputKind,
-    OutputMap, OutputRow, Repo, ResultGetParams, Sample, User,
+    AutoTag, AutoTagUpdate, EntityKinds, FilesHandler, ImageVersion, Output, OutputChunk,
+    OutputCollection, OutputCollectionUpdate, OutputDisplayType, OutputForm, OutputFormBuilder,
+    OutputKind, OutputMap, OutputRow, Repo, ResultGetParams, Sample, User,
 };
 use crate::utils::{ApiError, Shared, bounder};
 use crate::{bad, bad_internal, deserialize, update, update_clear, update_opt};
@@ -535,6 +535,10 @@ impl OutputCollection {
         // clear names if requested
         if update.files.clear_names {
             self.files.names = Vec::default();
+        }
+        // clear the entire files handler if thats requested
+        if update.clear_files {
+            self.files = FilesHandler::default();
         }
         // update the groups in the groups restrictions if they were specified
         if !update.groups.is_empty() {

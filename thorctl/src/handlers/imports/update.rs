@@ -51,7 +51,6 @@ pub fn calculate_image_update_from_mergeable(
     // build the update field by field, each helper emitting a change only when the
     // current and resolved values actually differ
     Ok(Some(ImageUpdate {
-        external: None,
         scaler: set_modified!(image.scaler, resolved.scaler),
         timeout: set_modified_opt!(image.timeout, resolved.timeout),
         resources: calculate_resource_update(image.resources, resolved.resources),
@@ -127,7 +126,6 @@ pub fn calculate_image_update(mut image: Image, mut req: ImageRequest) -> Option
         clear_lifetime: set_clear!(image.lifetime, req.lifetime),
         clear_description: set_clear!(image.description, req.description),
         version: set_modified_opt!(image.version, req.version),
-        external: None,
         image: set_modified_opt!(image.image, req.image),
         scaler: set_modified!(image.scaler, req.scaler),
         lifetime: set_modified_opt!(image.lifetime, req.lifetime),

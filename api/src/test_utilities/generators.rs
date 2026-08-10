@@ -13,23 +13,22 @@ use crate::models::entities::network_activity::{
 };
 use crate::models::entities::rules::{SigmaActionToTake, SigmaAutoFlag};
 use crate::models::{
-    ArgStrategy, AuthResponse, Buffer, BulkReactionResponse, ChildFilters, Cleanup,
-    CollectionEntityRequest,
-    CollectionKind, CompiledFunction, CompiledInstruction, Confidence, CriticalSector,
-    DecompiledFunction, Dependencies, DependencyPassStrategy, DeviceEntityRequest, Entity,
-    EntityMetadata, EntityMetadataRequest, EntityMetadataUpdate, EntityRequest,
-    EphemeralDependencySettings, FileSystemEntity,
-    FileSystemFolderEntity, FilesHandler, Flag, GenericJobArgs, GroupRequest, GroupUsersRequest,
-    ImageLifetime, ImageRequest, ImageScaler, ImageVersion, IncidentRequest, IpBlock, IpBlockRaw,
-    Ipv4Block,
-    Ipv6Block, KwargDependency, NetworkPolicyCustomK8sRule, NetworkPolicyCustomLabel,
-    NetworkPolicyPort, NetworkPolicyRequest, NetworkPolicyRuleRaw, NetworkProtocol,
-    NodeRegistration, OriginRequest, OutputCollection, OutputDisplayType, PeImportEntity,
-    PeSectionEntity, Pipeline, PipelineRequest, Pools, ReactionCreation, ReactionRequest,
-    RepoCheckout, RepoDependencySettings, RepoRequest, Resources, ResourcesRequest,
-    ResultDependencySettings, SampleDependencySettings, SampleRequest, SigmaRule,
-    SigmaRuleAppliesTo, StageLogsAdd, UserCreate, UserRole, VendorEntityRequest, Volume,
-    VolumeTypes, WindowsProcessEntity, WorkerDeleteMap, WorkerRegistrationList,
+    ArgStrategy, AuthResponse, Buffer, BulkReactionResponse, CacheDependencySettings, ChildFilters,
+    ChildrenDependencySettings, Cleanup, CollectionEntityRequest, CollectionKind, CompiledFunction,
+    CompiledInstruction, Confidence, CriticalSector, DecompiledFunction, Dependencies,
+    DependencyPassStrategy, DeviceEntityRequest, Entity, EntityMetadata, EntityMetadataRequest,
+    EntityMetadataUpdate, EntityRequest, EphemeralDependencySettings, FileSystemEntity,
+    FileSystemFolderEntity, FilesHandler, Flag, GenericCacheDependencySettings, GenericJobArgs,
+    GroupRequest, GroupUsersRequest, ImageArgs, ImageLifetime, ImageRequest, ImageScaler,
+    ImageVersion, IncidentRequest, IpBlock, IpBlockRaw, Ipv4Block, Ipv6Block, Kvm, KwargDependency,
+    NetworkPolicyCustomK8sRule, NetworkPolicyCustomLabel, NetworkPolicyPort, NetworkPolicyRequest,
+    NetworkPolicyRuleRaw, NetworkProtocol, NodeRegistration, OriginRequest, OutputCollection,
+    OutputDisplayType, PeImportEntity, PeSectionEntity, Pipeline, PipelineRequest, Pools,
+    ReactionCreation, ReactionRequest, RepoCheckout, RepoDependencySettings, RepoRequest,
+    Resources, ResourcesRequest, ResultDependencySettings, SampleDependencySettings, SampleRequest,
+    SigmaRule, SigmaRuleAppliesTo, StageLogsAdd, TagDependencySettings, UserCreate, UserRole,
+    VendorEntityRequest, Volume, VolumeTypes, WindowsProcessEntity, WorkerDeleteMap,
+    WorkerRegistrationList,
 };
 use crate::test_utilities;
 use crate::{Error, Thorium};
@@ -289,6 +288,100 @@ pub fn gen_image(group: &str) -> ImageRequest {
                         .strategy(DependencyPassStrategy::Directory),
                 ),
         )
+}
+
+/// Generate a random image request with every optional setting seeded
+///
+/// [`gen_image`] leaves this images args, modifiers, and tag/children/cache dependency
+/// settings at their defaults. This seeds all of them so that tests covering the clear
+/// flags in an update have something to actually clear.
+///
+/// # Arguments
+///
+/// * `group` - The group this image should be in
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_full_image(group: &str) -> ImageRequest {
+    gen_image(group)
+        .modifiers("/data/modifiers")
+        .args(
+            ImageArgs::default()
+                .entrypoint(vec!["/bin/bash", "-c"])
+                .command(vec!["harvest"])
+                .reaction("--reaction")
+                .repo("--repo")
+                .commit("--commit")
+                .output(ArgStrategy::Kwarg("--output".to_owned()))
+                .output_files(ArgStrategy::Append),
+        )
+        .dependencies(
+            Dependencies::default()
+                .samples(
+                    SampleDependencySettings::default()
+                        .location("/test/samples")
+                        .kwarg("--samples")
+                        .strategy(DependencyPassStrategy::Directory),
+                )
+                .ephemeral(
+                    EphemeralDependencySettings::new("/ephemeral", DependencyPassStrategy::Names)
+                        .kwarg("--ephemeral"),
+                )
+                .results(
+                    ResultDependencySettings::new(vec!["plant", "harvest"])
+                        .location("/tmp/prior-harvests")
+                        .kwarg(KwargDependency::List("--prior".to_owned()))
+                        .strategy(DependencyPassStrategy::Names)
+                        .name("fields.txt"),
+                )
+                .repos(
+                    RepoDependencySettings::default()
+                        .location("/test/repos")
+                        .kwarg("--repos")
+                        .strategy(DependencyPassStrategy::Directory),
+                )
+                .tags(
+                    TagDependencySettings::default()
+                        .enable()
+                        .location("/test/tags")
+                        .kwarg("--tags")
+                        .strategy(DependencyPassStrategy::Paths),
+                )
+                .children(
+                    ChildrenDependencySettings::new(vec!["plant"])
+                        .enable()
+                        .location("/test/children")
+                        .kwarg("--children")
+                        .strategy(DependencyPassStrategy::Names),
+                )
+                .cache(
+                    CacheDependencySettings::default()
+                        .location("/test/cache")
+                        .use_parent_cache()
+                        .generic(
+                            GenericCacheDependencySettings::default()
+                                .kwarg("--cache")
+                                .strategy(DependencyPassStrategy::Paths),
+                        ),
+                ),
+        )
+}
+
+/// Generate a random kvm image request
+///
+/// # Arguments
+///
+/// * `group` - The group this image should be in
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_kvm_image(group: &str) -> ImageRequest {
+    let name = gen_string(25);
+    ImageRequest::new(group, &name)
+        .scaler(ImageScaler::Kvm)
+        .description(name + " kvm image description")
+        .kvm(Kvm {
+            xml: "/kvm/golden.xml".to_owned(),
+            qcow2: "/kvm/golden.qcow2".to_owned(),
+        })
 }
 
 /// Generate a random external image request
@@ -1456,7 +1549,12 @@ pub fn gen_device_update(existing: &Entity) -> EntityMetadataUpdate {
     let (remove_urls, remove_critical_sectors) = match &existing.metadata {
         EntityMetadata::Device(dev) => (
             dev.urls.first().cloned().into_iter().collect(),
-            dev.critical_sectors.iter().next().copied().into_iter().collect(),
+            dev.critical_sectors
+                .iter()
+                .next()
+                .copied()
+                .into_iter()
+                .collect(),
         ),
         _ => (Vec::new(), Vec::new()),
     };
@@ -1641,7 +1739,12 @@ pub fn gen_incident_update(existing: &Entity) -> EntityMetadataUpdate {
     let (remove_mission_teams, remove_networks, remove_machines, remove_locations) =
         match &existing.metadata {
             EntityMetadata::Incident(incident) => (
-                incident.mission_teams.first().cloned().into_iter().collect(),
+                incident
+                    .mission_teams
+                    .first()
+                    .cloned()
+                    .into_iter()
+                    .collect(),
                 incident.networks.first().cloned().into_iter().collect(),
                 incident.machines.first().cloned().into_iter().collect(),
                 incident.locations.first().cloned().into_iter().collect(),
@@ -1733,9 +1836,13 @@ pub fn gen_pe_import_update(_existing: &Entity) -> EntityMetadataUpdate {
 #[must_use]
 pub fn gen_entity(group: &str, metadata: EntityMetadataRequest) -> EntityRequest {
     // build our entity request with a random name and two random tags
-    let mut req = EntityRequest::new(gen_string(gen_int!(8, 32)), metadata, vec![group.to_owned()])
-        .tag(gen_string(gen_int!(4, 16)), gen_string(gen_int!(4, 16)))
-        .tag(gen_string(gen_int!(4, 16)), gen_string(gen_int!(4, 16)));
+    let mut req = EntityRequest::new(
+        gen_string(gen_int!(8, 32)),
+        metadata,
+        vec![group.to_owned()],
+    )
+    .tag(gen_string(gen_int!(4, 16)), gen_string(gen_int!(4, 16)))
+    .tag(gen_string(gen_int!(4, 16)), gen_string(gen_int!(4, 16)));
     // add a random description
     req.description = Some(gen_string(gen_int!(8, 64)));
     req

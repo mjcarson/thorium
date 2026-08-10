@@ -445,6 +445,10 @@ impl CleanupUpdate {
     ///
     /// * `image` - The image to apply this update too
     pub fn update(mut self, image: &mut Image) -> Result<(), ApiError> {
+        // exit immediately if there are no clean up settings to update
+        if self.is_empty() {
+            return Ok(());
+        }
         // if the update is to clear this images clean up settings then just do that
         if self.clear {
             image.clean_up = None;
@@ -988,6 +992,8 @@ impl Image {
             // update child filters if we have an update
             child_filters.update(&mut self.child_filters)?;
         }
+        // update our clean up settings if we have any updates
+        update.clean_up.update(&mut self)?;
         // update our kvm settings if we have any updates
         update.kvm.update(&mut self)?;
         // save a copy of our bans before updating

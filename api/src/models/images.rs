@@ -16,7 +16,8 @@ use super::{GenericJob, OutputCollection, OutputCollectionUpdate, OutputDisplayT
 use crate::conf::BurstableNodeResources;
 use crate::{
     matches_adds, matches_adds_iter, matches_adds_map, matches_clear, matches_clear_opt,
-    matches_removes, matches_removes_map, matches_update, matches_update_opt, matches_vec, same,
+    matches_removes, matches_removes_map, matches_update, matches_update_opt,
+    matches_update_opt_empty, matches_vec, same,
 };
 
 /// The amount of resources to allow this image to burst with
@@ -995,6 +996,25 @@ impl ResourcesUpdate {
         self.amd_gpu = Some(gpu);
         self
     }
+
+    /// Sets the burstable resources to update
+    ///
+    /// # Arguments
+    ///
+    /// * `burstable` - The burstable resource updates to apply
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{BurstableResourcesUpdate, ResourcesUpdate};
+    ///
+    /// ResourcesUpdate::default().burstable(BurstableResourcesUpdate::default().cores(2.0));
+    /// ```
+    #[must_use]
+    pub fn burstable(mut self, burstable: BurstableResourcesUpdate) -> Self {
+        self.burstable = burstable;
+        self
+    }
 }
 
 impl PartialEq<Resources> for ResourcesUpdate {
@@ -1010,6 +1030,9 @@ impl PartialEq<Resources> for ResourcesUpdate {
         matches_update!(res.ephemeral_storage, self.ephemeral_storage);
         matches_update!(res.nvidia_gpu, self.nvidia_gpu);
         matches_update!(res.amd_gpu, self.amd_gpu);
+        // make sure our burstable resources were set correctly
+        matches_update!(res.burstable.cpu, self.burstable.cpu);
+        matches_update!(res.burstable.memory, self.burstable.memory);
         true
     }
 }
@@ -1114,6 +1137,146 @@ pub struct ImageArgs {
     /// What kwarg pass the result files location as
     #[serde(default)]
     pub output_files: ArgStrategy,
+}
+
+impl ImageArgs {
+    /// Sets the entrypoint to force all jobs to use
+    ///
+    /// # Arguments
+    ///
+    /// * `entrypoint` - The entrypoint to force all jobs to use
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::ImageArgs;
+    ///
+    /// ImageArgs::default().entrypoint(vec!("/bin/bash", "-c"));
+    /// ```
+    #[must_use]
+    pub fn entrypoint<T: Into<String>>(mut self, entrypoint: Vec<T>) -> Self {
+        // convert our entrypoint to strings and set it
+        self.entrypoint = Some(entrypoint.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Sets the command to force all jobs to use
+    ///
+    /// # Arguments
+    ///
+    /// * `command` - The command to force all jobs to use
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::ImageArgs;
+    ///
+    /// ImageArgs::default().command(vec!("--harvest"));
+    /// ```
+    #[must_use]
+    pub fn command<T: Into<String>>(mut self, command: Vec<T>) -> Self {
+        // convert our command to strings and set it
+        self.command = Some(command.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Sets the kwarg to pass the current reaction id in with
+    ///
+    /// # Arguments
+    ///
+    /// * `reaction` - The kwarg to pass the current reaction id in with
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::ImageArgs;
+    ///
+    /// ImageArgs::default().reaction("--reaction");
+    /// ```
+    #[must_use]
+    pub fn reaction<T: Into<String>>(mut self, reaction: T) -> Self {
+        // convert our kwarg to a string and set it
+        self.reaction = Some(reaction.into());
+        self
+    }
+
+    /// Sets the kwarg to pass the repo url in with
+    ///
+    /// # Arguments
+    ///
+    /// * `repo` - The kwarg to pass the repo url in with
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::ImageArgs;
+    ///
+    /// ImageArgs::default().repo("--repo");
+    /// ```
+    #[must_use]
+    pub fn repo<T: Into<String>>(mut self, repo: T) -> Self {
+        // convert our kwarg to a string and set it
+        self.repo = Some(repo.into());
+        self
+    }
+
+    /// Sets the kwarg to pass the repo commit in with
+    ///
+    /// # Arguments
+    ///
+    /// * `commit` - The kwarg to pass the repo commit in with
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::ImageArgs;
+    ///
+    /// ImageArgs::default().commit("--commit");
+    /// ```
+    #[must_use]
+    pub fn commit<T: Into<String>>(mut self, commit: T) -> Self {
+        // convert our kwarg to a string and set it
+        self.commit = Some(commit.into());
+        self
+    }
+
+    /// Sets how to pass the result location in
+    ///
+    /// # Arguments
+    ///
+    /// * `output` - The strategy to use when passing the result location in
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{ImageArgs, ArgStrategy};
+    ///
+    /// ImageArgs::default().output(ArgStrategy::Kwarg("--output".to_owned()));
+    /// ```
+    #[must_use]
+    pub fn output(mut self, output: ArgStrategy) -> Self {
+        self.output = output;
+        self
+    }
+
+    /// Sets how to pass the result files location in
+    ///
+    /// # Arguments
+    ///
+    /// * `output_files` - The strategy to use when passing the result files location in
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{ImageArgs, ArgStrategy};
+    ///
+    /// ImageArgs::default().output_files(ArgStrategy::Append);
+    /// ```
+    #[must_use]
+    pub fn output_files(mut self, output_files: ArgStrategy) -> Self {
+        self.output_files = output_files;
+        self
+    }
 }
 
 /// The args to pass to all jobs for an image
@@ -1256,6 +1419,34 @@ impl ImageArgsUpdate {
     pub fn output_files_files(mut self, output: ArgStrategy) -> Self {
         self.output_files = Some(output);
         self
+    }
+}
+
+impl PartialEq<ImageArgs> for ImageArgsUpdate {
+    /// Check if a [`ImageArgsUpdate`] was applied to a [`ImageArgs`]
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - The `ImageArgs` to compare against
+    fn eq(&self, args: &ImageArgs) -> bool {
+        // an empty entrypoint clears it instead of setting it
+        matches_clear!(args.entrypoint, self.clear_entrypoint);
+        if !self.clear_entrypoint {
+            matches_update_opt_empty!(args.entrypoint, self.entrypoint);
+        }
+        // an empty command clears it instead of setting it
+        matches_clear!(args.command, self.clear_command);
+        if !self.clear_command {
+            matches_update_opt_empty!(args.command, self.command);
+        }
+        // make sure our kwargs were either updated or cleared
+        matches_clear_opt!(args.reaction, self.reaction, self.clear_reaction);
+        matches_clear_opt!(args.repo, self.repo, self.clear_repo);
+        matches_clear_opt!(args.commit, self.commit, self.clear_commit);
+        // make sure our output arg strategies were updated
+        matches_update!(args.output, self.output);
+        matches_update!(args.output_files, self.output_files);
+        true
     }
 }
 
@@ -1407,14 +1598,8 @@ impl PartialEq<SecurityContextUpdate> for SecurityContext {
     ///
     /// * `update` - The security context update  to compare against
     fn eq(&self, update: &SecurityContextUpdate) -> bool {
-        // make sure any updates were propagated
-        matches_update_opt!(self.user, update.user);
-        matches_update_opt!(self.group, update.group);
-        matches_update!(
-            self.allow_privilege_escalation,
-            update.allow_privilege_escalation
-        );
-        true
+        // defer to the other direction so both impls stay in sync
+        update == self
     }
 }
 
@@ -1497,9 +1682,9 @@ impl PartialEq<SecurityContext> for SecurityContextUpdate {
     ///
     /// * `security_context` - The `SecurityContext` to compare against
     fn eq(&self, security_context: &SecurityContext) -> bool {
-        // make sure any updates were propagated
-        matches_update_opt!(security_context.user, self.user);
-        matches_update_opt!(security_context.group, self.group);
+        // make sure any updates were propagated or the fields were cleared
+        matches_clear_opt!(security_context.user, self.user, self.clear_user);
+        matches_clear_opt!(security_context.group, self.group, self.clear_group);
         matches_update!(
             security_context.allow_privilege_escalation,
             self.allow_privilege_escalation
@@ -1977,8 +2162,8 @@ impl PartialEq<TagDependencySettingsUpdate> for TagDependencySettings {
         // make sure any updates were propagated
         matches_update!(self.enabled, update.enabled);
         matches_update!(self.location, update.location);
-        matches_update_opt!(self.kwarg, update.kwarg);
-        matches_clear!(self.kwarg, update.clear_kwarg);
+        // the kwarg is cleared after any update to it has been applied
+        matches_clear_opt!(self.kwarg, update.kwarg, update.clear_kwarg);
         matches_update!(self.strategy, update.strategy);
         true
     }
@@ -2345,8 +2530,8 @@ impl PartialEq<ChildrenDependencySettingsUpdate> for ChildrenDependencySettings 
         matches_adds!(self.images, update.add_images);
         matches_removes!(self.images, update.remove_images);
         matches_update!(self.location, update.location);
-        matches_update_opt!(self.kwarg, update.kwarg);
-        matches_clear!(self.kwarg, update.clear_kwarg);
+        // the kwarg is cleared after any update to it has been applied
+        matches_clear_opt!(self.kwarg, update.kwarg, update.clear_kwarg);
         matches_update!(self.strategy, update.strategy);
         true
     }
@@ -2681,9 +2866,10 @@ impl PartialEq<SampleDependencySettingsUpdate> for SampleDependencySettings {
     fn eq(&self, update: &SampleDependencySettingsUpdate) -> bool {
         // make sure any updates were propagated
         matches_update!(self.location, update.location);
-        matches_update_opt!(self.kwarg, update.kwarg);
-        matches_clear!(self.kwarg, update.clear_kwarg);
+        // the kwarg is cleared after any update to it has been applied
+        matches_clear_opt!(self.kwarg, update.kwarg, update.clear_kwarg);
         matches_update!(self.strategy, update.strategy);
+        matches_update!(self.naming, update.naming);
         true
     }
 }
@@ -2712,8 +2898,8 @@ impl PartialEq<RepoDependencySettingsUpdate> for RepoDependencySettings {
     fn eq(&self, update: &RepoDependencySettingsUpdate) -> bool {
         // make sure any updates were propagated
         matches_update!(self.location, update.location);
-        matches_update_opt!(self.kwarg, update.kwarg);
-        matches_clear!(self.kwarg, update.clear_kwarg);
+        // the kwarg is cleared after any update to it has been applied
+        matches_clear_opt!(self.kwarg, update.kwarg, update.clear_kwarg);
         matches_update!(self.strategy, update.strategy);
         true
     }
@@ -2995,8 +3181,8 @@ impl PartialEq<EphemeralDependencySettingsUpdate> for EphemeralDependencySetting
     fn eq(&self, update: &EphemeralDependencySettingsUpdate) -> bool {
         // make sure any updates were propagated
         matches_update!(self.location, update.location);
-        matches_update_opt!(self.kwarg, update.kwarg);
-        matches_clear!(self.kwarg, update.clear_kwarg);
+        // the kwarg is cleared after any update to it has been applied
+        matches_clear_opt!(self.kwarg, update.kwarg, update.clear_kwarg);
         matches_update!(self.strategy, update.strategy);
         matches_adds!(self.names, update.add_names);
         matches_removes!(self.names, update.remove_names);
@@ -3643,6 +3829,49 @@ impl Default for GenericCacheDependencySettings {
     }
 }
 
+impl GenericCacheDependencySettings {
+    /// Sets the kwarg to pass our generic cache in with
+    ///
+    /// This should include the '--' characters.
+    ///
+    /// # Arguments
+    ///
+    /// * `kwarg` - The kwarg to pass our generic cache in with
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::GenericCacheDependencySettings;
+    ///
+    /// GenericCacheDependencySettings::default().kwarg("--cache");
+    /// ```
+    #[must_use]
+    pub fn kwarg<T: Into<String>>(mut self, kwarg: T) -> Self {
+        // convert our kwarg to a string and set it
+        self.kwarg = Some(kwarg.into());
+        self
+    }
+
+    /// Sets the strategy the agent should use when passing our generic cache to jobs
+    ///
+    /// # Arguments
+    ///
+    /// * `strategy` - The dependency passing strategy to use
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{GenericCacheDependencySettings, DependencyPassStrategy};
+    ///
+    /// GenericCacheDependencySettings::default().strategy(DependencyPassStrategy::Names);
+    /// ```
+    #[must_use]
+    pub fn strategy(mut self, strategy: DependencyPassStrategy) -> Self {
+        self.strategy = strategy;
+        self
+    }
+}
+
 /// The updated settings to use when getting generic cache info for a reaction
 #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "api", derive(utoipa::ToSchema))]
@@ -3654,6 +3883,81 @@ pub struct GenericCacheDependencySettingsUpdate {
     pub clear_kwarg: bool,
     /// The strategy the agent should use when passing the downloaded cache to jobs
     pub strategy: Option<DependencyPassStrategy>,
+}
+
+impl GenericCacheDependencySettingsUpdate {
+    /// Updates the kwarg to pass our generic cache in with
+    ///
+    /// This should include the '--' characters.
+    ///
+    /// # Arguments
+    ///
+    /// * `kwarg` - The kwarg to pass our generic cache in with
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::GenericCacheDependencySettingsUpdate;
+    ///
+    /// GenericCacheDependencySettingsUpdate::default().kwarg("--cache");
+    /// ```
+    #[must_use]
+    pub fn kwarg<T: Into<String>>(mut self, kwarg: T) -> Self {
+        // convert our kwarg to a string and set it
+        self.kwarg = Some(kwarg.into());
+        self
+    }
+
+    /// Clears the kwarg our generic cache is passed in with
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::GenericCacheDependencySettingsUpdate;
+    ///
+    /// GenericCacheDependencySettingsUpdate::default().clear_kwarg();
+    /// ```
+    #[must_use]
+    pub fn clear_kwarg(mut self) -> Self {
+        self.clear_kwarg = true;
+        self
+    }
+
+    /// Change the strategy the agent should use when passing our generic cache to jobs
+    ///
+    /// # Arguments
+    ///
+    /// * `strategy` - The dependency passing strategy to use
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{GenericCacheDependencySettingsUpdate, DependencyPassStrategy};
+    ///
+    /// GenericCacheDependencySettingsUpdate::default().strategy(DependencyPassStrategy::Names);
+    /// ```
+    #[must_use]
+    pub fn strategy(mut self, strategy: DependencyPassStrategy) -> Self {
+        // update our dependency passing strategy
+        self.strategy = Some(strategy);
+        self
+    }
+}
+
+impl PartialEq<GenericCacheDependencySettingsUpdate> for GenericCacheDependencySettings {
+    /// Check if a [`GenericCacheDependencySettings`] contains all the updates from a
+    /// [`GenericCacheDependencySettingsUpdate`]
+    ///
+    /// # Arguments
+    ///
+    /// * `update` - The `GenericCacheDependencySettingsUpdate` to compare against
+    fn eq(&self, update: &GenericCacheDependencySettingsUpdate) -> bool {
+        // make sure any updates were propagated
+        // the kwarg is cleared after any update to it has been applied
+        matches_clear_opt!(self.kwarg, update.kwarg, update.clear_kwarg);
+        matches_update!(self.strategy, update.strategy);
+        true
+    }
 }
 
 /// The default location the agent should download samples too
@@ -3697,6 +4001,76 @@ impl Default for CacheDependencySettings {
 }
 
 impl CacheDependencySettings {
+    /// Sets the location to write our generic cache too
+    ///
+    /// # Arguments
+    ///
+    /// * `location` - The location to write our generic cache too
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::CacheDependencySettings;
+    ///
+    /// CacheDependencySettings::default().location("/data/cache");
+    /// ```
+    #[must_use]
+    pub fn location<T: Into<String>>(mut self, location: T) -> Self {
+        // convert our location to a string and set it
+        self.location = location.into();
+        self
+    }
+
+    /// Sets the settings to use for the generic cache
+    ///
+    /// # Arguments
+    ///
+    /// * `generic` - The generic cache settings to use
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{CacheDependencySettings, GenericCacheDependencySettings};
+    ///
+    /// CacheDependencySettings::default()
+    ///     .generic(GenericCacheDependencySettings::default().kwarg("--cache"));
+    /// ```
+    #[must_use]
+    pub fn generic(mut self, generic: GenericCacheDependencySettings) -> Self {
+        self.generic = generic;
+        self
+    }
+
+    /// Start using our parents cache if we have one
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::CacheDependencySettings;
+    ///
+    /// CacheDependencySettings::default().use_parent_cache();
+    /// ```
+    #[must_use]
+    pub fn use_parent_cache(mut self) -> Self {
+        self.use_parent_cache = true;
+        self
+    }
+
+    /// Disable cache for this image
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::CacheDependencySettings;
+    ///
+    /// CacheDependencySettings::default().disable();
+    /// ```
+    #[must_use]
+    pub fn disable(mut self) -> Self {
+        self.enabled = false;
+        self
+    }
+
     /// Get our parent reaction id or our own if we aren't using our parents cache
     #[must_use]
     pub fn get_reaction_id(&self, job: &GenericJob) -> Uuid {
@@ -3724,6 +4098,125 @@ pub struct CacheDependencySettingsUpdate {
     pub use_parent_cache: Option<bool>,
     /// Whether cache is enabled for this image
     pub enabled: Option<bool>,
+}
+
+impl CacheDependencySettingsUpdate {
+    /// Change the location to write our generic cache too
+    ///
+    /// # Arguments
+    ///
+    /// * `location` - The location to write our generic cache too
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::CacheDependencySettingsUpdate;
+    ///
+    /// CacheDependencySettingsUpdate::default().location("/data/cache");
+    /// ```
+    #[must_use]
+    pub fn location<T: Into<String>>(mut self, location: T) -> Self {
+        // convert our location to a string and set it
+        self.location = Some(location.into());
+        self
+    }
+
+    /// Sets the generic cache settings that should be updated
+    ///
+    /// # Arguments
+    ///
+    /// * `generic` - The settings to update in this images generic cache
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{CacheDependencySettingsUpdate, GenericCacheDependencySettingsUpdate};
+    ///
+    /// CacheDependencySettingsUpdate::default()
+    ///     .generic(GenericCacheDependencySettingsUpdate::default().kwarg("--cache"));
+    /// ```
+    #[must_use]
+    pub fn generic(mut self, generic: GenericCacheDependencySettingsUpdate) -> Self {
+        self.generic = generic;
+        self
+    }
+
+    /// Start using our parents cache if we have one
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::CacheDependencySettingsUpdate;
+    ///
+    /// CacheDependencySettingsUpdate::default().use_parent_cache();
+    /// ```
+    #[must_use]
+    pub fn use_parent_cache(mut self) -> Self {
+        self.use_parent_cache = Some(true);
+        self
+    }
+
+    /// Stop using our parents cache
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::CacheDependencySettingsUpdate;
+    ///
+    /// CacheDependencySettingsUpdate::default().ignore_parent_cache();
+    /// ```
+    #[must_use]
+    pub fn ignore_parent_cache(mut self) -> Self {
+        self.use_parent_cache = Some(false);
+        self
+    }
+
+    /// Enable cache for this image
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::CacheDependencySettingsUpdate;
+    ///
+    /// CacheDependencySettingsUpdate::default().enable();
+    /// ```
+    #[must_use]
+    pub fn enable(mut self) -> Self {
+        self.enabled = Some(true);
+        self
+    }
+
+    /// Disable cache for this image
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::CacheDependencySettingsUpdate;
+    ///
+    /// CacheDependencySettingsUpdate::default().disable();
+    /// ```
+    #[must_use]
+    pub fn disable(mut self) -> Self {
+        self.enabled = Some(false);
+        self
+    }
+}
+
+impl PartialEq<CacheDependencySettingsUpdate> for CacheDependencySettings {
+    /// Check if a [`CacheDependencySettings`] contains all the updates from a
+    /// [`CacheDependencySettingsUpdate`]
+    ///
+    /// # Arguments
+    ///
+    /// * `update` - The `CacheDependencySettingsUpdate` to compare against
+    fn eq(&self, update: &CacheDependencySettingsUpdate) -> bool {
+        // make sure any updates were propagated
+        matches_update!(self.location, update.location);
+        same!(self.generic, update.generic);
+        matches_update!(self.use_parent_cache, update.use_parent_cache);
+        matches_update!(self.enabled, update.enabled);
+        true
+    }
 }
 
 /// How this image should handle dependencies it needs for jobs
@@ -3832,6 +4325,70 @@ impl Dependencies {
         self.repos = repos;
         self
     }
+
+    /// Sets the tag settings
+    ///
+    /// # Arguments
+    ///
+    /// * `tags` - The tag dependency settings to use
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{Dependencies, TagDependencySettings, DependencyPassStrategy};
+    ///
+    /// Dependencies::default()
+    ///     .tags(TagDependencySettings::default()
+    ///         .location("/data/tags")
+    ///         .strategy(DependencyPassStrategy::Names));
+    /// ```
+    #[must_use]
+    pub fn tags(mut self, tags: TagDependencySettings) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    /// Sets the children settings
+    ///
+    /// # Arguments
+    ///
+    /// * `children` - The children dependency settings to use
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{Dependencies, ChildrenDependencySettings, DependencyPassStrategy};
+    ///
+    /// Dependencies::default()
+    ///     .children(ChildrenDependencySettings::default()
+    ///         .location("/data/children")
+    ///         .strategy(DependencyPassStrategy::Names));
+    /// ```
+    #[must_use]
+    pub fn children(mut self, children: ChildrenDependencySettings) -> Self {
+        self.children = children;
+        self
+    }
+
+    /// Sets the cache settings
+    ///
+    /// # Arguments
+    ///
+    /// * `cache` - The cache dependency settings to use
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{Dependencies, CacheDependencySettings};
+    ///
+    /// Dependencies::default()
+    ///     .cache(CacheDependencySettings::default().location("/data/cache"));
+    /// ```
+    #[must_use]
+    pub fn cache(mut self, cache: CacheDependencySettings) -> Self {
+        self.cache = cache;
+        self
+    }
 }
 
 impl PartialEq<DependenciesUpdate> for Dependencies {
@@ -3846,6 +4403,9 @@ impl PartialEq<DependenciesUpdate> for Dependencies {
         same!(self.ephemeral, update.ephemeral);
         same!(self.results, update.results);
         same!(self.repos, update.repos);
+        same!(self.tags, update.tags);
+        same!(self.children, update.children);
+        same!(self.cache, update.cache);
         true
     }
 }
@@ -3990,6 +4550,51 @@ impl DependenciesUpdate {
     #[must_use]
     pub fn tags(mut self, tags: TagDependencySettingsUpdate) -> Self {
         self.tags = tags;
+        self
+    }
+
+    /// Sets the children settings that should be updated
+    ///
+    /// # Arguments
+    ///
+    /// * `children` - The settings to update in this images children dependencies
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{DependenciesUpdate, ChildrenDependencySettingsUpdate, DependencyPassStrategy};
+    ///
+    /// DependenciesUpdate::default()
+    ///     .children(ChildrenDependencySettingsUpdate::default()
+    ///         .enable()
+    ///         .location("/data/children")
+    ///         .strategy(DependencyPassStrategy::Names));
+    /// ```
+    #[must_use]
+    pub fn children(mut self, children: ChildrenDependencySettingsUpdate) -> Self {
+        self.children = children;
+        self
+    }
+
+    /// Sets the cache settings that should be updated
+    ///
+    /// # Arguments
+    ///
+    /// * `cache` - The settings to update in this images cache dependencies
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{DependenciesUpdate, CacheDependencySettingsUpdate};
+    ///
+    /// DependenciesUpdate::default()
+    ///     .cache(CacheDependencySettingsUpdate::default()
+    ///         .enable()
+    ///         .location("/data/cache"));
+    /// ```
+    #[must_use]
+    pub fn cache(mut self, cache: CacheDependencySettingsUpdate) -> Self {
+        self.cache = cache;
         self
     }
 }
@@ -4682,6 +5287,40 @@ impl CleanupUpdate {
         self.clear = true;
         self
     }
+
+    /// Returns true if this update contains no clean up settings to apply
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::CleanupUpdate;
+    ///
+    /// assert!(CleanupUpdate::default().is_empty());
+    /// ```
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        !self.clear
+            && self.script.is_none()
+            && self.job_id.is_none()
+            && self.results.is_none()
+            && self.result_files_dir.is_none()
+    }
+}
+
+impl PartialEq<Cleanup> for CleanupUpdate {
+    /// Check if a [`CleanupUpdate`] was applied to a [`Cleanup`]
+    ///
+    /// # Arguments
+    ///
+    /// * `clean_up` - The `Cleanup` to compare against
+    fn eq(&self, clean_up: &Cleanup) -> bool {
+        // make sure any updates were propagated
+        matches_update!(clean_up.script, self.script);
+        matches_update!(clean_up.job_id, self.job_id);
+        matches_update!(clean_up.results, self.results);
+        matches_update!(clean_up.result_files_dir, self.result_files_dir);
+        true
+    }
 }
 
 /// A version of an image, formatted according to various standards
@@ -4996,6 +5635,26 @@ impl ImageRequest {
         self
     }
 
+    /// Sets the args to add to this images jobs
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - The args to add to this images jobs
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{ImageRequest, ImageArgs};
+    ///
+    /// ImageRequest::new("CornGroup", "Harvester")
+    ///     .args(ImageArgs::default().entrypoint(vec!("/bin/bash")));
+    /// ```
+    #[must_use]
+    pub fn args(mut self, args: ImageArgs) -> Self {
+        self.args = args;
+        self
+    }
+
     /// Sets the modifiers path in this image request
     ///
     /// # Arguments
@@ -5196,6 +5855,62 @@ pub struct KvmUpdate {
     pub qcow2: Option<String>,
 }
 
+impl KvmUpdate {
+    /// Sets the path to the golden XML file to use
+    ///
+    /// # Arguments
+    ///
+    /// * `xml` - The path to the golden XML file to use
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::KvmUpdate;
+    ///
+    /// KvmUpdate::default().xml("/kvm/golden.xml");
+    /// ```
+    #[must_use]
+    pub fn xml<T: Into<String>>(mut self, xml: T) -> Self {
+        // convert our xml path to a string and set it
+        self.xml = Some(xml.into());
+        self
+    }
+
+    /// Sets the path to the golden qcow2 image to use
+    ///
+    /// # Arguments
+    ///
+    /// * `qcow2` - The path to the golden qcow2 image to use
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::KvmUpdate;
+    ///
+    /// KvmUpdate::default().qcow2("/kvm/golden.qcow2");
+    /// ```
+    #[must_use]
+    pub fn qcow2<T: Into<String>>(mut self, qcow2: T) -> Self {
+        // convert our qcow2 path to a string and set it
+        self.qcow2 = Some(qcow2.into());
+        self
+    }
+}
+
+impl PartialEq<Kvm> for KvmUpdate {
+    /// Check if a [`KvmUpdate`] was applied to a [`Kvm`]
+    ///
+    /// # Arguments
+    ///
+    /// * `kvm` - The `Kvm` settings to compare against
+    fn eq(&self, kvm: &Kvm) -> bool {
+        // make sure any updates were propagated
+        matches_update!(kvm.xml, self.xml);
+        matches_update!(kvm.qcow2, self.qcow2);
+        true
+    }
+}
+
 /// An update to the image ban list containing bans to be added or removed
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[cfg_attr(feature = "api", derive(utoipa::ToSchema))]
@@ -5337,8 +6052,6 @@ impl ImageNetworkPolicyUpdate {
 pub struct ImageUpdate {
     /// The image version to update
     pub version: Option<ImageVersion>,
-    /// Whether the scaler should spawn containers for this image
-    pub external: Option<bool>,
     /// The image to use (url or tag)
     pub image: Option<String>,
     /// What scaler is responsible for scaling this image
@@ -5413,21 +6126,6 @@ pub struct ImageUpdate {
 }
 
 impl ImageUpdate {
-    /// Sets the external flag to true
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use thorium::models::ImageUpdate;
-    ///
-    /// ImageUpdate::default().external();
-    /// ```
-    #[must_use]
-    pub fn external(mut self) -> Self {
-        self.external = Some(true);
-        self
-    }
-
     /// Sets the image string in a [`ImageUpdate`]
     ///
     /// # Arguments
@@ -5823,6 +6521,66 @@ impl ImageUpdate {
         self.network_policies = network_policies;
         self
     }
+
+    /// Set the image args that should be updated
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - The args settings to update for this image
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{ImageUpdate, ImageArgsUpdate};
+    ///
+    /// ImageUpdate::default()
+    ///     .args(ImageArgsUpdate::default().entrypoint(vec!("/bin/bash")));
+    /// ```
+    #[must_use]
+    pub fn args(mut self, args: ImageArgsUpdate) -> Self {
+        self.args = Some(args);
+        self
+    }
+
+    /// Set the security context settings that should be updated
+    ///
+    /// # Arguments
+    ///
+    /// * `security_context` - The security context settings to update for this image
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{ImageUpdate, SecurityContextUpdate};
+    ///
+    /// ImageUpdate::default()
+    ///     .security_context(SecurityContextUpdate::default().user(1000).group(1000));
+    /// ```
+    #[must_use]
+    pub fn security_context(mut self, security_context: SecurityContextUpdate) -> Self {
+        self.security_context = Some(security_context);
+        self
+    }
+
+    /// Set the kvm settings that should be updated
+    ///
+    /// # Arguments
+    ///
+    /// * `kvm` - The kvm settings to update for this image
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use thorium::models::{ImageUpdate, KvmUpdate};
+    ///
+    /// ImageUpdate::default()
+    ///     .kvm(KvmUpdate::default().xml("/kvm/golden.xml").qcow2("/kvm/golden.qcow2"));
+    /// ```
+    #[must_use]
+    pub fn kvm(mut self, kvm: KvmUpdate) -> Self {
+        self.kvm = kvm;
+        self
+    }
 }
 
 /// The settings for kvm jobs
@@ -6085,9 +6843,9 @@ impl PartialEq<ImageUpdate> for Image {
     ///
     /// * `update` - The `ImageUpdate` to compare against
     #[rustfmt::skip]
+    #[allow(clippy::too_many_lines)]
     fn eq(&self, update: &ImageUpdate) -> bool {
         // make sure any updates were propagated
-        matches_update_opt!(self.image, update.image);
         matches_clear_opt!(self.lifetime, update.lifetime, update.clear_lifetime);
         matches_update!(self.scaler, update.scaler);
         matches_update_opt!(self.timeout, update.timeout);
@@ -6096,11 +6854,28 @@ impl PartialEq<ImageUpdate> for Image {
         matches_clear_opt!(self.image, update.image, update.clear_image);
         matches_clear_opt!(self.version, update.version, update.clear_version);
         matches_adds!(self.volumes, update.add_volumes);
-        matches_clear_opt!(self.description, update.description, update.clear_description);
+        // an empty description clears it instead of setting it
+        matches_clear!(self.description, update.clear_description);
+        if !update.clear_description {
+            matches_update_opt_empty!(self.description, update.description);
+        }
+        // an empty modifiers path clears it instead of setting it
+        matches_update_opt_empty!(self.modifiers, update.modifiers);
         // build list of volume names
         let volume_names: Vec<String> = self.volumes.iter().map(|vol| vol.name.clone()).collect();
         // make sure we have removed any volumes requested for removal
         matches_removes!(volume_names, update.remove_volumes);
+        // make sure any env vars were added with the values we set
+        let mut added_env = update.add_env.iter();
+        matches_adds_map!(self.env, added_env);
+        // make sure any env vars that were removed and not immediately re-added are gone
+        if update.remove_env.iter().any(|key| {
+            !update.add_env.contains_key(key) && self.env.contains_key(key)
+        }) {
+            return false;
+        }
+        // make sure our job args were correctly updated
+        matches_update!(self.args, update.args);
         // make sure the security context was correctly updated
         matches_update!(self.security_context, update.security_context);
         matches_update!(self.collect_logs, update.collect_logs);
@@ -6111,6 +6886,28 @@ impl PartialEq<ImageUpdate> for Image {
         matches_update!(self.display_type, update.display_type);
         matches_update!(self.output_collection, update.output_collection);
         matches_update!(self.child_filters, update.child_filters);
+        // make sure our clean up settings were either updated or cleared
+        if update.clean_up.clear {
+            // our clean up settings should have been removed entirely
+            if self.clean_up.is_some() {
+                return false;
+            }
+        } else if let Some(clean_up) = self.clean_up.as_ref() {
+            // make sure all of our clean up updates were applied
+            same!(update.clean_up, *clean_up);
+        } else if update.clean_up.script.is_some() {
+            // a script was set so we should have clean up settings now
+            return false;
+        }
+        // make sure our kvm settings were correctly updated
+        match self.kvm.as_ref() {
+            // make sure all of our kvm updates were applied
+            Some(kvm) => same!(update.kvm, *kvm),
+            // kvm settings are only created when both required fields are set
+            None => if update.kvm.xml.is_some() && update.kvm.qcow2.is_some() {
+                return false;
+            },
+        }
         // filter out any bans from the adds list that would have been
         // removed by the removes list
         let mut bans_added = update.bans.bans_added.iter().filter_map(|ban| {
@@ -6122,6 +6919,9 @@ impl PartialEq<ImageUpdate> for Image {
         });
         matches_adds_map!(self.bans, bans_added);
         matches_removes_map!(self.bans, update.bans.bans_removed);
+        // make sure any network policies were added and removed
+        matches_adds!(self.network_policies, update.network_policies.policies_added);
+        matches_removes!(self.network_policies, update.network_policies.policies_removed);
         true
     }
 }

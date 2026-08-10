@@ -113,6 +113,27 @@ macro_rules! matches_update_opt {
     };
 }
 
+/// return false if an update whose empty value clears the target field was not applied
+///
+/// Some updates are applied with `update_opt_empty!`, where an empty string/vec clears
+/// the field instead of setting it. This checks for that behavior instead of a direct set.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! matches_update_opt_empty {
+    ($val:expr, $update:expr) => {
+        match &$update {
+            // an empty update clears the field instead of setting it
+            Some(update) if update.is_empty() => {
+                if $val.is_some() {
+                    return false;
+                }
+            }
+            // any other update should have been applied directly
+            _ => matches_update_opt!($val, $update),
+        }
+    };
+}
+
 /// Checks if a field was cleared as requested in an update
 #[doc(hidden)]
 #[macro_export]
@@ -221,9 +242,11 @@ macro_rules! matches_adds_map {
     ($map:expr, $keys_values:expr) => {
         if $keys_values.any(|(key, value)| {
             if let Some(map_val) = $map.get(key) {
+                // this key was added so make sure it has the value we set
                 map_val != value
             } else {
-                false
+                // this key was never added at all
+                true
             }
         }) {
             return false;

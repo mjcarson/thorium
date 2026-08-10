@@ -5,15 +5,19 @@ use std::path::PathBuf;
 
 use futures::{StreamExt, TryStreamExt, stream};
 use thorium::models::{
-    ArgStrategy, AutoTagLogic, AutoTagUpdate, ChildFilters, ChildFiltersUpdate, CleanupUpdate,
-    DependenciesUpdate, DependencyPassStrategy, EphemeralDependencySettingsUpdate,
-    FilesHandlerUpdate, GroupUpdate, GroupUsersUpdate, HostPathWhitelistUpdate, ImageBan,
-    ImageBanKind, ImageBanUpdate, ImageLifetime, ImageNetworkPolicyUpdate, ImageScaler,
-    ImageUpdate, ImageVersion, NetworkPolicyRequest, NotificationLevel, NotificationParams,
-    NotificationRequest, OutputCollectionUpdate, OutputDisplayType, OutputHandler, PipelineRequest,
-    RepoDependencySettingsUpdate, ResourcesUpdate, ResultDependencySettingsUpdate,
-    SampleDependencySettingsUpdate, SystemSettingsResetParams, SystemSettingsUpdate,
-    SystemSettingsUpdateParams, Volume, VolumeTypes,
+    ArgStrategy, AutoTagLogic, AutoTagUpdate, BurstableResourcesUpdate,
+    CacheDependencySettingsUpdate, ChildFilters, ChildFiltersUpdate,
+    ChildrenDependencySettingsUpdate, CleanupUpdate, DependenciesUpdate, DependencyPassStrategy,
+    EphemeralDependencySettingsUpdate, FileNamingStrategy, FilesHandlerUpdate,
+    GenericCacheDependencySettingsUpdate, GroupUpdate, GroupUsersUpdate, HostPathWhitelistUpdate,
+    ImageArgsUpdate, ImageBan, ImageBanKind, ImageBanUpdate, ImageLifetime,
+    ImageNetworkPolicyUpdate, ImageScaler, ImageUpdate, ImageVersion, KvmUpdate,
+    NetworkPolicyRequest, NotificationLevel, NotificationParams, NotificationRequest,
+    OutputCollectionUpdate, OutputDisplayType, OutputHandler, PipelineRequest,
+    RepoDependencySettingsUpdate, Resources, ResourcesUpdate, ResultDependencySettingsUpdate,
+    SampleDependencySettingsUpdate, SecurityContextUpdate, SpawnLimits, SystemSettingsResetParams,
+    SystemSettingsUpdate, SystemSettingsUpdateParams, TagDependencySettingsUpdate, Volume,
+    VolumeTypes,
 };
 use thorium::test_utilities::{self, generators};
 use thorium::{Error, contains, fail, is, is_in, unwrap_variant, vec_in_vec};
@@ -262,6 +266,31 @@ async fn create_default_network_policies() -> Result<(), Error> {
 }
 
 #[tokio::test]
+async fn create_kvm() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // create an image that is scaled by the kvm scaler
+    let image_req = generators::gen_kvm_image(&group);
+    let resp = client.images.create(&image_req).await?;
+    is!(resp.status().as_u16(), 204);
+    // get the image and compare it
+    let retrieved = client.images.get(&group, &image_req.name).await?;
+    is!(retrieved, image_req);
+    // make sure our kvm settings were saved
+    let kvm = retrieved
+        .kvm
+        .ok_or_else(|| Error::new("Created kvm image has no kvm settings"))?;
+    let requested = image_req
+        .kvm
+        .ok_or_else(|| Error::new("Generated kvm image request has no kvm settings"))?;
+    is!(kvm.xml, requested.xml);
+    is!(kvm.qcow2, requested.qcow2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn get() -> Result<(), Error> {
     // get admin client
     let client = test_utilities::admin_client().await?;
@@ -310,6 +339,157 @@ async fn list_details() -> Result<(), Error> {
     cursor.next().await?;
     // make sure all the group details we tried to create are in our list
     vec_in_vec!(&cursor.details, &images);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_pagination() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup enough images that we could need more then one page to list them all
+    let images = generators::images(&group, 30, false, &client).await?;
+    // list the images we just created with a page size well below the total image count
+    let mut cursor = client.images.list(&group).page_size(7);
+    // crawl this cursor to exhaustion and collect every name it returns
+    let mut names = HashSet::with_capacity(images.len());
+    while !cursor.exhausted {
+        cursor.next().await?;
+        names.extend(cursor.names.drain(..));
+    }
+    // the page size is only a hint to the backend so we can't check how many pages we crawled,
+    // but every image in this group should have been returned exactly once across all of them
+    is!(names.len(), images.len());
+    // make sure all the images we tried to create are in our list
+    for image in &images {
+        contains!(names, &image.name);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_details_pagination() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup enough images that we could need more then one page to list them all
+    let images = generators::images(&group, 30, false, &client).await?;
+    // list the images we just created with a page size well below the total image count
+    let mut cursor = client.images.list(&group).details().page_size(7);
+    // crawl this cursor to exhaustion and collect every image it returns
+    let mut details = Vec::with_capacity(images.len());
+    while !cursor.exhausted {
+        cursor.next().await?;
+        details.append(&mut cursor.details);
+    }
+    // every image in this group should have been returned exactly once across all pages
+    is!(details.len(), images.len());
+    // make sure all the group details we tried to create are in our list
+    vec_in_vec!(&details, &images);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_limit() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup more images then we are going to ask our cursor for
+    generators::images(&group, 30, false, &client).await?;
+    // set a limit well below the number of images in this group
+    let limit = 5;
+    // crawl this limited cursor until it stops handing back new pages
+    let mut cursor = client.images.list(&group).page_size(2).limit(limit);
+    while !cursor.exhausted {
+        cursor.next().await?;
+    }
+    // the limit is only weakly enforced by the backend so all we can check is that our cursor
+    // stopped once it had retrieved at least as many images as we asked for
+    is!((cursor.retrieved >= limit), true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_unauthorized() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image
+    generators::images(&group, 1, false, &client).await?;
+    // get a user client for a user that is not in this group
+    let user_client = generators::client(&client).await?;
+    // this user cannot see any images in a group they are not a member of
+    let mut cursor = user_client.images.list(&group);
+    let resp = cursor.next().await;
+    fail!(resp, 401);
+    // this user cannot see any image details in a group they are not a member of either
+    let mut cursor = user_client.images.list(&group).details();
+    let resp = cursor.next().await;
+    fail!(resp, 401);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_unauthorized() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // get a user client for a user that is not in this group
+    let user_client = generators::client(&client).await?;
+    // this user cannot get an image in a group they are not a member of
+    let resp = user_client.images.get(&group, &image.name).await;
+    fail!(resp, 401);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_unauthorized() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // get a user client for a user that is not in this group
+    let user_client = generators::client(&client).await?;
+    // this user cannot update an image in a group they are not a member of
+    let update = ImageUpdate::default().description("edited description");
+    let resp = user_client
+        .images
+        .update(&group, &image.name, &update)
+        .await;
+    fail!(resp, 401);
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_unauthorized() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // get a user client for a user that is not in this group
+    let user_client = generators::client(&client).await?;
+    // this user cannot delete an image in a group they are not a member of
+    let resp = user_client.images.delete(&group, &image.name).await;
+    fail!(resp, 401);
+    // make sure the image is still there
+    client.images.get(&group, &image.name).await?;
     Ok(())
 }
 
@@ -646,6 +826,992 @@ async fn update_bad_child_filters() -> Result<(), Error> {
         .child_filters(ChildFiltersUpdate::default().remove_mime(r"not-found"));
     let resp = client.images.update(&group, &image.name, &update).await;
     fail!(resp, 400, "missing one or more mime child filters");
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_child_filters_files() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image with a file name and file extension child filter
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // swap out the file name and file extension filters this image was created with
+    let update = ImageUpdate::default().child_filters(
+        ChildFiltersUpdate::default()
+            .add_file_name(r"report.*")
+            .remove_file_name(r"note.*")
+            .add_file_extensions(["dll", "so"])
+            .remove_file_extension("exe"),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our updates were applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_args() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image with no args set
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // set every arg this image can have
+    let update = ImageUpdate::default().args(
+        ImageArgsUpdate::default()
+            .entrypoint(vec!["/bin/bash", "-c"])
+            .command(vec!["harvest", "--all"])
+            .reaction("--reaction")
+            .repo("--repo")
+            .commit("--commit")
+            .output(ArgStrategy::Kwarg("--output".to_owned()))
+            .output_files_files(ArgStrategy::Append),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our updates were applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    // update just a single arg and make sure the rest are left alone
+    let update = ImageUpdate::default().args(ImageArgsUpdate::default().reaction("--new-reaction"));
+    client.images.update(&group, &image.name, &update).await?;
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.args.repo, Some("--repo".to_owned()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_args_clear() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup an image with all of its args already set
+    let image_req = generators::gen_full_image(&group);
+    client.images.create(&image_req).await?;
+    // clear every arg that can be cleared
+    let update = ImageUpdate::default().args(
+        ImageArgsUpdate::default()
+            .clear_entrypoint()
+            .clear_command()
+            .clear_reaction()
+            .clear_repo()
+            .clear_commit(),
+    );
+    client
+        .images
+        .update(&group, &image_req.name, &update)
+        .await?;
+    // get the image and make sure every arg was cleared
+    let updated = client.images.get(&group, &image_req.name).await?;
+    is!(updated, update);
+    is!(updated.args.entrypoint, Option::<Vec<String>>::None);
+    is!(updated.args.command, Option::<Vec<String>>::None);
+    is!(updated.args.reaction, Option::<String>::None);
+    is!(updated.args.repo, Option::<String>::None);
+    is!(updated.args.commit, Option::<String>::None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_args_empty_clears() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup an image with all of its args already set
+    let image_req = generators::gen_full_image(&group);
+    client.images.create(&image_req).await?;
+    // an empty entrypoint/command clears them instead of setting them
+    let update = ImageUpdate::default().args(
+        ImageArgsUpdate::default()
+            .entrypoint(Vec::<String>::new())
+            .command(Vec::<String>::new()),
+    );
+    client
+        .images
+        .update(&group, &image_req.name, &update)
+        .await?;
+    // get the image and make sure both args were cleared
+    let updated = client.images.get(&group, &image_req.name).await?;
+    is!(updated, update);
+    is!(updated.args.entrypoint, Option::<Vec<String>>::None);
+    is!(updated.args.command, Option::<Vec<String>>::None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_modifiers() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image with no modifiers
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // set this images modifiers
+    let update = ImageUpdate::default().modifiers("/data/modifiers");
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our update was applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.modifiers, Some("/data/modifiers".to_owned()));
+    // an empty modifiers path clears it instead of setting it
+    let update = ImageUpdate::default().modifiers("");
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our modifiers were cleared
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.modifiers, Option::<String>::None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_image_bad() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // an image that is only whitespace is empty once it has been trimmed
+    let update = ImageUpdate::default().image("   ");
+    let resp = client.images.update(&group, &image.name, &update).await;
+    fail!(resp, 400, "Image cannot be empty");
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_env() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image seeded with an ENV_ARG and a REMOVE_ARG env var
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // add an env var with a value, an env var without one, and remove an existing one
+    let update = ImageUpdate::default()
+        .add_env("NEW_ARG", Some("new"))
+        .add_env("FLAG", None::<&str>)
+        .remove_env("REMOVE_ARG");
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our updates were applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.env.get("NEW_ARG"), Some(&Some("new".to_owned())));
+    is!(updated.env.get("FLAG"), Some(&None::<String>));
+    is!(updated.env.get("REMOVE_ARG"), None::<&Option<String>>);
+    // the env vars we didn't touch should be left alone
+    is!(updated.env.get("ENV_ARG"), Some(&Some("Test".to_owned())));
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_clear_image() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // update the image with a new image path
+    let update = ImageUpdate::default().image("rust:1.48.0");
+    client.images.update(&group, &image.name, &update).await?;
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    // now clear the image path with a new ImageUpdate
+    let update = ImageUpdate::default().clear_image();
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and ensure that the image path is empty
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.image, Option::<String>::None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_clear_lifetime() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image with a job based lifetime
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // update the image with a new lifetime
+    let update = ImageUpdate::default().lifetime(ImageLifetime::jobs(12));
+    client.images.update(&group, &image.name, &update).await?;
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    // now clear the lifetime with a new ImageUpdate
+    let update = ImageUpdate::default().clear_lifetime();
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and ensure that the lifetime is empty
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.lifetime, Option::<ImageLifetime>::None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_resources_burstable() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // set the burstable resources this image can use
+    let update = ImageUpdate::default().resources(
+        ResourcesUpdate::default().burstable(
+            BurstableResourcesUpdate::default()
+                .cores(4.0)
+                .memory("8Gi")?,
+        ),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our updates were applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.resources.burstable.cpu, 4000);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_spawn_limit() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image with an unlimited spawn limit
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // cap the number of workers that can be spawned for this image
+    let update = ImageUpdate::default().spawn_limit(SpawnLimits::Basic(5));
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our update was applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    let limit = unwrap_variant!(updated.spawn_limit, SpawnLimits::Basic);
+    is!(limit, 5);
+    // now lift that cap again
+    let update = ImageUpdate::default().spawn_limit(SpawnLimits::Unlimited);
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our update was applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.spawn_limit, SpawnLimits::Unlimited);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_scaler() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image that is scaled in K8s
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // move this image over to the external scaler
+    let update = ImageUpdate::default().scaler(ImageScaler::External);
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our update was applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.scaler, ImageScaler::External);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_scaler_kvm_bad() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // get a user client for a developer that cannot develop kvm images
+    let user_client = generators::client(&client).await?;
+    // Create a group
+    let group = generators::groups(1, &user_client).await?.remove(0).name;
+    // setup a random image that is scaled in K8s
+    let image = generators::images(&group, 1, false, &user_client)
+        .await?
+        .remove(0);
+    // this user cannot move an image over to a scaler they cannot develop for
+    let update = ImageUpdate::default().scaler(ImageScaler::Kvm);
+    let resp = user_client
+        .images
+        .update(&group, &image.name, &update)
+        .await;
+    fail!(resp, 401);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_security_context() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // set the user, group, and privilege escalation settings for this image
+    let update = ImageUpdate::default().security_context(
+        SecurityContextUpdate::default()
+            .user(1000)
+            .group(1001)
+            .allow_escalation(),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our updates were applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.security_context.user, Some(1000));
+    is!(updated.security_context.group, Some(1001));
+    is!(updated.security_context.allow_privilege_escalation, true);
+    // now clear the user and group and disallow privilege escalation
+    let update = ImageUpdate::default().security_context(
+        SecurityContextUpdate::default()
+            .clear_user()
+            .clear_group()
+            .disallow_escalation(),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our updates were applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.security_context.user, Option::<i64>::None);
+    is!(updated.security_context.group, Option::<i64>::None);
+    is!(updated.security_context.allow_privilege_escalation, false);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_security_context_bad() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // get a user client
+    let user_client = generators::client(&client).await?;
+    // Create a group
+    let group = generators::groups(1, &user_client).await?.remove(0).name;
+    // setup a random image
+    let image = generators::images(&group, 1, false, &user_client)
+        .await?
+        .remove(0);
+    // only admins can update an images security context
+    let update =
+        ImageUpdate::default().security_context(SecurityContextUpdate::default().user(1000));
+    let resp = user_client
+        .images
+        .update(&group, &image.name, &update)
+        .await;
+    fail!(resp, 401);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_dependencies_tags() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image with no tag dependencies
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // turn on tag dependencies for this image
+    let update = ImageUpdate::default().dependencies(
+        DependenciesUpdate::default().tags(
+            TagDependencySettingsUpdate::default()
+                .enable()
+                .location("/test/tags")
+                .kwarg("--tags")
+                .strategy(DependencyPassStrategy::Paths),
+        ),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our updates were applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.dependencies.tags.enabled, true);
+    // now turn tag dependencies back off
+    let update = ImageUpdate::default().dependencies(
+        DependenciesUpdate::default().tags(TagDependencySettingsUpdate::default().disable()),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our update was applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.dependencies.tags.enabled, false);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_dependencies_children() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup an image that already depends on the children of the plant image
+    let image_req = generators::gen_full_image(&group);
+    client.images.create(&image_req).await?;
+    // swap out the image we depend on the children of
+    let update = ImageUpdate::default().dependencies(
+        DependenciesUpdate::default().children(
+            ChildrenDependencySettingsUpdate::default()
+                .enable()
+                .image("harvest")
+                .remove_image("plant")
+                .location("/updated/children")
+                .kwarg("--new-children")
+                .strategy(DependencyPassStrategy::Directory),
+        ),
+    );
+    client
+        .images
+        .update(&group, &image_req.name, &update)
+        .await?;
+    // get the image and make sure our updates were applied
+    let updated = client.images.get(&group, &image_req.name).await?;
+    is!(updated, update);
+    is_in!(updated.dependencies.children.images, "harvest".to_owned());
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_dependencies_cache() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image with no cache dependencies
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // turn on cache dependencies for this image
+    let update = ImageUpdate::default().dependencies(
+        DependenciesUpdate::default().cache(
+            CacheDependencySettingsUpdate::default()
+                .enable()
+                .location("/test/cache")
+                .use_parent_cache()
+                .generic(
+                    GenericCacheDependencySettingsUpdate::default()
+                        .kwarg("--cache")
+                        .strategy(DependencyPassStrategy::Paths),
+                ),
+        ),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our updates were applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.dependencies.cache.enabled, true);
+    is!(updated.dependencies.cache.use_parent_cache, true);
+    // now stop using our parents cache and turn cache dependencies back off
+    let update = ImageUpdate::default().dependencies(
+        DependenciesUpdate::default().cache(
+            CacheDependencySettingsUpdate::default()
+                .disable()
+                .ignore_parent_cache(),
+        ),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our updates were applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.dependencies.cache.enabled, false);
+    is!(updated.dependencies.cache.use_parent_cache, false);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_dependencies_clear_kwargs() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup an image that has a kwarg set for every dependency that supports one
+    let image_req = generators::gen_full_image(&group);
+    client.images.create(&image_req).await?;
+    // clear every dependency kwarg this image has
+    let update = ImageUpdate::default().dependencies(
+        DependenciesUpdate::default()
+            .samples(SampleDependencySettingsUpdate::default().clear_kwarg())
+            .ephemeral(EphemeralDependencySettingsUpdate::default().clear_kwarg())
+            .repos(RepoDependencySettingsUpdate::default().clear_kwarg())
+            .tags(TagDependencySettingsUpdate::default().clear_kwarg())
+            .children(ChildrenDependencySettingsUpdate::default().clear_kwarg())
+            .cache(
+                CacheDependencySettingsUpdate::default()
+                    .generic(GenericCacheDependencySettingsUpdate::default().clear_kwarg()),
+            ),
+    );
+    client
+        .images
+        .update(&group, &image_req.name, &update)
+        .await?;
+    // get the image and make sure every kwarg was cleared
+    let updated = client.images.get(&group, &image_req.name).await?;
+    is!(updated, update);
+    is!(updated.dependencies.samples.kwarg, Option::<String>::None);
+    is!(updated.dependencies.ephemeral.kwarg, Option::<String>::None);
+    is!(updated.dependencies.repos.kwarg, Option::<String>::None);
+    is!(updated.dependencies.tags.kwarg, Option::<String>::None);
+    is!(updated.dependencies.children.kwarg, Option::<String>::None);
+    is!(
+        updated.dependencies.cache.generic.kwarg,
+        Option::<String>::None
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_dependencies_naming() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // change how the sample dependencies for this image are named on disk
+    let update =
+        ImageUpdate::default().dependencies(DependenciesUpdate::default().samples(
+            SampleDependencySettingsUpdate::default().naming(FileNamingStrategy::MostRecent),
+        ));
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our update was applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(
+        updated.dependencies.samples.naming,
+        FileNamingStrategy::MostRecent
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_clean_up() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image that already has clean up settings
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // update every one of this images clean up settings
+    let update = ImageUpdate::default().clean_up(
+        CleanupUpdate::default()
+            .script("/updated/script.py")
+            .job_id(ArgStrategy::Kwarg("--new-job-id".to_owned()))
+            .results(ArgStrategy::Append)
+            .result_files_dir(ArgStrategy::Kwarg("--output-dir".to_owned())),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our updates were applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    let clean_up = updated
+        .clean_up
+        .ok_or_else(|| Error::new("Image has no clean up settings"))?;
+    is!(clean_up.script, "/updated/script.py".to_owned());
+    is!(clean_up.results, ArgStrategy::Append);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_clean_up_clear() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image that already has clean up settings
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // clear this images clean up settings entirely
+    let update = ImageUpdate::default().clean_up(CleanupUpdate::default().clear());
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure its clean up settings were removed
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.clean_up.is_none(), true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_clean_up_bad() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup an image with no clean up settings
+    let image_req = generators::gen_ext_image(&group);
+    client.images.create(&image_req).await?;
+    // clean up settings can't be built without a script to clean up with
+    let update = ImageUpdate::default()
+        .clean_up(CleanupUpdate::default().job_id(ArgStrategy::Kwarg("--job-id".to_owned())));
+    let resp = client.images.update(&group, &image_req.name, &update).await;
+    fail!(resp, 400, "A clean up script must be set");
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_kvm() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image with no kvm settings
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // kvm settings are created when both of the required settings are given
+    let update = ImageUpdate::default().kvm(
+        KvmUpdate::default()
+            .xml("/kvm/golden.xml")
+            .qcow2("/kvm/golden.qcow2"),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our kvm settings were created
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    // now that this image has kvm settings we can update just one of them
+    let update = ImageUpdate::default().kvm(KvmUpdate::default().xml("/kvm/updated.xml"));
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure only the xml path changed
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    let kvm = updated
+        .kvm
+        .ok_or_else(|| Error::new("Image has no kvm settings"))?;
+    is!(kvm.xml, "/kvm/updated.xml".to_owned());
+    is!(kvm.qcow2, "/kvm/golden.qcow2".to_owned());
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_kvm_bad() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image with no kvm settings
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // kvm settings cannot be created from just one of the two required settings
+    let update = ImageUpdate::default().kvm(KvmUpdate::default().xml("/kvm/golden.xml"));
+    let resp = client.images.update(&group, &image.name, &update).await;
+    fail!(resp, 400, "xml and qcow2 must both be set");
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_output_collection() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // update where children are collected from and restrict who can see our results
+    let update = ImageUpdate::default().output_collection(
+        OutputCollectionUpdate::default()
+            .children("/updated/children")
+            .as_filesystem(true)
+            .group(&group),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our updates were applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.output_collection.as_filesystem, true);
+    is_in!(updated.output_collection.groups, group);
+    // now lift our group restrictions
+    let update =
+        ImageUpdate::default().output_collection(OutputCollectionUpdate::default().clear_groups());
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our group restrictions were cleared
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.output_collection.groups.is_empty(), true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_output_collection_files() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image with a seeded files handler
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // update the files handlers paths and wipe the result files it collects
+    let update = ImageUpdate::default().output_collection(
+        OutputCollectionUpdate::default().files(
+            FilesHandlerUpdate::default()
+                .results("/updated/results")
+                .result_files("/updated/result_files")
+                .tags("/updated/tags")
+                .add_name("corn.csv")
+                .clear_names(),
+        ),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our updates were applied
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.output_collection.files.names.is_empty(), true);
+    is!(
+        updated.output_collection.files.tags,
+        "/updated/tags".to_owned()
+    );
+    // now reset the entire files handler back to its defaults
+    let update =
+        ImageUpdate::default().output_collection(OutputCollectionUpdate::default().clear_files());
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure the files handler was reset
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_output_collection_auto_tag() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image with no auto tag settings
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // an update for an auto tag setting that doesn't exist yet creates it
+    let update = ImageUpdate::default().output_collection(
+        OutputCollectionUpdate::default().auto_tag(
+            "Plant",
+            AutoTagUpdate::default()
+                .logic(AutoTagLogic::Equal(serde_json::json!("Corn")))
+                .key("plant".to_owned()),
+        ),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure our auto tag setting was created
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    let auto_tag = updated
+        .output_collection
+        .auto_tag
+        .get("Plant")
+        .ok_or_else(|| Error::new("Image has no Plant auto tag settings"))?;
+    is!(auto_tag.key, Some("plant".to_owned()));
+    // now clear the key we look this tags value up under
+    let update = ImageUpdate::default().output_collection(
+        OutputCollectionUpdate::default().auto_tag("Plant", AutoTagUpdate::default().clear_key()),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure the key was cleared
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    let auto_tag = updated
+        .output_collection
+        .auto_tag
+        .get("Plant")
+        .ok_or_else(|| Error::new("Image has no Plant auto tag settings"))?;
+    is!(auto_tag.key, Option::<String>::None);
+    // now delete this auto tag setting entirely
+    let update = ImageUpdate::default().output_collection(
+        OutputCollectionUpdate::default().auto_tag("Plant", AutoTagUpdate::default().delete()),
+    );
+    client.images.update(&group, &image.name, &update).await?;
+    // get the image and make sure the auto tag setting was deleted
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(
+        updated.output_collection.auto_tag.contains_key("Plant"),
+        false
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_add_volume_bad_name() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // volume names cannot be longer then 25 characters
+    let update = ImageUpdate::default().add_volume(Volume::new(
+        "this-volume-name-is-way-too-long",
+        "/files",
+        VolumeTypes::ConfigMap,
+    ));
+    let resp = client.images.update(&group, &image.name, &update).await;
+    fail!(resp, 400, "volume name must be between");
+    // volume names must be lowercase alphanumeric or a '-'
+    let update = ImageUpdate::default().add_volume(Volume::new(
+        "Test-Vol",
+        "/files",
+        VolumeTypes::ConfigMap,
+    ));
+    let resp = client.images.update(&group, &image.name, &update).await;
+    fail!(resp, 400, "volume name must be only lowercase alphanumeric");
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_remove_volume_missing() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image with a single volume
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // removing a volume this image doesn't have is a no op
+    let update = ImageUpdate::default().remove_volume("not-a-volume");
+    let resp = client.images.update(&group, &image.name, &update).await?;
+    is!(resp.status().as_u16(), 204);
+    // get the image and make sure the volumes it does have were left alone
+    let updated = client.images.get(&group, &image.name).await?;
+    is!(updated, update);
+    is!(updated.volumes.len(), image.volumes.len());
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_ban_readd_bad() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // setup a random image
+    let image = generators::images(&group, 1, false, &client)
+        .await?
+        .remove(0);
+    // ban this image
+    let update = ImageUpdate::default()
+        .bans(ImageBanUpdate::default().add_ban(ImageBan::new(ImageBanKind::generic("Test ban!"))));
+    client.images.update(&group, &image.name, &update).await?;
+    // bans can only be added or removed so re-adding the same ban is an error
+    let resp = client.images.update(&group, &image.name, &update).await;
+    fail!(resp, 400, "already exists");
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_runtimes() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // register the node our test worker will run on
+    generators::node(
+        "runtimes-cluster",
+        "runtimes-node",
+        Resources::default(),
+        &client,
+    )
+    .await?;
+    // Create a group
+    let group = generators::groups(1, &client).await?.remove(0).name;
+    // create a pipeline with a single stage so we only have one image to run
+    let pipe_req = generators::gen_pipe(&group, 1, false, &client).await?;
+    client.pipelines.create(&pipe_req).await?;
+    // get the pipeline for this pipeline order
+    let pipe = client.pipelines.get(&group, &pipe_req.name).await?;
+    // get the only stage in this pipeline
+    let stage = pipe
+        .order
+        .iter()
+        .flatten()
+        .next()
+        .ok_or_else(|| Error::new("Generated pipeline has no stages"))?;
+    // this images average runtime should still be the default
+    let image = client.images.get(&group, stage).await?;
+    is!(image.runtime, 600.0);
+    // create a reaction so we have a job to claim
+    let req = generators::gen_reaction(&group, &pipe, None);
+    client.reactions.create(&req).await?;
+    // register the worker that will claim this job
+    generators::worker(
+        "runtimes-cluster",
+        "runtimes-node",
+        "runtimes",
+        &group,
+        &pipe.name,
+        stage,
+        &client,
+    )
+    .await?;
+    // claim the job for this stage
+    let job = client
+        .jobs
+        .claim(
+            &group,
+            &pipe.name,
+            stage,
+            "runtimes-cluster",
+            "runtimes-node",
+            "runtimes",
+            1,
+        )
+        .await?;
+    // complete this job with a runtime that is nowhere near the default
+    let runtime = 42;
+    let logs = generators::stage_logs();
+    client.jobs.proceed(&job[0], &logs, runtime).await?;
+    // recalculate the average runtimes for every image
+    let resp = client.images.update_runtimes().await?;
+    is!(resp.status().as_u16(), 204);
+    // this images average runtime should now be the runtime of its only completed job
+    let image = client.images.get(&group, stage).await?;
+    is!(image.runtime, 42.0);
+    // clean up the worker we registered
+    generators::delete_worker("runtimes", &client).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_runtimes_bad() -> Result<(), Error> {
+    // get admin client
+    let client = test_utilities::admin_client().await?;
+    // get a user client
+    let user_client = generators::client(&client).await?;
+    // only admins can recalculate the average runtimes for all images
+    let resp = user_client.images.update_runtimes().await;
+    fail!(resp, 401);
     Ok(())
 }
 
