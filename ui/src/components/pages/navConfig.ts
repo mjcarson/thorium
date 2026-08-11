@@ -17,6 +17,7 @@ import {
 } from 'react-icons/fa';
 import { FaHardDrive, FaFolderTree } from 'react-icons/fa6';
 import { MdBusinessCenter } from 'react-icons/md';
+import { VscJson } from 'react-icons/vsc';
 // project imports
 import { getBrowsingPathByEntity } from '@components/entities/browsing/EntityBrowsingRoutes';
 import { Entities } from '@models/entities/entities';
@@ -52,6 +53,7 @@ export const NAV_ITEMS: NavCategory[] = [
       { label: 'Devices', icon: FaHardDrive, path: getBrowsingPathByEntity(Entities.Device) },
       { label: 'Vendors', icon: MdBusinessCenter, path: getBrowsingPathByEntity(Entities.Vendor) },
       { label: 'Sigma Rules', icon: SigmaIcon, path: getBrowsingPathByEntity(Entities.SigmaRule) },
+      { label: 'Json', icon: VscJson, path: getBrowsingPathByEntity(Entities.Json) },
     ],
   },
   {

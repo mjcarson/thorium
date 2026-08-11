@@ -13,6 +13,7 @@ import NetworkConnectionsDetailsConfig from './NetworkConnectionDetailsConfig';
 import OtherDetailsConfig from './OtherDetailsConfig';
 import { Entities, EntityTypeMap } from '@models/entities';
 import SigmaRuleDetailsConfig from './SigmaRuleDetailsConfig';
+import JsonDetailsConfig from './JsonDetailsConfig';
 
 export type EntityDetailsConfig<T extends keyof EntityTypeMap> = {
   getEntityDetails: (entityID: string, setError: (err: string) => void, updateEntity: (entity: EntityTypeMap[T]) => void) => void;
@@ -31,6 +32,7 @@ export const EntitiesDetailsConfig = {
   [Entities.Device]: DeviceDetailsConfig,
   [Entities.FileSystem]: FileSystemDetailsConfig,
   [Entities.Folder]: FolderDetailsConfig,
+  [Entities.Json]: JsonDetailsConfig,
   [Entities.NetworkConnection]: NetworkConnectionsDetailsConfig,
   [Entities.Other]: OtherDetailsConfig,
   [Entities.SigmaRule]: SigmaRuleDetailsConfig,
@@ -44,6 +46,7 @@ export const EntityDetailsPages = {
   [Entities.Device]: createEntityDetailsPage(DeviceDetailsConfig),
   [Entities.FileSystem]: createEntityDetailsPage(FileSystemDetailsConfig),
   [Entities.Folder]: createEntityDetailsPage(FolderDetailsConfig),
+  [Entities.Json]: createEntityDetailsPage(JsonDetailsConfig),
   [Entities.NetworkConnection]: createEntityDetailsPage(NetworkConnectionsDetailsConfig),
   [Entities.Other]: createEntityDetailsPage(OtherDetailsConfig),
   [Entities.SigmaRule]: createEntityDetailsPage(SigmaRuleDetailsConfig),

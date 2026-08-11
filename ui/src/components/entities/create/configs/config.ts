@@ -5,6 +5,7 @@ import VendorCreateConfig from './VendorCreateConfig';
 import { Entities, EntityCreateTypeMap, UISupportedEntityCreateKind } from '@models/entities/entities';
 import createEntityCreatePage, { CreateMetadataComponent } from '../EntityCreate';
 import SigmaRuleCreateConfig from './SigmaRuleCreateConfig';
+import JsonCreateConfig from './JsonCreateConfig';
 
 export type EntityCreateConfig<K extends UISupportedEntityCreateKind> = {
   kind: K;
@@ -19,6 +20,7 @@ export type EntityCreateConfigMap = {
 
 export const EntitiesCreateConfig = {
   [Entities.Collection]: CollectionCreateConfig,
+  [Entities.Json]: JsonCreateConfig,
   [Entities.SigmaRule]: SigmaRuleCreateConfig,
   [Entities.Device]: DeviceCreateConfig,
   [Entities.Vendor]: VendorCreateConfig,
@@ -27,6 +29,7 @@ export const EntitiesCreateConfig = {
 export const EntityCreatePages = {
   [Entities.Collection]: createEntityCreatePage(CollectionCreateConfig),
   [Entities.Device]: createEntityCreatePage(DeviceCreateConfig),
+  [Entities.Json]: createEntityCreatePage(JsonCreateConfig),
   [Entities.SigmaRule]: createEntityCreatePage(SigmaRuleCreateConfig),
   [Entities.Vendor]: createEntityCreatePage(VendorCreateConfig),
 } satisfies { [K in UISupportedEntityCreateKind]: React.ComponentType };

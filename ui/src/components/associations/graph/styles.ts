@@ -14,6 +14,8 @@ import FolderSVG from '@assets/icons/folder.svg?raw';
 import FolderGrowableSVG from '@assets/icons/folder-add.svg?raw';
 import RepoSVG from '@assets/icons/git.svg?raw';
 import RepoGrowableSVG from '@assets/icons/git-add.svg?raw';
+import JsonSVG from '@assets/icons/json.svg?raw';
+import JsonGrowableSVG from '@assets/icons/json-add.svg?raw';
 import NetworkConnectionSVG from '@assets/icons/network-connection.svg?raw';
 import NetworkConnectionGrowableSVG from '@assets/icons/network-connection-add.svg?raw';
 import OtherSVG from '@assets/icons/other.svg?raw';
@@ -59,6 +61,7 @@ const DeviceColor = '#ed9624';
 const FileColor = '#f1d592';
 const FileSystemColor = '#8f30b8';
 const FolderColor = '#D2B48C';
+const JsonColor = '#4fa3d1';
 const NetworkConnectionColor = '#acc22e';
 const OtherColor = '#cacfca';
 const RepoColor = '#f03c2e';
@@ -74,6 +77,7 @@ const NODE_COLORS: Record<NodeType, Record<VisualState, string>> = {
   File: { basic: FileColor, growable: GrowableNodeColor, initial: InitialNodeColor },
   FileSystem: { basic: FileSystemColor, growable: GrowableNodeColor, initial: InitialNodeColor },
   Folder: { basic: FolderColor, growable: GrowableNodeColor, initial: InitialNodeColor },
+  Json: { basic: JsonColor, growable: GrowableNodeColor, initial: InitialNodeColor },
   NetworkConnection: { basic: NetworkConnectionColor, growable: GrowableNodeColor, initial: InitialNodeColor },
   Other: { basic: OtherColor, growable: GrowableNodeColor, initial: InitialNodeColor },
   Repo: { basic: RepoColor, growable: GrowableNodeColor, initial: InitialNodeColor },
@@ -96,6 +100,7 @@ const RAW_SVG_MAP: Record<NodeType, Record<VisualState, string>> = {
   File: { basic: FileSVG, growable: FileGrowableSVG, initial: FileSVG },
   FileSystem: { basic: FileSystemSVG, growable: FileSystemGrowableSVG, initial: FileSystemSVG },
   Folder: { basic: FolderSVG, growable: FolderGrowableSVG, initial: FolderSVG },
+  Json: { basic: JsonSVG, growable: JsonGrowableSVG, initial: JsonSVG },
   NetworkConnection: { basic: NetworkConnectionSVG, growable: NetworkConnectionGrowableSVG, initial: NetworkConnectionSVG },
   Other: { basic: OtherSVG, growable: OtherGrowableSVG, initial: OtherSVG },
   Repo: { basic: RepoSVG, growable: RepoGrowableSVG, initial: RepoSVG },

@@ -5,6 +5,12 @@ export enum SigmaRuleAppliesTo {
   WindowsProcesses = 'WindowsProcesses',
   /// Apply this rule to network connections
   NetworkConnections = 'NetworkConnections',
+  /// Apply this rule to compiled functions
+  CompiledFunctions = 'CompiledFunctions',
+  /// Apply this rule to decompiled functions
+  DecompiledFunctions = 'DecompiledFunctions',
+  /// Apply this rule to json documents
+  Json = 'Json',
 }
 
 /// Automatically promote this sigma rule hit to a flag

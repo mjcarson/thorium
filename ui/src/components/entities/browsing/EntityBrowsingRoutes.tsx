@@ -11,6 +11,8 @@ export const EntityBrowsingRoutes: Record<string, Entities> = {
   '/filesystems/*': Entities.FileSystem,
   '/folders': Entities.Folder,
   '/folders/*': Entities.Folder,
+  '/jsons': Entities.Json,
+  '/jsons/*': Entities.Json,
   '/network/connections': Entities.NetworkConnection,
   '/network/connections/*': Entities.NetworkConnection,
   '/repos': Entities.Repo,

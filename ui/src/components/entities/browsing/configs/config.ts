@@ -15,6 +15,7 @@ import OthersBrowsingConfig from './OtherBrowsingConfig';
 import { createEntityBrowsingPage } from '../EntityBrowsing';
 import CollectionsBrowsingConfig from './CollectionBrowsingConfig';
 import SigmaRulesBrowsingConfig from './SigmaRuleBrowsingConfig';
+import JsonBrowsingConfig from './JsonBrowsingConfig';
 
 /**
  * Generic browse config for a specific entity type T
@@ -48,6 +49,7 @@ export const EntityBrowsingConfig: EntityConfigMap = {
   [Entities.File]: FileBrowsingConfig,
   [Entities.Repo]: RepoBrowsingConfig,
   [Entities.FileSystem]: FileSystemBrowsingConfig,
+  [Entities.Json]: JsonBrowsingConfig,
   [Entities.SigmaRule]: SigmaRulesBrowsingConfig,
   [Entities.Vendor]: VendorBrowsingConfig,
   [Entities.WindowsProcessTree]: WindowsProcessTreeBrowsingConfig,
@@ -62,6 +64,7 @@ export const EntityBrowsingPages = {
   [Entities.FileSystem]: createEntityBrowsingPage(FileSystemBrowsingConfig),
   [Entities.File]: createEntityBrowsingPage(FileBrowsingConfig),
   [Entities.Folder]: createEntityBrowsingPage(FolderBrowsingConfig),
+  [Entities.Json]: createEntityBrowsingPage(JsonBrowsingConfig),
   [Entities.NetworkConnection]: createEntityBrowsingPage(NetworkConnectionsBrowsingConfig),
   [Entities.Other]: createEntityBrowsingPage(OthersBrowsingConfig),
   [Entities.SigmaRule]: createEntityBrowsingPage(SigmaRulesBrowsingConfig),

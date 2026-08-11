@@ -17,6 +17,8 @@ export const EntityCreateRoutes: Record<string, { type: Entities; override_page?
   '/analysis': { type: Entities.File, override_page: FileUpload },
   '/create/file': { type: Entities.File, override_page: FileUpload },
   '/create/files': { type: Entities.File, override_page: FileUpload },
+  '/create/json': { type: Entities.Json },
+  '/create/jsons': { type: Entities.Json },
   '/create/rule/sigma': { type: Entities.SigmaRule },
   '/create/rules/sigma': { type: Entities.SigmaRule },
   '/create/vendor': { type: Entities.Vendor },

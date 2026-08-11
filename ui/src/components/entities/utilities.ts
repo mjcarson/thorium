@@ -13,6 +13,7 @@ import { VendorMetaFields } from '@models/entities/vendors';
 import { Collection, CollectionMetaFields } from '@models/entities/collections';
 import { FileSystem } from '@models/entities/file_systems';
 import { WindowsProcessTree } from '@models/entities/process_trees';
+import { JsonEntity } from '@models/entities/json';
 import { SigmaRule, SigmaRuleMetaFields } from '@models/entities/rules/sigma';
 import { SigmaActionToTake } from '@models/entities/rules/sigma';
 import { Entities, EntityCreateTypes, EntityTypes, UISupportedEntityCreateTypes } from '@models/entities/entities';
@@ -243,6 +244,16 @@ export function buildUpdateEntityForm(
       appendSigmaRuleMetaUpdates(updateForm, meta, pending);
       break;
     }
+    case Entities.Json: {
+      const meta = entity.metadata.Json;
+      const pending = (pendingEntity as JsonEntity).metadata.Json;
+      // a json entity is just its document so we replace the whole thing when it changes
+      const pendingDoc = JSON.stringify(pending.data);
+      if (JSON.stringify(meta.data) !== pendingDoc) {
+        updateForm.set('metadata[json_data]', pendingDoc);
+      }
+      break;
+    }
     // Folder, WindowsProcess, NetworkConnection, Other: no metadata update logic
   }
 
@@ -344,6 +355,12 @@ export function buildCreateEntityForm(entity: EntityCreateTypes, imageFile?: Fil
       }
       break;
     }
+    case Entities.Json: {
+      const meta = entity.metadata.Json;
+      // send this entities document in its compact string form
+      createForm.append('metadata[json_data]', JSON.stringify(meta.data));
+      break;
+    }
     // Other entity kinds: no special create metadata handling
   }
   return createForm;
@@ -386,6 +403,11 @@ export function copyEntityFields(existingEntity: EntityTypes, blank: UISupported
     case Entities.SigmaRule: {
       const srcMeta = existingEntity.metadata.SigmaRule;
       newEntity.metadata = { SigmaRule: structuredClone(srcMeta) };
+      break;
+    }
+    case Entities.Json: {
+      const srcMeta = existingEntity.metadata.Json;
+      newEntity.metadata = { Json: structuredClone(srcMeta) };
       break;
     }
   }

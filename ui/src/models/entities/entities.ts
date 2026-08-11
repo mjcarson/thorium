@@ -17,6 +17,7 @@ import {
   NetworkConnectionMeta,
   NetConState,
 } from './network_connections';
+import { CreateJsonEntity, JsonCreateMeta, JsonEntity, JsonMeta } from './json';
 import { CreateOther, Other, OtherCreateMeta, OtherMeta } from './other';
 import { CreateSigmaRule, SigmaActionToTake, SigmaRule, SigmaRuleAppliesTo, SigmaRuleCreateMeta, SigmaRuleMeta } from './rules/sigma';
 
@@ -47,19 +48,32 @@ export enum Entities {
   NetworkConnection = 'NetworkConnection',
   /// A sigma rule to apply to data
   SigmaRule = 'SigmaRule',
+  /// A single line/document of arbitrary json
+  Json = 'Json',
   /// An entity that can't be described by any of the other variants
   Other = 'Other',
 }
 
 // pure entities
 export type EntityTypes =
-  Device | Collection | FileSystem | Folder | NetworkConnection | Other | SigmaRule | Vendor | WindowsProcess | WindowsProcessTree;
+  | Device
+  | Collection
+  | FileSystem
+  | Folder
+  | JsonEntity
+  | NetworkConnection
+  | Other
+  | SigmaRule
+  | Vendor
+  | WindowsProcess
+  | WindowsProcessTree;
 
 export type EntityMetaTypes =
   | DeviceMeta
   | CollectionMeta
   | FileSystemMeta
   | FolderMeta
+  | JsonMeta
   | NetworkConnectionMeta
   | OtherMeta
   | SigmaRuleMeta
@@ -73,6 +87,7 @@ export type EntityCreateTypes =
   | CreateDevice
   | CreateFileSystem
   | CreateFolder
+  | CreateJsonEntity
   | CreateNetworkConnection
   | CreateOther
   | CreateSigmaRule
@@ -80,14 +95,15 @@ export type EntityCreateTypes =
   | CreateWindowsProcess
   | CreateWindowsProcessTree;
 
-export type UISupportedEntityCreateTypes = CreateDevice | CreateCollection | CreateVendor | CreateSigmaRule;
-export type UISupportedEntityCreateKind = Entities.Collection | Entities.Device | Entities.Vendor | Entities.SigmaRule;
+export type UISupportedEntityCreateTypes = CreateDevice | CreateCollection | CreateJsonEntity | CreateVendor | CreateSigmaRule;
+export type UISupportedEntityCreateKind = Entities.Collection | Entities.Device | Entities.Json | Entities.Vendor | Entities.SigmaRule;
 
 export type EntityCreateMetaTypes =
   | DeviceCreateMeta
   | CollectionCreateMeta
   | FileSystemCreateMeta
   | FolderCreateMeta
+  | JsonCreateMeta
   | NetworkConnectionCreateMeta
   | OtherCreateMeta
   | SigmaRuleCreateMeta
@@ -198,6 +214,8 @@ export type UpdateEntityMetadata = {
   remove_sigma_actions?: number[];
   /// The score that a rule applies
   score?: number;
+  /// The json document to replace a json entities document with
+  json_data?: string;
 };
 
 // entity update format

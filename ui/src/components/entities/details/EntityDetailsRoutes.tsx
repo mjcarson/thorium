@@ -15,6 +15,7 @@ export const EntityDetailsRoutes: Record<
   '/file/:sha256': { type: Entities.File, override_page: FileDetails },
   '/filesystem/:entityID': { type: Entities.FileSystem },
   '/folder/:entityID': { type: Entities.Folder },
+  '/json/:entityID': { type: Entities.Json },
   '/network/connection/:entityID': { type: Entities.NetworkConnection },
   '/other/:entityID': { type: Entities.Other },
   '/repo/*': { type: Entities.Repo, override_page: RepoDetails },
