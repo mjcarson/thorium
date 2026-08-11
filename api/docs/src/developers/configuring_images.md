@@ -278,6 +278,8 @@ where to download those inputs into before running the tool runs.
 
 Ephemeral files are discarded at the end of a pipeline run. You might call these files intermediate artifacts of
 the pipeline. They can be passed between the images that run within a pipeline using the following configurations.
+They can also be supplied when the reaction is created with Thorctl's `--ephemeral` flag; see
+[Ephemeral Files](../users/spawning_reactions.md#ephemeral-files).
 
 <p align="center">
     <img width="800" src="./../static_resources/images/image-dependencies-ephemeral.png">

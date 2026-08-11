@@ -53,6 +53,44 @@ STATUS       | PIPELINE                  | ID
 ...
 ```
 
+### Ephemeral Files
+
+Ephemeral files are uploaded along with a reaction and discarded once that reaction finishes. They're how you hand a
+pipeline a one-off input — a ruleset, a config, a wordlist — without first uploading it to Thorium as a file. For an
+image to actually receive them, it must be configured to consume ephemeral dependencies; see
+[Ephemeral and Results](../developers/configuring_images.md#ephemeral-and-results).
+
+Pass one with `--ephemeral`, repeating the flag for each file. By default a file keeps its own name:
+
+```bash
+thorctl reactions create --group <PIPELINE_GROUP> --pipeline <PIPELINE> --ephemeral ./rules.yara <SHA256>
+```
+
+Add `<NAME>=<PATH>` when the tool expects a particular name, or when the file's own name isn't a legal one:
+
+```bash
+thorctl reactions create --group <PIPELINE_GROUP> --pipeline <PIPELINE> --ephemeral config.json=./cfg/prod.json <SHA256>
+```
+
+`thorctl run` takes the same flag:
+
+```bash
+thorctl run <PIPELINE> <SHA256> --ephemeral ./rules.yara
+```
+
+A few constraints to keep in mind:
+
+- Names must be 1-32 characters and may contain only letters, numbers, `-`, and `.`. Notably **`_` is not allowed**, so
+  a file like `my_config.json` has to be renamed with the `<NAME>=<PATH>` form (`--ephemeral config.json=./my_config.json`).
+- Each name must be unique within a reaction.
+- On `thorctl reactions create` the `=` separating a name from its path is really the `--delimiter` character, which is
+  shared with `--tags` and `--kwargs`. `thorctl run` always uses `=`.
+
+Every ephemeral file is copied into **every** reaction the command creates, so a single `thorctl reactions create` that
+matches thousands of files will send thousands of copies. Past a size threshold Thorctl prints a warning telling you how
+large each request will be. The warning is advisory only — an upload is never rejected because of its size — and
+`--skip-ephemeral-warning` silences it for automated runs.
+
 ### Thorctl Run
 You can also quickly create a reaction, monitor its progress, and save its results to disk using the `thorctl run` command:
 

@@ -17,6 +17,12 @@ pub struct Run {
     /// How many seconds allowed to wait before starting the job
     #[clap(short, long, default_value_t = 1)]
     pub sla: u64,
+    /// Any ephemeral files to upload with this reaction
+    ///     Note: Give a path or <NAME>=<PATH> to name the file explicitly
+    ///           (e.g. --ephemeral ./rules.yara --ephemeral a.json=./b.json)
+    ///     Note: Names must be 1-32 alphanumeric/'-'/'.' characters
+    #[clap(long, verbatim_doc_comment)]
+    pub ephemeral: Vec<String>,
     /// The path to save the results to [default: `<SHA256/REPO>_<PIPELINE>`]
     #[clap(short, long)]
     pub output: Option<PathBuf>,

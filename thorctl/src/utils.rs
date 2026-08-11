@@ -152,6 +152,7 @@ fn curated_entries(
 
 pub mod banner;
 pub mod diff;
+pub mod ephemeral;
 pub mod fs;
 pub mod groups;
 pub mod images;

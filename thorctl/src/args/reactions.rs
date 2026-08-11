@@ -477,6 +477,14 @@ pub struct CreateReactions {
     /// The parent reaction to set in order to create sub reactions
     #[clap(long)]
     pub parent: Option<Uuid>,
+    /// Any ephemeral files to upload with every created reaction, given either as a path
+    /// (the file's own name is used) or as <NAME><DELIMITER><PATH> to name it explicitly
+    ///     Note: The delimiter is the same one used for tags/kwargs given by "--delimiter"
+    ///           (e.g. --ephemeral ./rules.yara --ephemeral config.json=./cfg/prod.json)
+    ///     Note: Names must be 1-32 alphanumeric/'-'/'.' characters and each file is copied
+    ///           into EVERY reaction this command creates
+    #[clap(long, verbatim_doc_comment)]
+    pub ephemeral: Vec<String>,
     /// The optional SLA to set for the created reactions
     #[clap(long)]
     pub sla: Option<u64>,
@@ -557,6 +565,11 @@ pub struct CreateReactions {
     /// actually creating the reactions
     #[clap(long)]
     pub dry_run: bool,
+    /// Don't warn when the ephemeral files copied into each reaction make requests large
+    ///
+    /// Note: Set this for automated/large-scale runs where the warning is just noise
+    #[clap(long)]
+    pub skip_ephemeral_warning: bool,
     /// Watch all spawned reactions progress and automatically batch them
     #[clap(short = 'W', long)]
     pub watch: bool,

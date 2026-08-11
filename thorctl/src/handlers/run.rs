@@ -23,7 +23,9 @@ use crate::Error;
 use crate::args::repos::RepoTarget;
 use crate::args::run::Run;
 use crate::args::{Args, Mode};
+use crate::handlers::progress;
 use crate::utils;
+use crate::utils::ephemeral::{self, EphemeralFiles};
 
 /// The rate in seconds to poll the Thorium api for status updates
 const REFRESH_RATE: Duration = Duration::from_secs(1);
@@ -350,6 +352,17 @@ async fn write_results(
 /// * `thorium` - The Thorium client
 /// * `cmd` - The run command to execute
 async fn run(thorium: Arc<Thorium>, cmd: &Run) -> Result<(), Error> {
+    // read any ephemeral files up front so a bad path or name fails before we hit the API
+    let ephemeral_files =
+        EphemeralFiles::load(&cmd.ephemeral, ephemeral::DEFAULT_DELIMITER).await?;
+    // let the user know when their ephemeral files make for a large request, but always send it
+    let encoded_len = ephemeral_files.encoded_len();
+    if encoded_len > ephemeral::WARN_ENCODED_BYTES {
+        progress::warn(format!(
+            "This reaction carries {} of base64 encoded ephemeral data",
+            ephemeral::fmt_bytes(encoded_len)
+        ));
+    }
     // find the pipeline's group if none was given
     let group = if let Some(group) = &cmd.group {
         group.clone()
@@ -358,6 +371,8 @@ async fn run(thorium: Arc<Thorium>, cmd: &Run) -> Result<(), Error> {
     };
     // generate a request to create a reaction
     let mut req = ReactionRequest::new(group.clone(), cmd.pipeline.clone()).sla(cmd.sla);
+    // attach any ephemeral files the user gave us
+    req = ephemeral_files.attach(req);
     // get our run mode based on the command
     let run_mode = Mode::try_from(&cmd.sha256_or_repo)?;
     // supply a file or a repo dependency depending on our mode

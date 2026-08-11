@@ -7,6 +7,7 @@ use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use thorium::models::{
     BulkReactionResponse, Pipeline, Reaction, ReactionArgs, ReactionRequest, ReactionStatus,
     RepoDependencyRequest,
@@ -18,7 +19,9 @@ use crate::args::{
     reactions::{BUNDLE_DELIMITER, CreateReactions},
     repos::RepoTarget,
 };
+use crate::handlers::progress;
 use crate::utils;
+use crate::utils::ephemeral::{self, EphemeralFiles};
 
 /// prints out a single create reaction line
 macro_rules! create_print {
@@ -134,6 +137,82 @@ impl CreateLine {
     }
 }
 
+/// Whether we've already warned about the size of this run's ephemeral payload
+///
+/// `create_bulk` runs once per page of a search cursor, so without this the same warning would
+/// print on every page.
+static WARNED_EPHEMERAL: AtomicBool = AtomicBool::new(false);
+
+/// Warn if the ephemeral data duplicated into a full bulk request would be large
+///
+/// Every reaction request in a bulk call carries its own copy of the ephemeral buffers, so the
+/// payload scales with the number of reactions per call rather than with the file count. The
+/// exact count isn't known until each call is assembled, so this estimates a full search page as
+/// the representative case. This is advisory only, we never refuse to send an ephemeral file.
+///
+/// # Arguments
+///
+/// * `files` - The ephemeral files loaded from the command
+/// * `cmd` - The full reaction creation command/args
+/// * `pipelines` - The number of pipelines we're creating reactions for
+fn warn_estimated_ephemeral(files: &EphemeralFiles, cmd: &CreateReactions, pipelines: usize) {
+    // stay quiet if there are no ephemeral files or the user asked us not to warn
+    if files.is_empty() || cmd.skip_ephemeral_warning {
+        return;
+    }
+    // a bulk call holds one request per target per pipeline, and a search sends a full page
+    let reqs_per_bulk = cmd.page_size.saturating_mul(pipelines) as u64;
+    // every one of those requests carries its own copy of the encoded files
+    let per_req = files.encoded_len();
+    let total = per_req.saturating_mul(reqs_per_bulk);
+    // only speak up once the duplicated payload gets big enough to matter
+    if total > ephemeral::WARN_ENCODED_BYTES {
+        // note that we've warned so create_bulk doesn't immediately repeat us
+        WARNED_EPHEMERAL.store(true, Ordering::Relaxed);
+        progress::warn(format!(
+            "{} ephemeral file(s) ({} base64 encoded) are copied into every reaction, so a full \
+             bulk request of {reqs_per_bulk} reactions will send about {}. Lower --page-size or \
+             narrow your targets to shrink each request.",
+            files.len(),
+            ephemeral::fmt_bytes(per_req),
+            ephemeral::fmt_bytes(total),
+        ));
+    }
+}
+
+/// Warn if an assembled bulk request carries a large amount of ephemeral data
+///
+/// Unlike [`warn_estimated_ephemeral`] this knows exactly how many reactions are in the request,
+/// which matters for the file/repo list paths that send every entry in a single call. This is
+/// advisory only, we always send the request no matter how large it is.
+///
+/// # Arguments
+///
+/// * `reqs` - The assembled reaction requests about to be sent
+/// * `cmd` - The full reaction creation command/args
+fn warn_exact_ephemeral(reqs: &[ReactionRequest], cmd: &CreateReactions) {
+    // stay quiet if the user asked us not to warn or we've already said our piece
+    if cmd.skip_ephemeral_warning || WARNED_EPHEMERAL.load(Ordering::Relaxed) {
+        return;
+    }
+    // every request carries the same buffers, so measure the first and scale by the request count
+    if let Some(first) = reqs.first() {
+        let per_req: u64 = first.buffers.values().map(|buf| buf.len() as u64).sum();
+        let total = per_req.saturating_mul(reqs.len() as u64);
+        // only speak up once the duplicated payload gets big enough to matter
+        if total > ephemeral::WARN_ENCODED_BYTES {
+            // warn at most once, since this runs for every page of a search cursor
+            WARNED_EPHEMERAL.store(true, Ordering::Relaxed);
+            progress::warn(format!(
+                "Sending {} of ephemeral data in one request ({} reactions x {} each)",
+                ephemeral::fmt_bytes(total),
+                reqs.len(),
+                ephemeral::fmt_bytes(per_req),
+            ));
+        }
+    }
+}
+
 /// Create several reactions in bulk or just print them if dry-run mode is on
 ///
 /// # Arguments
@@ -150,6 +229,9 @@ async fn create_bulk(
     args_info: &Option<ReactionArgsInfo>,
     cmd: &CreateReactions,
 ) -> Result<(), Error> {
+    // the file/repo list paths send every entry in a single call, so the up front estimate can
+    // badly understate a request's real size; warn with the exact numbers now that we have them
+    warn_exact_ephemeral(&reqs, cmd);
     // add other settings derived from the run command to each request before sending
     let reqs: Vec<ReactionRequest> = reqs
         .into_iter()
@@ -662,6 +744,8 @@ async fn create_search(
 pub async fn create(thorium: Thorium, cmd: &CreateReactions) -> Result<(), Error> {
     // make sure the command has targets or at least one search parameter
     cmd.validate_search()?;
+    // read any ephemeral files up front so a bad path or name fails before we hit the API
+    let ephemeral_files = EphemeralFiles::load(&cmd.ephemeral, cmd.delimiter).await?;
     // attempt to parse to our list of repo targets to a set of structured RepoTarget
     let repo_targets: HashSet<RepoTarget> = cmd
         .repos
@@ -677,6 +761,15 @@ pub async fn create(thorium: Thorium, cmd: &CreateReactions) -> Result<(), Error
         .has_reaction_args()
         .then_some(get_args_info(&thorium, cmd, &pipelines_with_groups).await)
         .transpose()?;
+    // warn if the ephemeral files copied into each reaction will make our requests large
+    warn_estimated_ephemeral(&ephemeral_files, cmd, pipelines_with_groups.len());
+    // ephemeral files don't appear in the table, so name them explicitly under --dry-run
+    if cmd.dry_run && !ephemeral_files.is_empty() {
+        progress::note(format!(
+            "Each reaction would carry ephemeral file(s): {}",
+            ephemeral_files.names().collect::<Vec<&str>>().join(", ")
+        ));
+    }
     // print the create reaction header
     CreateLine::header();
     // build base reaction requests for each pipeline
@@ -690,6 +783,12 @@ pub async fn create(thorium: Thorium, cmd: &CreateReactions) -> Result<(), Error
             base_req.parent = Some(parent);
         }
     }
+    // attach the ephemeral files once here so every request cloned from these bases inherits
+    // them, no matter which target source builds it
+    let base_reqs: Vec<ReactionRequest> = base_reqs
+        .into_iter()
+        .map(|base_req| ephemeral_files.attach(base_req))
+        .collect();
     // create reactions for any files
     create_files(&thorium, cmd, &base_reqs, &batch, &args_info).await?;
     // create reactions for any file bundles
