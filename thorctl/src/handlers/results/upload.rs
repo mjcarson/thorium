@@ -1,11 +1,12 @@
 use futures::TryStreamExt;
 use http::StatusCode;
 use owo_colors::OwoColorize;
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use thorium::client::ResultsClient;
-use thorium::models::{OnDiskFile, OutputRequest, Sample};
+use thorium::models::{Buffer, EntityKinds, EntityRequest, OnDiskFile, OutputRequest, Sample};
 use thorium::{Error, Thorium};
 
 use crate::args::results::UploadResults;
@@ -35,15 +36,27 @@ impl UploadLine {
     }
 
     /// Print a log line for an uploaded result
-    pub fn uploaded<S: Display, T: Display>(sample: S, tool: T) {
+    ///
+    /// # Arguments
+    ///
+    /// * `sample` - The SHA256 this result was uploaded for
+    /// * `tool` - The tool this result was uploaded for
+    /// * `msg` - A message describing what was uploaded with this result
+    pub fn uploaded<S: Display, T: Display, M: Display>(sample: S, tool: T, msg: M) {
         // log this line
-        upload_print!(200.bright_green(), sample, tool, "-");
+        upload_print!(200.bright_green(), sample, tool, msg);
     }
 
     /// Print a log line for an uploaded result
-    pub fn uploaded_dry_run<S: Display, T: Display>(sample: S, tool: T) {
+    ///
+    /// # Arguments
+    ///
+    /// * `sample` - The SHA256 this result would be uploaded for
+    /// * `tool` - The tool this result would be uploaded for
+    /// * `msg` - A message describing what would be uploaded with this result
+    pub fn uploaded_dry_run<S: Display, T: Display, M: Display>(sample: S, tool: T, msg: M) {
         // log this line
-        upload_print!("-".bright_green(), sample, tool, "-");
+        upload_print!("-".bright_green(), sample, tool, msg);
     }
 
     /// Print an error log line for a result that could not be uploaded
@@ -64,12 +77,16 @@ impl UploadLine {
 macro_rules! upload {
     ($thorium:expr, $req:expr, $sha256:expr, $tool:expr, $cmd:expr) => {
         async {
+            // bind our request so we can describe it before its consumed by the upload
+            let req = $req;
+            // build the message describing the entities attached to this result
+            let msg = entities_msg(&req.entities);
             if $cmd.dry_run {
                 // just log a line if we're in dry run mode
-                UploadLine::uploaded_dry_run($sha256, $tool);
+                UploadLine::uploaded_dry_run($sha256, $tool, msg);
             } else {
-                match $thorium.files.create_result($req).await {
-                    Ok(_) => UploadLine::uploaded($sha256, $tool),
+                match $thorium.files.create_result(req).await {
+                    Ok(_) => UploadLine::uploaded($sha256, $tool, msg),
                     Err(err) => UploadLine::error($sha256, $tool, &err),
                 }
             }
@@ -85,6 +102,126 @@ macro_rules! upload {
 fn is_sha256<T: AsRef<str>>(s: T) -> bool {
     let s = s.as_ref();
     s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Group a raw JSON list of entity requests into a serialized buffer for each entity kind
+///
+/// An empty list of entity requests produces an empty map so we never send an entity
+/// kind with a count of 0, which the API rejects.
+///
+/// # Arguments
+///
+/// * `data` - The raw JSON data containing a list of entity requests
+/// * `path` - The path this raw data was read from, used for error context
+fn group_entities(
+    data: &[u8],
+    path: &Path,
+) -> Result<HashMap<EntityKinds, (usize, Buffer)>, Error> {
+    // deserialize the list of entity requests in this raw data
+    let parsed: Vec<EntityRequest> = serde_json::from_slice(data).map_err(|err| {
+        Error::new(format!(
+            "Error deserializing entities file '{}': {}",
+            path.display(),
+            err
+        ))
+    })?;
+    // break our list of requests up based on what kind of entity each one is
+    let mut kind_map = HashMap::<EntityKinds, Vec<EntityRequest>>::default();
+    for req in parsed {
+        // add this request to the list for its kind
+        kind_map.entry(req.kind()).or_default().push(req);
+    }
+    // serialize each kinds requests into its own buffer
+    let mut entities = HashMap::with_capacity(kind_map.len());
+    for (kind, reqs) in kind_map {
+        // serialize the requests for this kind
+        let serialized = serde_json::to_string(&reqs).map_err(|err| {
+            Error::new(format!(
+                "Error serializing {kind} entities from '{}': {}",
+                path.display(),
+                err
+            ))
+        })?;
+        // wrap our serialized requests in a buffer and track how many entities it holds
+        entities.insert(kind, (reqs.len(), Buffer::new(serialized)));
+    }
+    Ok(entities)
+}
+
+/// Read and group the entities discovered for a set of results if any were found
+///
+/// Results directories with no entities file just have no entities.
+///
+/// # Arguments
+///
+/// * `path` - The path to the entities file for these results
+async fn collect_entities(path: &Path) -> Result<HashMap<EntityKinds, (usize, Buffer)>, Error> {
+    // check if an entities file exists for these results
+    if !tokio::fs::try_exists(path).await.map_err(|err| {
+        Error::new(format!(
+            "Error checking that entities exist at '{}': {}",
+            path.display(),
+            err
+        ))
+    })? {
+        // no entities file was found so these results just have no entities
+        return Ok(HashMap::default());
+    }
+    // read the raw entities data from disk
+    let data = tokio::fs::read(path).await.map_err(|err| {
+        Error::new(format!(
+            "Error reading entities file '{}': {}",
+            path.display(),
+            err
+        ))
+    })?;
+    // group our entities by kind and serialize them into a buffer for each kind
+    group_entities(&data, path)
+}
+
+/// Build the message describing the entities attached to a result
+///
+/// # Arguments
+///
+/// * `entities` - The entities attached to this result by kind
+fn entities_msg(entities: &HashMap<EntityKinds, (usize, Buffer)>) -> String {
+    // no entities were attached to this result so just use our placeholder
+    if entities.is_empty() {
+        return "-".to_owned();
+    }
+    // sum how many entities we found across every kind
+    let total: usize = entities.values().map(|(count, _)| count).sum();
+    // report the total and how many kinds those entities were split across
+    format!("{total} entities/{} kinds", entities.len())
+}
+
+/// Build the request to upload a single tools results
+///
+/// # Arguments
+///
+/// * `cmd` - The upload results command
+/// * `sha256` - The SHA256 of the file these results are for
+/// * `tool` - The tool these results are for
+/// * `results` - The main results to display in the UI
+/// * `files` - Any result files to upload as attachments
+/// * `entities` - Any entities discovered by this tool by kind
+fn build_request(
+    cmd: &UploadResults,
+    sha256: &str,
+    tool: &str,
+    results: String,
+    files: Vec<OnDiskFile>,
+    entities: HashMap<EntityKinds, (usize, Buffer)>,
+) -> OutputRequest<Sample> {
+    // build the base request for this tools results
+    let mut req = OutputRequest::<Sample>::new(sha256.to_string(), tool, results, cmd.display_type)
+        .groups(cmd.result_groups.clone())
+        .files(files);
+    // attach each kind of entity this tool discovered
+    for (kind, (count, buff)) in entities {
+        req = req.entities(kind, count, buff);
+    }
+    req
 }
 
 /// Uploads results for a file based on tool sub-directories
@@ -111,6 +248,8 @@ async fn upload_tool_subdirs(
         };
         // construct the path to the main results file
         let results_path = tool_subdir.join(&cmd.results);
+        // construct the path to the entities this tool discovered
+        let entities_path = tool_subdir.join(&cmd.entities);
         // check if the main results exist
         if !tokio::fs::try_exists(&results_path).await.map_err(|err| {
             Error::new(format!(
@@ -144,7 +283,16 @@ async fn upload_tool_subdirs(
                         err
                     )),
                 );
-                return Ok(());
+                continue;
+            }
+        };
+        // collect any entities this tool discovered
+        let entities = match collect_entities(&entities_path).await {
+            Ok(entities) => entities,
+            Err(err) => {
+                // log an error that we couldn't collect this tools entities and move on
+                UploadLine::error(sha256, tool, &err);
+                continue;
             }
         };
         // walk the directory recursively
@@ -152,11 +300,13 @@ async fn upload_tool_subdirs(
         let result_files = walkdir
             .try_fold(Vec::new(), |mut result_files, entry| {
                 let results_path_ref = &results_path;
+                let entities_path_ref = &entities_path;
                 let tool_subdir_ref = &tool_subdir;
                 async move {
                     let path = entry.path();
-                    // only add this path if it's not the main result *and* it's a file
-                    if &path != results_path_ref && path.is_file() {
+                    // only add this path if it's not the main result or the entities we
+                    // already collected *and* it's a file
+                    if &path != results_path_ref && &path != entities_path_ref && path.is_file() {
                         // trim the tool subdir so we only include the nested part
                         let on_disk = OnDiskFile::new(path).trim_prefix(tool_subdir_ref);
                         result_files.push(on_disk);
@@ -173,13 +323,7 @@ async fn upload_tool_subdirs(
                 ))
             })?;
         // upload the results for this tool
-        let results_req = OutputRequest::<Sample>::new(
-            sha256.to_string(),
-            tool.clone(),
-            results_string,
-            cmd.display_type,
-        )
-        .files(result_files);
+        let results_req = build_request(cmd, sha256, &tool, results_string, result_files, entities);
         upload!(thorium, results_req, sha256, tool, cmd).await;
     }
     Ok(())
@@ -195,12 +339,14 @@ async fn upload_tool_subdirs(
 /// * `sha256` - The SHA256 of the file to upload results to
 /// * `path` - The path to the results
 /// * `unnested_result_files` - The result files found in the path collected previously
+/// * `entities` - The entities found in the path collected previously by kind
 async fn upload_tool_flags(
     thorium: &Thorium,
     cmd: &UploadResults,
     sha256: &str,
     path: &Path,
     unnested_result_files: Vec<OnDiskFile>,
+    entities: HashMap<EntityKinds, (usize, Buffer)>,
 ) -> Result<(), Error> {
     // build a path to the main results file as defined by the user
     let results = path.join(&cmd.results);
@@ -243,13 +389,15 @@ async fn upload_tool_flags(
     };
     // upload unnested files for each tool given in the command
     for tool in &cmd.tools {
-        let results_req = OutputRequest::<Sample>::new(
-            sha256.to_string(),
-            tool.clone(),
+        // clone our results/files/entities since each tool gets its own request
+        let results_req = build_request(
+            cmd,
+            sha256,
+            tool,
             results_string.clone(),
-            cmd.display_type,
-        )
-        .files(unnested_result_files.clone());
+            unnested_result_files.clone(),
+            entities.clone(),
+        );
         upload!(thorium, results_req, sha256, tool, cmd).await;
     }
     Ok(())
@@ -290,15 +438,21 @@ async fn upload_helper(
                     err
                 ))
             })?;
-            let results_req = OutputRequest::<Sample>::new(
-                sha256.to_string(),
+            // this target is a results file rather than a results directory so it has
+            // no directory of its own to collect entities from
+            let results_req = build_request(
+                cmd,
+                sha256,
                 tool,
                 results_string,
-                cmd.display_type,
+                Vec::new(),
+                HashMap::default(),
             );
             upload!(thorium, results_req, sha256, tool, cmd).await;
         }
     } else {
+        // build the path to the entities found outside of any tool sub-directory
+        let entities_path = path.join(&cmd.entities);
         let mut unnested_result_files = Vec::new();
         let mut tool_subdirs = Vec::new();
         let mut read_dir = tokio::fs::read_dir(&path).await.map_err(|err| {
@@ -316,6 +470,10 @@ async fn upload_helper(
             ))
         })? {
             let inner_path = entry.path();
+            // never sweep the entities file up as a result file attachment
+            if inner_path == entities_path {
+                continue;
+            }
             // check if the entry is a file
             if entry
                 .file_type()
@@ -358,8 +516,19 @@ async fn upload_helper(
             }) {
                 unnested_result_files.swap_remove(index);
             }
+            // collect any entities found outside of a tool sub-directory
+            let entities = match collect_entities(&entities_path).await {
+                Ok(entities) => entities,
+                Err(err) => {
+                    // log an error that we couldn't collect these entities for each tool
+                    for tool in &cmd.tools {
+                        UploadLine::error(sha256, tool, &err);
+                    }
+                    return Ok(());
+                }
+            };
             // upload unnested files to every tool given by the cmd flags
-            upload_tool_flags(thorium, cmd, sha256, path, unnested_result_files).await?;
+            upload_tool_flags(thorium, cmd, sha256, path, unnested_result_files, entities).await?;
         }
     }
     Ok(())
@@ -372,6 +541,13 @@ async fn upload_helper(
 /// * `thorium` - A Thorium client
 /// * `cmd` - The full result upload command/args
 pub async fn upload(thorium: &Thorium, cmd: &UploadResults) -> Result<(), Error> {
+    // the same file can't be both the main results and the entities for those results
+    if cmd.entities == cmd.results {
+        return Err(Error::new(format!(
+            "The entities file name cannot match the results file name: '{}'",
+            cmd.results
+        )));
+    }
     // print the header
     UploadLine::header();
     // crawl over each path and upload them if they are new
@@ -408,7 +584,150 @@ pub async fn upload(thorium: &Thorium, cmd: &UploadResults) -> Result<(), Error>
 
 #[cfg(test)]
 mod tests {
-    use super::is_sha256;
+    use super::{collect_entities, entities_msg, group_entities, is_sha256};
+    use std::collections::HashMap;
+    use std::path::Path;
+    use thorium::models::{Buffer, EntityKinds, EntityMetadataRequest, EntityRequest};
+
+    /// Serialize a list of entity requests the way a tool would write them to disk
+    ///
+    /// # Arguments
+    ///
+    /// * `reqs` - The entity requests to serialize
+    fn serialize_reqs(reqs: Vec<EntityRequest>) -> Vec<u8> {
+        serde_json::to_vec(&reqs).expect("failed to serialize entity requests")
+    }
+
+    /// Build a simple entity request of a specific kind
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name to give this entity
+    /// * `metadata` - The metadata determining what kind of entity this is
+    fn gen_req(name: &str, metadata: EntityMetadataRequest) -> EntityRequest {
+        EntityRequest::new(name, metadata, ["corn"])
+    }
+
+    /// Deserialize the entity requests in a buffer back into a list
+    ///
+    /// # Arguments
+    ///
+    /// * `buff` - The buffer containing the serialized entity requests
+    fn parse_buffer(buff: &Buffer) -> Vec<EntityRequest> {
+        serde_json::from_slice(&buff.data).expect("failed to deserialize entity requests")
+    }
+
+    #[test]
+    fn test_group_entities_empty() {
+        // serialize an empty list of entity requests
+        let data = serialize_reqs(Vec::new());
+        // group our entities by kind
+        let entities = group_entities(&data, Path::new("entities.json")).unwrap();
+        // an empty list must not add any kinds since the API rejects a count of 0
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_group_entities_single_kind() {
+        // serialize a few entity requests that are all the same kind
+        let data = serialize_reqs(vec![
+            gen_req("corn", EntityMetadataRequest::Other),
+            gen_req("maize", EntityMetadataRequest::Other),
+            gen_req("sweetcorn", EntityMetadataRequest::Other),
+        ]);
+        // group our entities by kind
+        let entities = group_entities(&data, Path::new("entities.json")).unwrap();
+        // all 3 entities should be in a single kind
+        assert_eq!(entities.len(), 1);
+        // get the entities for our single kind
+        let (count, buff) = entities.get(&EntityKinds::Other).expect("missing Other");
+        // all 3 of our entities should have been counted
+        assert_eq!(*count, 3);
+        // all 3 of our entities should be in this buffer
+        assert_eq!(parse_buffer(buff).len(), 3);
+    }
+
+    #[test]
+    fn test_group_entities_mixed_kinds() {
+        // serialize some entity requests spread across two different kinds
+        let data = serialize_reqs(vec![
+            gen_req("corn", EntityMetadataRequest::Other),
+            gen_req("tree", EntityMetadataRequest::WindowsProcessTree),
+            gen_req("maize", EntityMetadataRequest::Other),
+        ]);
+        // group our entities by kind
+        let entities = group_entities(&data, Path::new("entities.json")).unwrap();
+        // our entities should have been split across two kinds
+        assert_eq!(entities.len(), 2);
+        // check that each kind has the right count and only contains its own entities
+        for (kind, expected) in [
+            (EntityKinds::Other, 2),
+            (EntityKinds::WindowsProcessTree, 1),
+        ] {
+            // get the entities for this kind
+            let (count, buff) = entities.get(&kind).expect("missing kind");
+            // this kind should have the number of entities we added for it
+            assert_eq!(*count, expected);
+            // deserialize the entities in this kinds buffer
+            let parsed = parse_buffer(buff);
+            // the buffer should agree with the count we sent alongside it
+            assert_eq!(parsed.len(), expected);
+            // every entity in this buffer should actually be of this kind
+            assert!(parsed.iter().all(|req| req.kind() == kind));
+        }
+    }
+
+    #[test]
+    fn test_group_entities_malformed() {
+        // try to group entities from data that isn't valid json
+        let error = group_entities(b"{ not json", Path::new("/corn/entities.json"))
+            .expect_err("malformed entities should be an error");
+        // the error should tell the user which file failed to parse
+        assert!(
+            error
+                .msg()
+                .is_some_and(|msg| msg.contains("/corn/entities.json"))
+        );
+    }
+
+    #[test]
+    fn test_group_entities_not_a_list() {
+        // a single entity request instead of a list of them isn't a valid entities file
+        let data = serde_json::to_vec(&gen_req("corn", EntityMetadataRequest::Other)).unwrap();
+        // try to group entities from a single request
+        group_entities(&data, Path::new("entities.json"))
+            .expect_err("a single entity request should be an error");
+    }
+
+    #[test]
+    fn test_entities_msg_empty() {
+        // a result with no entities should just use our placeholder
+        assert_eq!(entities_msg(&HashMap::default()), "-");
+    }
+
+    #[test]
+    fn test_entities_msg_counts() {
+        // build a map of entities spread across two kinds
+        let entities = HashMap::from([
+            (EntityKinds::Other, (3, Buffer::new("[]"))),
+            (EntityKinds::WindowsProcessTree, (1, Buffer::new("[]"))),
+        ]);
+        // build the message describing these entities
+        let msg = entities_msg(&entities);
+        // the message should report the total entities and how many kinds they span
+        assert_eq!(msg, "4 entities/2 kinds");
+    }
+
+    #[tokio::test]
+    async fn test_collect_entities_missing_file() {
+        // build a path to an entities file that doesn't exist
+        let path = std::env::temp_dir().join("thorctl-test-entities-that-do-not-exist.json");
+        // collecting entities that don't exist should just find no entities
+        let entities = collect_entities(&path)
+            .await
+            .expect("a missing entities file should not be an error");
+        assert!(entities.is_empty());
+    }
 
     #[test]
     fn test_is_sha256_valid() {

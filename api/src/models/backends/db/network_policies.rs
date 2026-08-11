@@ -1,19 +1,19 @@
 //! Logic for interacting with network policies in the database
 
-use futures::{stream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap};
-use tracing::{event, instrument, Level};
+use tracing::{Level, event, instrument};
 use uuid::Uuid;
 
-use super::keys::{NetworkPolicyKeys, SystemKeys};
 use super::GroupedScyllaCursor;
+use super::keys::{NetworkPolicyKeys, SystemKeys};
 use crate::models::system::K8S_CACHE_KEY;
 use crate::models::{
     Group, NetworkPolicy, NetworkPolicyListLine, NetworkPolicyListParams, NetworkPolicyListRow,
     NetworkPolicyRequest, NetworkPolicyRow, NetworkPolicyUpdate,
 };
-use crate::utils::{helpers, ApiError, Shared};
+use crate::utils::{ApiError, Shared, helpers};
 use crate::{bad, conn, log_scylla_err, serialize};
 
 /// Create a `NetworkPolicy` in Scylla

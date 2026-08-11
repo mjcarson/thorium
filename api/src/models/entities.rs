@@ -22,6 +22,7 @@ pub mod filesystem;
 pub mod flags;
 pub mod functions;
 pub mod incident;
+pub mod json;
 pub mod network_activity;
 pub mod pe;
 pub mod processes;
@@ -35,6 +36,7 @@ use flags::Confidence;
 use flags::Flag;
 use functions::{CompiledFunction, CompiledInstruction, DecompiledFunction};
 use incident::{Incident, IncidentRequest};
+use json::JsonEntity;
 use network_activity::NetworkConnection;
 use pe::{PeImportEntity, PeSectionEntity};
 use processes::{WindowsProcessEntity, WindowsProcessTreeEntity};
@@ -147,6 +149,8 @@ cfg_if::cfg_if! {
             pub entropy: Option<f64>,
             /// The functions imported from a PE import's library
             pub functions: Vec<String>,
+            /// The raw json document for a json entity
+            pub json_data: Option<String>,
         }
 
         impl EntityMetadataForm {
@@ -306,6 +310,8 @@ cfg_if::cfg_if! {
             pub entropy: Option<f64>,
             /// The functions to set for a PE import's library
             pub functions: Vec<String>,
+            /// The raw json document to replace a json entity's document with
+            pub json_data: Option<String>,
         }
     }
 }
@@ -694,6 +700,8 @@ pub enum EntityMetadata {
     PeSection(PeSectionEntity),
     /// A library imported by a PE/binary and its functions
     PeImport(PeImportEntity),
+    /// A blob of arbitrary json that can be scanned by sigma rules
+    Json(JsonEntity),
     /// An entity that can't be described by any of the other variants
     #[strum_discriminants(default)]
     Other,
@@ -747,6 +755,8 @@ pub enum EntityMetadataRequest {
     PeSection(PeSectionEntity),
     /// A library imported by a PE/binary and its functions
     PeImport(PeImportEntity),
+    /// A blob of arbitrary json that can be scanned by sigma rules
+    Json(JsonEntity),
     /// An entity that can't be described by any of the other variants
     Other,
 }
@@ -778,6 +788,7 @@ impl EntityMetadataRequest {
             EntityMetadataRequest::DecompiledFunction(decomp) => decomp.add_to_form(form),
             EntityMetadataRequest::PeSection(section) => section.add_to_form(form),
             EntityMetadataRequest::PeImport(import) => import.add_to_form(form),
+            EntityMetadataRequest::Json(json) => json.add_to_form(form),
             // just set our kind to other
             EntityMetadataRequest::Other => Ok(form.text("kind", EntityKinds::Other.as_str())),
         }
@@ -801,6 +812,7 @@ impl EntityMetadataRequest {
             EntityMetadataRequest::DecompiledFunction(_) => EntityKinds::DecompiledFunction,
             EntityMetadataRequest::PeSection(_) => EntityKinds::PeSection,
             EntityMetadataRequest::PeImport(_) => EntityKinds::PeImport,
+            EntityMetadataRequest::Json(_) => EntityKinds::Json,
             EntityMetadataRequest::Other => EntityKinds::Other,
         }
     }
@@ -838,6 +850,16 @@ impl EntityMetadataRequest {
             Self::Incident(incident) => Ok(Some(serde_json::to_string(incident)?)),
             Self::CompiledFunction(func) => Ok(Some(serde_json::to_string(func)?)),
             Self::DecompiledFunction(decomp) => Ok(Some(serde_json::to_string(decomp)?)),
+            Self::Json(json) => {
+                // sigma can only scan top level json objects; the API rejects anything else
+                // at create/update time but tool produced requests skip that check
+                if json.data.is_object() {
+                    // emit the users document verbatim so rules use their own field names
+                    Ok(Some(serde_json::to_string(&json.data)?))
+                } else {
+                    Ok(None)
+                }
+            }
             // PE sections/imports are storage/display only and not scanned with sigma rules
             Self::WindowsProcessTree
             | Self::PeSection(_)
@@ -906,6 +928,10 @@ pub enum IdentifyingEntityInfo<'a> {
     },
     /// A decompiled function
     DecompiledFunction { address: u64, content: &'a String },
+    /// A blob of arbitrary json
+    ///
+    /// The document itself is all we have to go on so it is what identifies us
+    Json { json: &'a JsonEntity },
     /// An entity that cannot be accurately/usefully identified to prevent duplicates
     Unidentifiable,
 }
@@ -940,6 +966,7 @@ impl<'a> From<&'a EntityMetadata> for IdentifyingEntityInfo<'a> {
                 address: decomp.address,
                 content: &decomp.content,
             },
+            EntityMetadata::Json(json) => Self::Json { json },
             // These entities have no useful identifying info
             EntityMetadata::Device(_)
             | EntityMetadata::Vendor(_)
@@ -982,6 +1009,7 @@ impl<'a> From<&'a EntityMetadataRequest> for IdentifyingEntityInfo<'a> {
                 address: decomp.address,
                 content: &decomp.content,
             },
+            EntityMetadataRequest::Json(json) => Self::Json { json },
             // These entities have no useful identifying info
             EntityMetadataRequest::Device(_)
             | EntityMetadataRequest::Vendor(_)
@@ -1010,6 +1038,7 @@ impl EntityKinds {
             Self::NetworkConnection => Some(SigmaRuleAppliesTo::NetworkConnections),
             Self::CompiledFunction => Some(SigmaRuleAppliesTo::CompiledFunctions),
             Self::DecompiledFunction => Some(SigmaRuleAppliesTo::DecompiledFunctions),
+            Self::Json => Some(SigmaRuleAppliesTo::Json),
             // all other entity kinds cannot be scanned with sigma rules
             Self::Device
             | Self::Vendor
@@ -1048,6 +1077,7 @@ impl EntityKinds {
             | Self::Incident
             | Self::CompiledFunction
             | Self::DecompiledFunction
+            | Self::Json
             | Self::Other => &[],
         }
     }
@@ -1061,6 +1091,7 @@ impl From<SigmaRuleAppliesTo> for EntityKinds {
             SigmaRuleAppliesTo::NetworkConnections => EntityKinds::NetworkConnection,
             SigmaRuleAppliesTo::CompiledFunctions => EntityKinds::CompiledFunction,
             SigmaRuleAppliesTo::DecompiledFunctions => EntityKinds::DecompiledFunction,
+            SigmaRuleAppliesTo::Json => EntityKinds::Json,
         }
     }
 }
@@ -1181,6 +1212,7 @@ impl EntityRequest {
             | EntityMetadataRequest::Incident(_)
             | EntityMetadataRequest::CompiledFunction(_)
             | EntityMetadataRequest::DecompiledFunction(_)
+            | EntityMetadataRequest::Json(_)
             | EntityMetadataRequest::Other => None,
         }
     }
@@ -1794,6 +1826,14 @@ pub enum EntityMetadataUpdate {
         /// The imported functions to replace this librarys functions with
         functions: Vec<String>,
     },
+    /// Updates for a json entity
+    Json {
+        /// The json document to replace this entities document with
+        ///
+        /// The whole document is replaced since a json entity is just its document.
+        #[cfg_attr(feature = "api", schema(value_type = Option<Object>))]
+        json_data: Option<serde_json::Value>,
+    },
 }
 
 impl EntityMetadataUpdate {
@@ -1917,10 +1957,16 @@ impl EntityMetadataUpdate {
                 form = crate::multipart_date!(form, "metadata[collection_start]", start);
                 form = crate::multipart_date!(form, "metadata[collection_end]", end);
                 // clear the collection's start/end window if requested
-                form =
-                    crate::multipart_text_to_string!(form, "metadata[clear_collection_start]", clear_start);
-                form =
-                    crate::multipart_text_to_string!(form, "metadata[clear_collection_end]", clear_end);
+                form = crate::multipart_text_to_string!(
+                    form,
+                    "metadata[clear_collection_start]",
+                    clear_start
+                );
+                form = crate::multipart_text_to_string!(
+                    form,
+                    "metadata[clear_collection_end]",
+                    clear_end
+                );
             }
             EntityMetadataUpdate::FileSystem {
                 mut add_tools,
@@ -2011,7 +2057,11 @@ impl EntityMetadataUpdate {
                     remove_applies_to
                 );
                 // sigma actions are serialized to json per element
-                crate::multipart_list_serialize!(form, "metadata[add_sigma_actions][]", add_actions);
+                crate::multipart_list_serialize!(
+                    form,
+                    "metadata[add_sigma_actions][]",
+                    add_actions
+                );
                 // action indices to remove are sent as plain integers
                 for index in remove_actions {
                     form = form.text("metadata[remove_sigma_actions][]", index.to_string());
@@ -2116,6 +2166,14 @@ impl EntityMetadataUpdate {
             EntityMetadataUpdate::PeImport { mut functions } => {
                 // replace this library's imported functions
                 form = crate::multipart_list!(form, "metadata[functions][]", functions);
+            }
+            EntityMetadataUpdate::Json { json_data } => {
+                // replace this entities document if a new one was set
+                if let Some(json_data) = json_data {
+                    // serialize our new document back to its compact string form
+                    let raw = serde_json::to_string(&json_data)?;
+                    form = form.text("metadata[json_data]", raw);
+                }
             }
         }
         Ok(form)

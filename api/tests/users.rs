@@ -1,7 +1,7 @@
 //! Tests the users routes in Thorium
 
-use thorium::test_utilities::{self, generators};
 use thorium::Error;
+use thorium::test_utilities::{self, generators};
 
 #[tokio::test]
 async fn delete() -> Result<(), Error> {

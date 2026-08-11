@@ -288,3 +288,7 @@ path = "tests/entities/compiled_function.rs"
 [[test]]
 name = "entities_decompiled_function"
 path = "tests/entities/decompiled_function.rs"
+
+[[test]]
+name = "entities_json"
+path = "tests/entities/json.rs"

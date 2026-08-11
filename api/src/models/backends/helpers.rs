@@ -1,5 +1,7 @@
 //! Helpers for the backends level of the Thorium API
 
+use axum::extract::multipart::Field;
+use bytesize::ByteSize;
 use uuid::Uuid;
 
 use crate::bad;
@@ -148,6 +150,45 @@ pub fn parse_bracket_segments(input: &str) -> Result<Vec<&str>, ApiError> {
         }
     }
     Ok(segments)
+}
+
+/// Read a multipart fields text contents while enforcing a max byte limit
+///
+/// [`Field::text`] buffers the whole field before we ever get a chance to look at its
+/// size and the API disables axum's default body limit, so checking a fields length
+/// after reading it is a policy limit rather than a memory guard. This reads the field
+/// one chunk at a time and bails the moment it crosses `max`.
+///
+/// # Errors
+///
+/// Returns an error if the field is larger than `max` or is not valid utf8
+///
+/// # Arguments
+///
+/// * `field` - The multipart field to read
+/// * `max` - The maximum number of bytes this field is allowed to contain
+pub async fn text_limited(mut field: Field<'_>, max: ByteSize) -> Result<String, ApiError> {
+    // cast our limit down to a usize so we can compare it against our buffers length
+    let max_bytes = usize::try_from(max.as_u64()).unwrap_or(usize::MAX);
+    // build a buffer to read this fields chunks into
+    let mut buff: Vec<u8> = Vec::new();
+    // read this field one chunk at a time so an oversized field is dropped early
+    while let Some(chunk) = field.chunk().await? {
+        // reject this field as soon as it crosses our limit
+        if buff.len() + chunk.len() > max_bytes {
+            return bad!(format!(
+                "Field '{}' is larger than the max allowed size of {max}",
+                field.name().unwrap_or("<unnamed>"),
+            ));
+        }
+        // this chunk still fits so add it to our buffer
+        buff.extend_from_slice(&chunk);
+    }
+    // our field is within our limit so convert it to a string
+    match String::from_utf8(buff) {
+        Ok(text) => Ok(text),
+        Err(error) => bad!(format!("Field is not valid utf8: {error}")),
+    }
 }
 
 #[cfg(test)]

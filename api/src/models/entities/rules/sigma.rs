@@ -3,11 +3,21 @@ use linearize::Linearize;
 use sigma_rust::rule::Level;
 use std::str::FromStr;
 
-use crate::models::{Confidence, Flag, InvalidEnum};
+use crate::models::{Confidence, Flag};
 
 /// The different kinds of data this rule should be run on
 #[derive(
-    Debug, Clone, Copy, Serialize, Deserialize, strum::Display, PartialEq, Eq, Hash, Linearize,
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+    PartialEq,
+    Eq,
+    Hash,
+    Linearize,
 )]
 #[cfg_attr(feature = "scylla-utils", derive(thorium_derive::ScyllaStoreAsStr))]
 #[cfg_attr(feature = "api", derive(utoipa::ToSchema))]
@@ -20,33 +30,19 @@ pub enum SigmaRuleAppliesTo {
     CompiledFunctions,
     /// Apply this rule to a decompiled function
     DecompiledFunctions,
+    /// Apply this rule to arbitrary json documents
+    Json,
 }
 
 impl SigmaRuleAppliesTo {
-    /// Convert this [`RuleAppliesTo`] into a str
+    /// Convert this [`SigmaRuleAppliesTo`] into a str
     pub fn as_str(&self) -> &'static str {
         match self {
             SigmaRuleAppliesTo::WindowsProcesses => "WindowsProcesses",
             SigmaRuleAppliesTo::NetworkConnections => "NetworkConnections",
             SigmaRuleAppliesTo::CompiledFunctions => "CompiledFunctions",
             SigmaRuleAppliesTo::DecompiledFunctions => "DecompiledFunctions",
-        }
-    }
-}
-
-impl FromStr for SigmaRuleAppliesTo {
-    type Err = InvalidEnum;
-
-    /// Cast a str to an [`RuleAppliesTo`]
-    ///
-    /// # Arguments
-    ///
-    /// * `val` - The str to cast
-    fn from_str(val: &str) -> Result<Self, Self::Err> {
-        match val {
-            "WindowsProcesses" => Ok(SigmaRuleAppliesTo::WindowsProcesses),
-            "NetworkConnections" => Ok(SigmaRuleAppliesTo::NetworkConnections),
-            _ => Err(InvalidEnum(format!("Unknown enum variant: {val}"))),
+            SigmaRuleAppliesTo::Json => "Json",
         }
     }
 }

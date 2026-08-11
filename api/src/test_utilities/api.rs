@@ -280,6 +280,12 @@ async fn init_s3_buckets(s3_conf: &S3, conf: &Conf) -> Result<(), Error> {
 /// A write-once cell for the admin token, written to when the API is stood up for the first time
 static ADMIN_TOKEN: OnceCell<String> = OnceCell::const_new();
 
+/// How many times to try to bootstrap the test API before giving up
+///
+/// We sleep for a second between attempts so this is also roughly how many seconds we
+/// give the API to finish its initial consistency scan and start accepting connections.
+const BOOTSTRAP_ATTEMPTS: u32 = 300;
+
 /// Bootstrap a test API, running the API on another thread and returning
 /// a token for authenticating with the running API
 async fn bootstrap_test_api() -> Result<String, Error> {
@@ -298,7 +304,7 @@ async fn bootstrap_test_api() -> Result<String, Error> {
         // spawn our api
         rt.block_on(async move { crate::axum(CONF.clone()).await });
     });
-    // try to bootstrap for 60 seconds until it works
+    // try to bootstrap once a second until it works
     let mut attempts = 0;
     // start trying to bootstrap
     let resp = loop {
@@ -318,12 +324,21 @@ async fn bootstrap_test_api() -> Result<String, Error> {
         match attempt {
             Ok(resp) => break resp,
             // this attempt failed so sleep for 1 second
-            Err(_) => {
+            Err(error) => {
                 // increment our attempts by 1
                 attempts += 1;
                 // check if we have used up all of our attempts yet
-                if attempts == 300 {
-                    return Err(Error::new("Failed to bootstrap Thorium"));
+                if attempts == BOOTSTRAP_ATTEMPTS {
+                    // hand back the last error we saw so the failure can be diagnosed
+                    return Err(Error::new(format!(
+                        "Failed to bootstrap Thorium after {BOOTSTRAP_ATTEMPTS} attempts: {error}"
+                    )));
+                }
+                // log our progress occasionally so a slow start doesn't look like a hang
+                if attempts % 30 == 0 {
+                    eprintln!(
+                        "Still waiting on the test API after {attempts} bootstrap attempts: {error}"
+                    );
                 }
                 // sleep for 1 second
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;

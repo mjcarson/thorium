@@ -20,15 +20,15 @@ use crate::models::{
     EntityMetadataUpdate, EntityRequest, EphemeralDependencySettings, FileSystemEntity,
     FileSystemFolderEntity, FilesHandler, Flag, GenericCacheDependencySettings, GenericJobArgs,
     GroupRequest, GroupUsersRequest, ImageArgs, ImageLifetime, ImageRequest, ImageScaler,
-    ImageVersion, IncidentRequest, IpBlock, IpBlockRaw, Ipv4Block, Ipv6Block, Kvm, KwargDependency,
-    NetworkPolicyCustomK8sRule, NetworkPolicyCustomLabel, NetworkPolicyPort, NetworkPolicyRequest,
-    NetworkPolicyRuleRaw, NetworkProtocol, NodeRegistration, OriginRequest, OutputCollection,
-    OutputDisplayType, PeImportEntity, PeSectionEntity, Pipeline, PipelineRequest, Pools,
-    ReactionCreation, ReactionRequest, RepoCheckout, RepoDependencySettings, RepoRequest,
-    Resources, ResourcesRequest, ResultDependencySettings, SampleDependencySettings, SampleRequest,
-    SigmaRule, SigmaRuleAppliesTo, StageLogsAdd, TagDependencySettings, UserCreate, UserRole,
-    VendorEntityRequest, Volume, VolumeTypes, WindowsProcessEntity, WorkerDeleteMap,
-    WorkerRegistrationList,
+    ImageVersion, IncidentRequest, IpBlock, IpBlockRaw, Ipv4Block, Ipv6Block, JsonEntity, Kvm,
+    KwargDependency, NetworkPolicyCustomK8sRule, NetworkPolicyCustomLabel, NetworkPolicyPort,
+    NetworkPolicyRequest, NetworkPolicyRuleRaw, NetworkProtocol, NodeRegistration, OriginRequest,
+    OutputCollection, OutputDisplayType, PeImportEntity, PeSectionEntity, Pipeline,
+    PipelineRequest, Pools, ReactionCreation, ReactionRequest, RepoCheckout,
+    RepoDependencySettings, RepoRequest, Resources, ResourcesRequest, ResultDependencySettings,
+    SampleDependencySettings, SampleRequest, SigmaRule, SigmaRuleAppliesTo, StageLogsAdd,
+    TagDependencySettings, UserCreate, UserRole, VendorEntityRequest, Volume, VolumeTypes,
+    WindowsProcessEntity, WorkerDeleteMap, WorkerRegistrationList,
 };
 use crate::test_utilities;
 use crate::{Error, Thorium};
@@ -1358,6 +1358,29 @@ pub fn gen_sigma_meta() -> EntityMetadataRequest {
     EntityMetadataRequest::SigmaRule(rule)
 }
 
+/// Generate metadata for a sigma rule entity that targets every kind of data
+///
+/// The API's old hand written `FromStr` for [`SigmaRuleAppliesTo`] had no arms for
+/// `CompiledFunctions` or `DecompiledFunctions`, so a rule targeting either of them
+/// was rejected with a 400 on create. This exercises all of the variants so that
+/// gap can't come back.
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_sigma_meta_all_applies_to() -> EntityMetadataRequest {
+    // build a validated sigma rule from our test rule
+    let mut rule = SigmaRule::new(TEST_SIGMA_RULE, SigmaRuleAppliesTo::WindowsProcesses)
+        .expect("failed to build test sigma rule");
+    // target the rest of the kinds of data a sigma rule can apply too
+    rule.applies_to.extend([
+        SigmaRuleAppliesTo::NetworkConnections,
+        SigmaRuleAppliesTo::CompiledFunctions,
+        SigmaRuleAppliesTo::DecompiledFunctions,
+        SigmaRuleAppliesTo::Json,
+    ]);
+    // build our sigma rule metadata request
+    EntityMetadataRequest::SigmaRule(rule)
+}
+
 /// Generate metadata for a random network connection entity
 #[allow(dead_code)]
 #[must_use]
@@ -1471,6 +1494,20 @@ pub fn gen_pe_import_meta() -> EntityMetadataRequest {
             .function(gen_string(gen_int!(4, 16)))
             .function(gen_string(gen_int!(4, 16))),
     )
+}
+
+/// Generate metadata for a random json entity
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_json_meta() -> EntityMetadataRequest {
+    // build a nested document so we also cover sigma's dotted field traversal
+    EntityMetadataRequest::Json(JsonEntity::new(serde_json::json!({
+        "host": gen_string(gen_int!(4, 16)),
+        "process": {
+            "name": "powershell.exe",
+            "pid": gen_int!(1, 65535),
+        },
+    })))
 }
 
 /// Generate metadata for a random incident entity
@@ -1823,6 +1860,22 @@ pub fn gen_pe_import_update(_existing: &Entity) -> EntityMetadataUpdate {
     // build a PE import update that replaces the imported functions
     EntityMetadataUpdate::PeImport {
         functions: vec![gen_string(gen_int!(4, 16)), gen_string(gen_int!(4, 16))],
+    }
+}
+
+/// Generate a json metadata update replacing the whole document
+#[allow(dead_code)]
+#[must_use]
+pub fn gen_json_update(_existing: &Entity) -> EntityMetadataUpdate {
+    // build a json update that swaps in an entirely new document
+    EntityMetadataUpdate::Json {
+        json_data: Some(serde_json::json!({
+            "replaced": gen_string(gen_int!(4, 16)),
+            "process": {
+                "name": "cmd.exe",
+                "pid": gen_int!(1, 65535),
+            },
+        })),
     }
 }
 

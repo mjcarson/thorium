@@ -116,12 +116,11 @@ async fn sample_with_results(client: &Thorium) -> Result<(String, String, Uuid),
     // upload a sample to attach results too
     let (group, sha256) = sample(client).await?;
     // build a result with two result files at different depths
-    let req = OutputRequest::new(sha256.clone(), TOOL, RESULT, OutputDisplayType::String).buffers(
-        vec![
+    let req =
+        OutputRequest::new(sha256.clone(), TOOL, RESULT, OutputDisplayType::String).buffers(vec![
             Buffer::new("mcp-file-one").name("one.txt"),
             Buffer::new("mcp-file-two").name("nested/two.txt"),
-        ],
-    );
+        ]);
     // send this result to the API
     let resp = client.files.create_result(req).await?;
     Ok((group, sha256, resp.id))
@@ -190,7 +189,10 @@ async fn get_sample() -> Result<(), thorium::Error> {
     is!(result.is_error, Some(false));
     // the structured content should describe the sample we uploaded
     let structured = structured(&result)?;
-    is!(structured.get("sha256").and_then(|v| v.as_str()), Some(sha256.as_str()));
+    is!(
+        structured.get("sha256").and_then(|v| v.as_str()),
+        Some(sha256.as_str())
+    );
     // the text content should be the same json
     let parsed: serde_json::Value = serde_json::from_str(content_text(&result, 0)?)?;
     is!(&parsed, structured);
@@ -332,7 +334,10 @@ async fn list_images() -> Result<(), thorium::Error> {
     // this call should have succeeded
     is!(result.is_error, Some(false));
     // pull the image names out of our structured content
-    let names = match structured(&result)?.get("data").and_then(|data| data.as_array()) {
+    let names = match structured(&result)?
+        .get("data")
+        .and_then(|data| data.as_array())
+    {
         Some(data) => data
             .iter()
             .filter_map(|image| image.get("name").and_then(|name| name.as_str()))
@@ -369,7 +374,10 @@ async fn list_pipelines() -> Result<(), thorium::Error> {
     // this call should have succeeded
     is!(result.is_error, Some(false));
     // pull the pipeline names out of our structured content
-    let names = match structured(&result)?.get("data").and_then(|data| data.as_array()) {
+    let names = match structured(&result)?
+        .get("data")
+        .and_then(|data| data.as_array())
+    {
         Some(data) => data
             .iter()
             .filter_map(|pipe| pipe.get("name").and_then(|name| name.as_str()))
@@ -428,12 +436,7 @@ async fn get_sample_unknown_sha256() -> Result<(), thorium::Error> {
     // build a chat to call mcp tools with
     let chat = thorchat(&token).await?;
     // ask for a sample that was never uploaded
-    let result = call_one(
-        &chat,
-        "get_sample",
-        object!({"sha256": "0".repeat(64)}),
-    )
-    .await;
+    let result = call_one(&chat, "get_sample", object!({"sha256": "0".repeat(64)})).await;
     // a missing sample should map to a resource not found error
     mcp_fail(result, ErrorCode::RESOURCE_NOT_FOUND, Some("not found"))
 }
@@ -628,11 +631,10 @@ async fn ask_runs_the_tool_loop() -> Result<(), thorium::Error> {
     // build a chat to ask questions of
     let mut chat = thorchat(&token).await?;
     // script our ai to call a tool and then answer once it has the result
-    chat.ai
-        .push(AiResponse::CallTool(vec![call(
-            "get_sample",
-            object!({"sha256": sha256.clone()}),
-        )]));
+    chat.ai.push(AiResponse::CallTool(vec![call(
+        "get_sample",
+        object!({"sha256": sha256.clone()}),
+    )]));
     chat.ai
         .push(AiResponse::Response(Some("all done".to_owned())));
     // ask our question
@@ -664,16 +666,14 @@ async fn ask_loops_until_response() -> Result<(), thorium::Error> {
     // build a chat to ask questions of
     let mut chat = thorchat(&token).await?;
     // script two rounds of tool calls before our ai finally answers
-    chat.ai
-        .push(AiResponse::CallTool(vec![call(
-            "get_sample",
-            object!({"sha256": sha256.clone()}),
-        )]));
-    chat.ai
-        .push(AiResponse::CallTool(vec![call(
-            "get_sample_results",
-            object!({"sha256": sha256.clone()}),
-        )]));
+    chat.ai.push(AiResponse::CallTool(vec![call(
+        "get_sample",
+        object!({"sha256": sha256.clone()}),
+    )]));
+    chat.ai.push(AiResponse::CallTool(vec![call(
+        "get_sample_results",
+        object!({"sha256": sha256.clone()}),
+    )]));
     chat.ai
         .push(AiResponse::Response(Some("two rounds".to_owned())));
     // ask our question

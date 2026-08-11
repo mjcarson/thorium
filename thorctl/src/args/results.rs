@@ -62,6 +62,11 @@ thorctl results upload --results my_result_file --display-type string ./abcd1234
 # Restrict results visibility to specific groups
 thorctl results upload -G example-group -t my-tool --display-type string ./abcd1234ef5678...
 
+# Any entities the tool discovered are read from a file named 'entities.json' in each
+# results directory containing a JSON list of entity requests; use a custom name if the
+# tool already emits a result file called 'entities.json'
+thorctl results upload --entities found_entities.json -t my-tool --display-type json ./abcd1234ef5678...
+
 # Perform a dry run to see what would be uploaded without actually uploading
 thorctl results upload --display-type string --dry-run ./results
 "#
@@ -272,6 +277,18 @@ pub struct UploadResults {
     /// an empty results file.
     #[clap(short, long, default_value = "results", value_parser = NonEmptyStringValueParser::new())]
     pub results: String,
+    /// The name of the file within results directories containing the entities the tool
+    /// discovered, formatted as a JSON list of entity requests
+    ///
+    /// Results directories without this file simply upload no entities. The entities file
+    /// is never also uploaded as a result file attachment, so set this to a different name
+    /// if a tool emits a result file called 'entities.json'.
+    ///
+    /// Entities are only collected from results directories; targets that are a results
+    /// file are uploaded without any entities. Entities carry their own groups in the JSON
+    /// so the '--result-groups/-G' flag does not apply to them.
+    #[clap(short, long, default_value = "entities.json", value_parser = NonEmptyStringValueParser::new())]
+    pub entities: String,
     /// The display type to use when rendering results
     ///
     /// This is applied to *all* results for *all* tools

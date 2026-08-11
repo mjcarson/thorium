@@ -69,9 +69,11 @@ pub(crate) enum ResendVerificationResponse {
 impl IntoResponse for ResendVerificationResponse {
     fn into_response(self) -> Response {
         match self {
-            ResendVerificationResponse::Sent { retry_after } => {
-                (StatusCode::OK, [(header::RETRY_AFTER, retry_after.to_string())]).into_response()
-            }
+            ResendVerificationResponse::Sent { retry_after } => (
+                StatusCode::OK,
+                [(header::RETRY_AFTER, retry_after.to_string())],
+            )
+                .into_response(),
             ResendVerificationResponse::Cooldown { retry_after } => (
                 StatusCode::TOO_MANY_REQUESTS,
                 [(header::RETRY_AFTER, retry_after.to_string())],
@@ -117,7 +119,10 @@ async fn resend_email_verification(
     // an already-verified user can't (and doesn't need to) resend — return a clear conflict before
     // the cooldown check so the response isn't shadowed by a misleading "wait N seconds" message
     if user.verified {
-        return conflict!(format!("{} has already verified their email", user.username));
+        return conflict!(format!(
+            "{} has already verified their email",
+            user.username
+        ));
     }
     // enforce the cooldown here so we can report the remaining time via the Retry-After header; this
     // lets the UI render an accurate countdown instead of scraping it out of an error message

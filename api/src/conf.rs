@@ -1978,6 +1978,11 @@ fn default_entities_earliest() -> i64 {
     1_748_736_000
 }
 
+/// Helps serde default the max size of a json entity's document to 1 MiB
+fn default_entities_max_json_size() -> ByteSize {
+    ByteSize::mib(1)
+}
+
 /// The settings for entities in Thorium
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 pub struct Entities {
@@ -1987,6 +1992,15 @@ pub struct Entities {
     /// The earliest we'll see an entity as a Unix timestamp
     #[serde(default = "default_entities_earliest")]
     pub earliest: i64,
+    /// The maximum size the raw json document of a json entity can be;
+    /// accepts M, MB, MiB, or equivalents for KB and GB
+    ///
+    /// Json entity documents are held entirely in memory while they are parsed,
+    /// stored, and scanned by sigma rules so keep this small.
+    #[serde(default = "default_entities_max_json_size")]
+    #[schemars(example = "1 MiB")]
+    #[schemars(schema_with = "bytesize_schema_gen")]
+    pub max_json_size: ByteSize,
 }
 
 impl Default for Entities {
@@ -1994,6 +2008,7 @@ impl Default for Entities {
         Self {
             partition_size: default_entities_partition_size(),
             earliest: default_entities_earliest(),
+            max_json_size: default_entities_max_json_size(),
         }
     }
 }

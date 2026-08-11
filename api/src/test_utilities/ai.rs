@@ -18,8 +18,9 @@
 //! crate shares that exposure.
 
 use rmcp::model::{
-    CallToolRequestParam, CallToolResult, ClientCapabilities, ClientInfo, ErrorCode, Implementation,
-    InitializeRequestParam, JsonObject, ListToolsResult, ProtocolVersion, ResourceContents, Tool,
+    CallToolRequestParam, CallToolResult, ClientCapabilities, ClientInfo, ErrorCode,
+    Implementation, InitializeRequestParam, JsonObject, ListToolsResult, ProtocolVersion,
+    ResourceContents, Tool,
 };
 use rmcp::service::{RunningService, ServiceError};
 use rmcp::transport::StreamableHttpClientTransport;
@@ -112,10 +113,7 @@ impl AiSupport for ScriptedAi {
     ///
     /// * `conf` - A Thorctl config, unused by this implementation
     /// * `context` - The shared context for ai chat
-    async fn setup(
-        _conf: &CtlConf,
-        context: &SharedThorChatContext<Self>,
-    ) -> Result<Self, Error> {
+    async fn setup(_conf: &CtlConf, context: &SharedThorChatContext<Self>) -> Result<Self, Error> {
         Ok(ScriptedAi {
             advertised: Vec::default(),
             script: VecDeque::default(),

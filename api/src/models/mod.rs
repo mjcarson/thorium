@@ -46,6 +46,7 @@ pub use entities::filesystem::{FileSystemEntity, FileSystemEntityBuilder, FileSy
 pub use entities::flags::{Confidence, Flag};
 pub use entities::functions::{CompiledFunction, CompiledInstruction, DecompiledFunction};
 pub use entities::incident::{Incident, IncidentRequest};
+pub use entities::json::JsonEntity;
 pub use entities::pe::{PeImportEntity, PeSectionEntity};
 pub use entities::processes::{WindowsProcessEntity, WindowsProcessTreeEntity};
 pub use entities::rules::{SigmaRule, SigmaRuleAppliesTo};

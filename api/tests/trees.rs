@@ -47,7 +47,10 @@ fn gen_child(group: &str, parent: &str) -> SampleRequest {
     // build a sample request with random data that was unpacked from our parent
     SampleRequest::new_buffer(Buffer::new(random_buffer()), vec![group])
         .description("tree test child")
-        .origin(OriginRequest::unpacked(parent, Some("tree-tests".to_owned())))
+        .origin(OriginRequest::unpacked(
+            parent,
+            Some("tree-tests".to_owned()),
+        ))
 }
 
 /// Upload a number of children unpacked from a single parent sample
@@ -514,7 +517,11 @@ async fn process_tree() -> Result<(), thorium::Error> {
     // build a realistic windows process tree
     let mut builder =
         WindowsProcessTreeEntity::builder("tree-tests-process-tree").tool("volatility");
-    builder.add_mut(WindowsProcessEntity::new(4).name("System").image_path("System"));
+    builder.add_mut(
+        WindowsProcessEntity::new(4)
+            .name("System")
+            .image_path("System"),
+    );
     builder.add_mut(
         WindowsProcessEntity::new(368)
             .parent_pid(4)
@@ -942,9 +949,12 @@ async fn grow_entities() -> Result<(), thorium::Error> {
     // upload a memory dump sample to hang our process tree on
     let dump = client.files.create(gen_root(&group)).await?.sha256;
     // build a small windows process tree to grow into
-    let mut builder =
-        WindowsProcessTreeEntity::builder("tree-tests-grow-tree").tool("volatility");
-    builder.add_mut(WindowsProcessEntity::new(4).name("System").image_path("System"));
+    let mut builder = WindowsProcessTreeEntity::builder("tree-tests-grow-tree").tool("volatility");
+    builder.add_mut(
+        WindowsProcessEntity::new(4)
+            .name("System")
+            .image_path("System"),
+    );
     builder.add_mut(
         WindowsProcessEntity::new(368)
             .parent_pid(4)

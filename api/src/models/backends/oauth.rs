@@ -250,7 +250,8 @@ impl OAuthUserCreate {
         let subject = format!("Link Thorium account to new OAuth provider: {provider}");
         // get the expiration of this link in a human readable format; humantime renders e.g. "1day",
         // so insert a space between each value and its unit so it reads "1 day"
-        let raw = humantime::format_duration(std::time::Duration::from_secs(oauth.link_expire)).to_string();
+        let raw = humantime::format_duration(std::time::Duration::from_secs(oauth.link_expire))
+            .to_string();
         // build a human time formatted string with spaces
         let mut ttl = String::with_capacity(raw.len() + 1);
         // keep track the character before our current one

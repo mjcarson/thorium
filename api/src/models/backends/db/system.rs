@@ -2,14 +2,14 @@ use bb8_redis::redis::cmd;
 use chrono::prelude::*;
 use futures::stream::{self, StreamExt};
 use std::collections::{HashMap, HashSet};
-use tracing::{event, instrument, Level};
+use tracing::{Level, event, instrument};
 use uuid::Uuid;
 
 use super::keys::{self, StreamKeys, SystemKeys, UserKeys};
-use super::{helpers, SimpleScyllaCursor};
+use super::{SimpleScyllaCursor, helpers};
 use crate::models::system::{
-    WorkerStatus, BARE_METAL_CACHE_KEY, DEFAULT_IFF, EXTERNAL_CACHE_KEY, K8S_CACHE_KEY,
-    KVM_CACHE_KEY, WINDOWS_CACHE_KEY,
+    BARE_METAL_CACHE_KEY, DEFAULT_IFF, EXTERNAL_CACHE_KEY, K8S_CACHE_KEY, KVM_CACHE_KEY,
+    WINDOWS_CACHE_KEY, WorkerStatus,
 };
 use crate::models::{
     ApiCursor, GroupStats, ImageScaler, Node, NodeGetParams, NodeHealth, NodeListLine,

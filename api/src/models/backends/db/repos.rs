@@ -7,7 +7,7 @@ use itertools::Itertools;
 use scylla::response::query_result::QueryResult;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use tracing::{event, instrument, Level};
+use tracing::{Level, event, instrument};
 use uuid::Uuid;
 
 use super::{ExistsCursor, ScyllaCursor};
@@ -17,7 +17,7 @@ use crate::models::{
     RepoCheckout, RepoListLine, RepoListParams, RepoRequest, RepoRow, RepoScheme, RepoSubmission,
     RepoSubmissionChunk, RepoUrlComponents, TagRequest, TagType, User,
 };
-use crate::utils::{helpers, ApiError, Shared};
+use crate::utils::{ApiError, Shared, helpers};
 use crate::{
     bad, internal_err, log_scylla_err, not_found, same_vec, serialize, serialize_opt, unauthorized,
 };
@@ -1046,7 +1046,7 @@ async fn is_ambiguous(
                 return not_found!(format!(
                     "Commitish {} does not exist for {}",
                     commitish, repo
-                ))
+                ));
             }
         };
         // if we have a previous kind then confirm they are still the same

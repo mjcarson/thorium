@@ -26,8 +26,8 @@ use crate::models::{
     DecompiledFunction, DeviceEntity, Entity, EntityForm, EntityKinds, EntityListLine,
     EntityListParams, EntityListRow, EntityMetadata, EntityMetadataUpdateForm, EntityResponse,
     EntityRow, EntityUpdateForm, FileSystemEntity, FileSystemFolderEntity, Flag, Group,
-    GroupAllowAction, ListableAssociation, PeImportEntity, PeSectionEntity, SigmaRule, TagListRow,
-    TagMap, TagType, TreeSupport, User, VendorEntity, WindowsProcessEntity,
+    GroupAllowAction, JsonEntity, ListableAssociation, PeImportEntity, PeSectionEntity, SigmaRule,
+    TagListRow, TagMap, TagType, TreeSupport, User, VendorEntity, WindowsProcessEntity,
     WindowsProcessTreeEntity,
 };
 use crate::utils::{ApiError, Shared};
@@ -66,7 +66,7 @@ impl Entity {
         // crawl the multipart form
         while let Some(field) = form.next_field().await? {
             // try to consume the field
-            if let Some(image_field) = entity_form.add(field).await? {
+            if let Some(image_field) = entity_form.add(field, shared).await? {
                 // get the base path for this entity
                 let base_path = Self::build_graphic_base_path(&entity_id);
                 // upload the graphic to S3
@@ -239,11 +239,15 @@ impl Entity {
                 }
             }
             // other and windows process trees have no taggable data
+            //
+            // json entities are deliberately not tagged since exploding an arbitrary user
+            // supplied document into tags would give us unbounded tag cardinality
             EntityMetadata::Other
             | EntityMetadata::Collection(_)
             | EntityMetadata::WindowsProcessTree(_)
             | EntityMetadata::CompiledFunction(_)
-            | EntityMetadata::DecompiledFunction(_) => (),
+            | EntityMetadata::DecompiledFunction(_)
+            | EntityMetadata::Json(_) => (),
         }
         Ok(())
     }
@@ -310,6 +314,7 @@ impl Entity {
                 | EntityMetadata::Incident(_)
                 | EntityMetadata::CompiledFunction(_)
                 | EntityMetadata::DecompiledFunction(_)
+                | EntityMetadata::Json(_)
                 | EntityMetadata::NetworkConnection(_) => (),
             }
         }
@@ -548,7 +553,9 @@ impl Entity {
                 // add new tools that decompiled this function
                 decomp.tools.append(&mut form.add_tools);
                 // remove any old tools from this function
-                decomp.tools.retain(|tool| !form.remove_tools.contains(tool));
+                decomp
+                    .tools
+                    .retain(|tool| !form.remove_tools.contains(tool));
             }
             EntityMetadata::PeSection(section) => {
                 // update any section details that were set in the form
@@ -561,6 +568,13 @@ impl Entity {
                 // replace the imported functions if a new list was provided
                 if !form.functions.is_empty() {
                     import.functions = std::mem::take(&mut form.functions);
+                }
+            }
+            EntityMetadata::Json(json) => {
+                // replace this entities whole document if a new one was provided
+                if let Some(raw) = &form.json_data {
+                    // parse and validate our new document before we swap it in
+                    *json = JsonEntity::parse_and_validate(raw, shared)?;
                 }
             }
             // other kinds have no metadata to update
@@ -594,7 +608,7 @@ impl Entity {
         // crawl the multipart form
         while let Some(field) = form.next_field().await? {
             // try to consume the field
-            if let Some(image_field) = update_form.add(field).await? {
+            if let Some(image_field) = update_form.add(field, shared).await? {
                 // get the base path for this entity
                 let base_path = Self::build_graphic_base_path_from_self(&self);
                 // upload the graphic to S3
@@ -866,6 +880,7 @@ impl Entity {
             | EntityMetadata::Incident(_)
             | EntityMetadata::CompiledFunction(_)
             | EntityMetadata::DecompiledFunction(_)
+            | EntityMetadata::Json(_)
             | EntityMetadata::Other => (),
         }
     }
@@ -909,6 +924,7 @@ impl EntityMetadata {
             EntityMetadata::Incident(incident) => Some(serialize!(incident)),
             EntityMetadata::CompiledFunction(func) => Some(serialize!(func)),
             EntityMetadata::DecompiledFunction(decomp) => Some(serialize!(decomp)),
+            EntityMetadata::Json(json) => Some(serialize!(json)),
             EntityMetadata::Other => None,
         };
         Ok((self.into(), data))
@@ -930,7 +946,12 @@ impl EntityForm {
     /// # Arguments
     ///
     /// * `field` - The field to try to add
-    pub async fn add<'a>(&'a mut self, field: Field<'a>) -> Result<Option<Field<'a>>, ApiError> {
+    /// * `shared` - Shared Thorium objects
+    pub async fn add<'a>(
+        &'a mut self,
+        field: Field<'a>,
+        shared: &Shared,
+    ) -> Result<Option<Field<'a>>, ApiError> {
         // get the name of this field
         if let Some(name) = field.name().map(ToOwned::to_owned) {
             // iterate over the segments ('<NAME>[<KEY1>][<KEY2>]') in the field name
@@ -959,8 +980,10 @@ impl EntityForm {
                     self.kind = Some(cast);
                 }
                 "metadata" => {
-                    name_segments_iter =
-                        self.metadata.add(field, &name, name_segments_iter).await?;
+                    name_segments_iter = self
+                        .metadata
+                        .add(field, &name, name_segments_iter, shared)
+                        .await?;
                 }
                 // this could be a list field
                 maybe_list => {
@@ -1113,11 +1136,13 @@ impl EntityMetadataForm {
     /// * `field` - The field to try to add
     /// * `name` - The name of the field to add
     /// * `name_segments` - An iterator over the segments of the field name
+    /// * `shared` - Shared Thorium objects
     pub async fn add<'a, I: Iterator<Item = &'a str>>(
         &'a mut self,
         field: Field<'a>,
         name: &str,
         mut name_segments: I,
+        shared: &Shared,
     ) -> Result<I, ApiError> {
         match name_segments.next().ok_or(bad_internal!(
             "Invalid entity metadata field: metadata field name is missing".to_string()
@@ -1215,6 +1240,12 @@ impl EntityMetadataForm {
             "decompilation_content" => self.decompilation_content = Some(field.text().await?),
             // the incident specific fields
             "cover_term" => self.cover_term = Some(field.text().await?),
+            // the json specific fields
+            "json_data" => {
+                // stream this document in so we drop it as soon as it gets too large
+                let max = shared.config.thorium.entities.max_json_size;
+                self.json_data = Some(super::helpers::text_limited(field, max).await?);
+            }
             maybe_list => {
                 match maybe_list {
                     "urls" => {
@@ -1322,6 +1353,7 @@ impl EntityMetadataForm {
             EntityKinds::DecompiledFunction => Ok(EntityMetadata::DecompiledFunction(
                 DecompiledFunction::from_form(self)?,
             )),
+            EntityKinds::Json => Ok(EntityMetadata::Json(JsonEntity::from_form(self, shared)?)),
             EntityKinds::Other => Ok(EntityMetadata::Other),
         }
     }
@@ -1342,7 +1374,12 @@ impl EntityUpdateForm {
     /// # Arguments
     ///
     /// * `field` - The field to try to add
-    pub async fn add<'a>(&'a mut self, field: Field<'a>) -> Result<Option<Field<'a>>, ApiError> {
+    /// * `shared` - Shared Thorium objects
+    pub async fn add<'a>(
+        &'a mut self,
+        field: Field<'a>,
+        shared: &Shared,
+    ) -> Result<Option<Field<'a>>, ApiError> {
         // get the name of this field
         if let Some(name) = field.name().map(ToOwned::to_owned) {
             // iterate over the segments ('<NAME>[<KEY1>][<KEY2>]') in the field name
@@ -1360,8 +1397,10 @@ impl EntityUpdateForm {
                 // this is image data so return it so we can stream it to s3
                 "image" => return Ok(Some(field)),
                 "metadata" => {
-                    name_segments_iter =
-                        self.metadata.add(field, &name, name_segments_iter).await?;
+                    name_segments_iter = self
+                        .metadata
+                        .add(field, &name, name_segments_iter, shared)
+                        .await?;
                 }
                 // this could be a list field
                 maybe_list => {
@@ -1448,11 +1487,13 @@ impl EntityMetadataUpdateForm {
     /// * `field` - The field to try to add
     /// * `name` - The full name of the field
     /// * `name_segments` - An iterator over the parsed segments from the field name
+    /// * `shared` - Shared Thorium objects
     pub async fn add<'a, I: Iterator<Item = &'a str>>(
         &'a mut self,
         field: Field<'a>,
         name: &str,
         mut name_segments: I,
+        shared: &Shared,
     ) -> Result<I, ApiError> {
         match name_segments.next().ok_or(bad_internal!(
             "Invalid entity metadata update field: metadata field name is missing".to_string()
@@ -1533,6 +1574,12 @@ impl EntityMetadataUpdateForm {
             // the function specific fields
             "function_address" => self.function_address = Some(field.text().await?.parse()?),
             "decompilation_content" => self.decompilation_content = Some(field.text().await?),
+            // the json specific fields
+            "json_data" => {
+                // stream this document in so we drop it as soon as it gets too large
+                let max = shared.config.thorium.entities.max_json_size;
+                self.json_data = Some(super::helpers::text_limited(field, max).await?);
+            }
             // this could be a list field
             maybe_list => {
                 match maybe_list {

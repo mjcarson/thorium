@@ -3,7 +3,7 @@
 use chrono::prelude::*;
 use thorium::models::{ImageScaler, JobResets, ReactionListParams, Resources};
 use thorium::test_utilities::{self, generators};
-use thorium::{is, Error};
+use thorium::{Error, is};
 
 /// unwraps the status counts for a specific user and image
 macro_rules! get_stats {

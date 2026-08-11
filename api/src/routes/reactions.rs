@@ -1390,7 +1390,10 @@ pub fn mount(router: Router<AppState>) -> Router<AppState> {
             "/reactions/status/{group}/{pipeline}/{status}/",
             get(list_status),
         )
-        .route("/reactions/status/{pipeline}/{status}/", get(list_status_new))
+        .route(
+            "/reactions/status/{pipeline}/{status}/",
+            get(list_status_new),
+        )
         .route(
             "/reactions/status/{group}/{pipeline}/{status}/details/",
             get(list_status_details),
