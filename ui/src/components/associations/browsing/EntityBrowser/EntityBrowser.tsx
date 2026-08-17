@@ -1,15 +1,14 @@
 // spec: ./EntityBrowser.spec.md
-import React, { Fragment, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { FaHouse } from 'react-icons/fa6';
 
 // project imports
 import BrowserToolbar from './BrowserToolbar';
 import { DUPLICATE_HIGHLIGHT_CLASS } from './duplicateHighlight';
 import EntityRow from './EntityRow';
-import EntitySortControls from './EntitySortControls';
 import EntityTreeLevel, { PAGE_SIZE } from './EntityTreeLevel';
 import { EntityBrowserProvider, useEntityBrowser } from './EntityBrowserContext';
-import { BrowserHeader, BrowserRoot, Crumb, CrumbSep, CurrentCrumb, FocusBar, ShowMoreButton, ShowMoreRow } from './EntityBrowser.styled';
+import { BrowserRoot, Crumb, CrumbSep, CurrentCrumb, FocusBar, ShowMoreButton, ShowMoreRow } from './EntityBrowser.styled';
 import { EntityBrowserProps } from './types';
 import { useGraphData } from '../../data/GraphDataContext';
 import AlertBanner, { Severity } from '@components/shared/alerts/AlertBanner';
@@ -60,19 +59,7 @@ interface EntityBrowserBodyProps {
    * as the top level (file-details tab, where the file itself is implicit).
    */
   showRootNodes: boolean;
-  /**
-   * The toolbar node to render above the tree. Defaults to the built-in {@link BrowserToolbar}; pass a custom
-   * strip to replace it, or `null` to render no toolbar (a dashboard composes its own controls outside the
-   * body). This composition slot avoids a `showToolbar` boolean so callers can substitute a different toolbar
-   * rather than only turning it off/on.
-   */
-  toolbar?: ReactNode;
-  /**
-   * Whether to render the browser's own header row with the {@link EntitySortControls}. Defaults to `true`
-   * (file-details tab and the narrow/tabs dashboard layout). The ultra-wide dashboard sets this `false` and
-   * renders the same controls in its "Entities" tile header instead, so they aren't shown twice.
-   */
-  showSortControls?: boolean;
+  showOmnibar?: boolean;
 }
 
 /**
@@ -82,11 +69,7 @@ interface EntityBrowserBodyProps {
  * own {@link EntityBrowserProvider} (with controlled state) directly around this body instead of nesting a
  * second provider via {@link EntityBrowser}.
  */
-export const EntityBrowserBody: React.FC<EntityBrowserBodyProps> = ({
-  showRootNodes,
-  toolbar = <BrowserToolbar />,
-  showSortControls = true,
-}) => {
+export const EntityBrowserBody: React.FC<EntityBrowserBodyProps> = ({ showRootNodes, showOmnibar = true }) => {
   const { loading, error, graphVersion } = useGraphData();
   const { roots, visibleSet, hiddenNodes, pinnedDuplicate } = useEntityBrowser();
   // paginate the root level the same way nested levels do, so a graph with thousands of seeds doesn't mount
@@ -127,17 +110,13 @@ export const EntityBrowserBody: React.FC<EntityBrowserBodyProps> = ({
   // drop hidden roots here (the effectiveChildren short-circuit only prunes hidden *children* within a subtree)
   const rootsShown = roots.filter((r) => !hiddenNodes.has(r.id));
   const shownRoots = visibleSet ? rootsShown.filter((r) => visibleSet.has(r.id)) : rootsShown;
+
   const visibleRoots = shownRoots.slice(0, rootLimit);
   const remainingRoots = shownRoots.length - visibleRoots.length;
 
   return (
     <BrowserRoot ref={rootRef} data-testid="entity-browser">
-      {toolbar}
-      {showSortControls && (
-        <BrowserHeader>
-          <EntitySortControls />
-        </BrowserHeader>
-      )}
+      <BrowserToolbar showOmnibar={showOmnibar} />
       <FocusBreadcrumb />
       {shownRoots.length === 0 ? (
         <AlertBanner severity={Severity.Info}>No matching items.</AlertBanner>

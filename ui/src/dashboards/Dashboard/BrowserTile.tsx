@@ -17,18 +17,9 @@ import { EntityBrowserBody } from '@components/associations/browsing/EntityBrows
  * resolved roots from context. Root nodes are shown as their own expandable rows (`showRootNodes`) because
  * a dashboard has heterogeneous seeds with no single implicit artifact (unlike the file-details tab).
  *
- * @param showSortControls - Whether the body renders its own sort/group header. The ultra-wide dashboard
- *   passes `false` and hosts those controls in the "Entities" tile header instead; the narrow/tabs layout
- *   passes `true` (no tile header there), so the controls stay in the browser body.
  * @returns The entity-browser tile body.
  */
-interface BrowserTileProps {
-  /** Whether the browser body renders its own sort/group header (see the component doc). */
-  showSortControls: boolean;
-}
 
-const BrowserTile: React.FC<BrowserTileProps> = ({ showSortControls }) => (
-  <EntityBrowserBody showRootNodes toolbar={null} showSortControls={showSortControls} />
-);
+const BrowserTile = () => <EntityBrowserBody showRootNodes showOmnibar={false} />;
 
 export default React.memo(BrowserTile);

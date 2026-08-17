@@ -24,6 +24,7 @@ interface LayerHeaderProps {
   groupChildren: EffectiveChild[];
   /** The parent level's row-key prefix, so this header can address its group's rows (`<prefix>/<id>`). */
   rowKeyPrefix: string;
+  totalCount?: number;
 }
 
 /**
@@ -34,7 +35,7 @@ interface LayerHeaderProps {
  * row in the group at once) and an **exclude-this-kind** control (appends an `Exclude` clause; labelled
  * "Exclude" rather than "Hide" since it maps to the omnibar `Exclude` verb, distinct from the per-node `Hide`).
  */
-const LayerHeader: React.FC<LayerHeaderProps> = ({ nodeType, groupChildren, rowKeyPrefix }) => {
+const LayerHeader: React.FC<LayerHeaderProps> = ({ nodeType, groupChildren, rowKeyPrefix, totalCount }) => {
   const { graph, growable } = useGraphData();
   const { clauses, setClauses, index, traversalConfig, isChildrenExpanded, setManyChildrenExpanded } = useEntityBrowser();
   const label = entityLabel(nodeType);
@@ -82,6 +83,7 @@ const LayerHeader: React.FC<LayerHeaderProps> = ({ nodeType, groupChildren, rowK
       <span>{label}</span>
       <GroupCount>
         {groupChildren.length}
+        {totalCount !== undefined && totalCount > groupChildren.length ? ` (${totalCount - groupChildren.length} hidden)` : ''}
         {anyGrowable ? '+' : ''}
       </GroupCount>
       {dangerNodes > 0 && (

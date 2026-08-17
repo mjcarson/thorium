@@ -180,8 +180,8 @@ const NavBanner = () => {
             <Badge className="py-2 px-3">Token: {scopedToken.name}</Badge>
           </>
         )}
-        <DocsLink href={`${apiURL}/docs/user/index.html`}>
-          <FaQuestion size={22} />
+        <DocsLink aria-label="Read the thorium documentation" href={`${apiURL}/docs/user/index.html`}>
+          <FaQuestion size={22} title="Thorium Documentation" />
         </DocsLink>
         {userInfo && userInfo.username && (
           <DropdownContainer ref={dropdownRef}>

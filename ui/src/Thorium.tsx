@@ -4,6 +4,7 @@ import { ErrorBoundary } from 'react-error-boundary';
 import { ToastContainer } from 'react-toastify';
 import styled from 'styled-components';
 import 'react-toastify/dist/ReactToastify.css';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // project imports
 import NavBanner from './components/pages/NavBanner';
@@ -163,14 +164,18 @@ const Site = () => (
   </Main>
 );
 
+const queryClient = new QueryClient();
+
 const Thorium = () => (
-  <BrowserRouter>
-    <Auth>
-      <WindowManager name="thorium" zRange={{ start: 1000, end: 4000, step: 5 }} canvasMargin={CanvasMargin}>
-        <Site />
-      </WindowManager>
-    </Auth>
-  </BrowserRouter>
+  <QueryClientProvider client={queryClient}>
+    <BrowserRouter>
+      <Auth>
+        <WindowManager name="thorium" zRange={{ start: 1000, end: 4000, step: 5 }} canvasMargin={CanvasMargin}>
+          <Site />
+        </WindowManager>
+      </Auth>
+    </BrowserRouter>
+  </QueryClientProvider>
 );
 
 export default Thorium;

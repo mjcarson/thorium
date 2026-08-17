@@ -32,7 +32,7 @@ import {
 import { resetFilterClauses, toggleTagValue } from './tagFilter';
 import { getDepthFromClauses } from '@components/associations/browsing/EntityBrowser/browserHelpers';
 import { EntityBrowserProvider } from '@components/associations/browsing/EntityBrowser/EntityBrowserContext';
-import EntitySortControls from '@components/associations/browsing/EntityBrowser/EntitySortControls';
+import EntitySortControls from '@components/associations/browsing/EntityBrowser/controls/EntitySortControls';
 import { MAX_DEPTH } from '@components/associations/browsing/EntityBrowser/omnibarOptions';
 import { SortMode } from '@components/associations/browsing/EntityBrowser/types';
 import { GraphDataProvider, useGraphData } from '@components/associations/data/GraphDataContext';
@@ -457,22 +457,11 @@ const DashboardBody: React.FC<DashboardBodyProps> = ({
               <TileHeader>
                 <TileHeaderRow>
                   <span>Entities</span>
-                  {/* ultra-wide hosts the sort/group controls here (right before the expand toggle); the
-                      browser body suppresses its own copy via showSortControls={false} below */}
-                  <TileHeaderActions>
-                    <EntitySortControls />
-                    <PaneExpandToggle
-                      expanded={anyExpanded}
-                      onToggle={toggleBrowserExpand}
-                      expandTip="Expand entities (stack the graph below)"
-                      expandAriaLabel="Expand entities and stack the graph below"
-                    />
-                  </TileHeaderActions>
                 </TileHeaderRow>
               </TileHeader>
             )}
             <PaneScroll>
-              <BrowserTile showSortControls={!isUltraWide} />
+              <BrowserTile />
             </PaneScroll>
           </ContentTile>
           {reactionsInBrowser && <AnalysisStatusPanel />}

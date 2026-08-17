@@ -30,6 +30,7 @@ import { Clause } from '@components/shared/inputs/omnibar/ClauseTypes';
 import { getSearchTextFromClauses, getStringFieldListFromClauses, getTagsFromClauses } from '@components/shared/inputs/omnibar/utils';
 import { TagOptions } from '@models/tags';
 import { NodeType } from '@models/trees';
+import { Confidence } from '@models/entities';
 
 interface EntityBrowserContextValue {
   // graph-derived (recomputed on graphVersion)
@@ -111,6 +112,10 @@ interface EntityBrowserContextValue {
   setManyChildrenExpanded: (rowKeys: string[], expanded: boolean) => void;
   /** Grow-once guard shared across rows (growth mutates the shared graph). */
   grownNodes: Set<string>;
+  /** Minimum confidence for displayed nodes*/
+  minConfidence: Confidence;
+  /** Set the {@link minConfidence}*/
+  setMinConfidence: (newMin: Confidence) => void;
 }
 
 const EntityBrowserContext = createContext<EntityBrowserContextValue | undefined>(undefined);
@@ -301,6 +306,7 @@ export const EntityBrowserProvider: React.FC<EntityBrowserProviderProps> = ({
   const [internalGroupByResource, setInternalGroupByResource] = useState(true);
   const groupByResource = controlledGroupByResource ?? internalGroupByResource;
   const setGroupByResource = controlledSetGroupByResource ?? setInternalGroupByResource;
+  const [minConfidence, setMinConfidence] = useState<Confidence>(Confidence.Likely);
 
   const setChildrenExpanded = useCallback((rowKey: string, expanded: boolean) => {
     setExpandedChildren((prev) => {
@@ -402,7 +408,7 @@ export const EntityBrowserProvider: React.FC<EntityBrowserProviderProps> = ({
   const effectiveDistances = rootedDistances ?? distances;
   // one pass per graph version yields BOTH the flagged set (for the Flagged-Only filter) and the per-node
   // subtree flag stats (for the flag-count badge and sorting) — no per-render tree crawls
-  const flagAgg = useMemo(() => computeFlagStats(graph, index), [graphVersion, index]);
+  const flagAgg = useMemo(() => computeFlagStats(graph, index, minConfidence), [graphVersion, index, minConfidence]);
   const flaggedNodes = flagAgg.flagged;
   const flagStats = flagAgg.stats;
   const tagOptions = useMemo(() => collectTagOptions(graph), [graphVersion]);
@@ -539,6 +545,8 @@ export const EntityBrowserProvider: React.FC<EntityBrowserProviderProps> = ({
       setChildrenExpanded,
       setManyChildrenExpanded,
       grownNodes: grownNodesRef.current,
+      minConfidence,
+      setMinConfidence,
     }),
     [
       index,
@@ -570,6 +578,8 @@ export const EntityBrowserProvider: React.FC<EntityBrowserProviderProps> = ({
       isChildrenExpanded,
       setChildrenExpanded,
       setManyChildrenExpanded,
+      minConfidence,
+      setMinConfidence,
     ],
   );
 

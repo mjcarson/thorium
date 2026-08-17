@@ -3,8 +3,8 @@ import React from 'react';
 import { FaFlag } from 'react-icons/fa6';
 
 // project imports
-import { useEntityBrowser } from './EntityBrowserContext';
-import { ToggleChip } from './EntityBrowser.styled';
+import { useEntityBrowser } from '../EntityBrowserContext';
+import { ToggleChip } from '../EntityBrowser.styled';
 
 /**
  * Standalone "Flagged Only" toggle chip, reading flagged state from the {@link useEntityBrowser} context. A

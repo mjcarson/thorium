@@ -13,6 +13,8 @@ export enum Confidence {
   Untrusted = 'Untrusted',
 }
 
+export const ConfidenceEntries = Object.entries(Confidence) as Array<[keyof typeof Confidence, Confidence]>;
+
 /// A flag is a reason that something is interesting, odd, or suspicious.
 export type FlagMetaFields = {
   /// How suspicious this flag is where higher numbers are more suspicious

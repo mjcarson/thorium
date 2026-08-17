@@ -2,7 +2,7 @@
 import React, { Fragment, useMemo, useState } from 'react';
 
 // project imports
-import { compareByFlagStats, effectiveChildren, groupByKind } from './browserHelpers';
+import { compareByFlagStats, effectiveChildren, groupByKind, nodePassesMinConfidence, nodeTypeOf } from './browserHelpers';
 import EntityRow from './EntityRow';
 import LayerHeader from './LayerHeader';
 import { useEntityBrowser } from './EntityBrowserContext';
@@ -47,7 +47,21 @@ const EntityTreeLevel: React.FC<EntityTreeLevelProps> = ({
     [browser.index, browser.traversalConfig, parentId, path, graph, reverseDepth, viaReversed],
   );
 
-  const filtered = browser.visibleSet ? children.filter((c) => browser.visibleSet!.has(c.edge.id)) : children;
+  const totalByKind = useMemo(() => {
+    const map = new Map<NodeType, number>();
+    for (const child of children) {
+      const kind = nodeTypeOf(child.edge.id, graph);
+      map.set(kind, (map.get(kind) ?? 0) + 1);
+    }
+    return map;
+  }, [children, graph]);
+
+  // const filtered = browser.visibleSet ? children.filter((c) => browser.visibleSet!.has(c.edge.id)) : children;
+  const filtered = children.filter(
+    (c) =>
+      (!browser.visibleSet || browser.visibleSet.has(c.edge.id)) &&
+      nodePassesMinConfidence(graph.data_map[c.edge.id], browser.minConfidence),
+  );
 
   // a level with no children to show renders nothing: rows with no associations aren't expandable (the row's
   // chevron is suppressed), so an expanded-into-nothing empty note would only add noise
@@ -73,7 +87,14 @@ const EntityTreeLevel: React.FC<EntityTreeLevelProps> = ({
     rendered += slice.length;
     groupEls.push(
       <Fragment key={group.nodeType}>
-        {showHeaders && <LayerHeader nodeType={group.nodeType} groupChildren={group.children} rowKeyPrefix={rowKeyPrefix} />}
+        {showHeaders && (
+          <LayerHeader
+            nodeType={group.nodeType}
+            groupChildren={group.children}
+            rowKeyPrefix={rowKeyPrefix}
+            totalCount={totalByKind.get(group.nodeType)}
+          />
+        )}
         {slice.map((child) => (
           <EntityRow
             key={`${rowKeyPrefix}/${child.edge.id}`}
