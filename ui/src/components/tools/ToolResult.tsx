@@ -171,10 +171,6 @@ const ToolResult = ({ results, header, sha256, tool, updateInView, updateURLSect
       as="div"
       id={`results-tab-${tool}`}
       className="navbar-scroll-offset results-content"
-      // trip-line band near the top of the viewport (below the 60px navbar) with threshold 0 so
-      // a tool is "in view" whenever it crosses the band — works even for tiles taller than the
-      // viewport, which a fractional threshold could never satisfy
-      rootMargin="-60px 0px -55% 0px"
       threshold={0}
       onChange={(inView) => updateInView(inView, tool)}
     >

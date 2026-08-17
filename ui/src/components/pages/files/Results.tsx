@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import AlertBanner, { Severity } from '@components/shared/alerts/AlertBanner';
 
 // project imports
@@ -20,8 +20,31 @@ interface ResultsTableOfContentsProps {
 }
 
 const ResultsTableOfContents = ({ parsedResults, inViewElements }: ResultsTableOfContentsProps) => {
+  const tocRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const toc = tocRef.current;
+    if (!toc || inViewElements.length === 0) return;
+
+    const allSelected = toc.querySelectorAll<HTMLElement>('.selected');
+    if (allSelected.length === 0) return;
+
+    const tocRect = toc.getBoundingClientRect();
+    const firstSelected = allSelected[0];
+    const lastSelected = allSelected[allSelected.length - 1];
+
+    const firstTop = firstSelected.getBoundingClientRect().top - tocRect.top + toc.scrollTop;
+    const lastBottom = lastSelected.getBoundingClientRect().bottom - tocRect.top + toc.scrollTop;
+
+    if (firstTop < toc.scrollTop) {
+      toc.scrollTo({ top: firstTop, behavior: 'smooth' });
+    } else if (lastBottom > toc.scrollTop + toc.clientHeight) {
+      toc.scrollTo({ top: lastBottom - toc.clientHeight, behavior: 'smooth' });
+    }
+  }, [inViewElements]);
+
   return (
-    <nav className="results-toc">
+    <nav className="results-toc" ref={tocRef}>
       <ul className="ul no-bullets">
         {parsedResults &&
           typeof parsedResults === 'object' &&
