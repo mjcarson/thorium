@@ -1,9 +1,9 @@
 // spec: ./EntityBrowser.spec.md
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { FaBullseye, FaChevronRight, FaEyeSlash, FaFlag, FaGear, FaSeedling, FaTags } from 'react-icons/fa6';
+import { FaAngleUp, FaBullseye, FaChevronRight, FaEyeSlash, FaFlag, FaGear, FaSeedling, FaTags } from 'react-icons/fa6';
 
 // project imports
-import { effectiveChildren, getDisplayTags, nodeTypeOf } from './browserHelpers';
+import { effectiveChildren, getDisplayTags, nodePassesMinConfidence, nodeTypeOf } from './browserHelpers';
 import {
   applyHighlight,
   clearHighlight,
@@ -55,8 +55,10 @@ import EntityTypeIcon from '@components/entities/shared/EntityTypeIcon';
 import { OverlayTipTop } from '@components/shared/overlay/tips';
 import EntitySummaryHover from '@components/shared/info/EntitySummaryHover';
 import { treeNodeToInfo } from '@components/shared/info/info';
-import { Entities, entityLabel } from '@models/entities';
+import { Confidence, Entities, entityLabel } from '@models/entities';
 import { TreeNodeKey } from '@models/trees';
+import { ExpandToggle } from '@components/shared/buttons';
+import { FaAngleDown } from 'react-icons/fa';
 
 interface EntityRowProps {
   nodeId: string;
@@ -91,8 +93,10 @@ const EntityRow: React.FC<EntityRowProps> = ({ nodeId, rowKey, path, depth, edge
 
   const node = graph.data_map[nodeId];
   const info = useMemo(() => (node ? treeNodeToInfo(node) : null), [node]);
+
   // descriptive tag chips for the header (capped, noise keys dropped); recomputed only when the node changes
   const displayTags = useMemo(() => (node ? getDisplayTags(node) : { shown: [], overflow: 0, overflowLabels: [] }), [node]);
+
   const nodeType = nodeTypeOf(nodeId, graph);
   const childrenExpanded = browser.isChildrenExpanded(rowKey, nodeId, viaReversed, reverseDepth);
   const isDuplicate = browser.multiParent.has(nodeId);
@@ -104,13 +108,12 @@ const EntityRow: React.FC<EntityRowProps> = ({ nodeId, rowKey, path, depth, edge
   // flag entities and danger-tag pairs within this node's subtree, read O(1) from the precomputed stats (no crawl)
   const flagCount = browser.flagStats.get(nodeId)?.flags ?? 0;
   const dangerTagCount = browser.flagStats.get(nodeId)?.dangerTags ?? 0;
+
   // combined tooltip naming whichever counts are present (the badge only renders when at least one is > 0)
-  const significanceTitle = `${[
-    flagCount > 0 ? `${flagCount} flag${flagCount === 1 ? '' : 's'}` : '',
-    dangerTagCount > 0 ? `${dangerTagCount} danger tag${dangerTagCount === 1 ? '' : 's'}` : '',
-  ]
-    .filter(Boolean)
-    .join(', ')} within this branch`;
+  const confidenceSuffix = browser.minConfidence === Confidence.Untrusted ? '' : ` at ${browser.minConfidence}+ confidence`;
+  const flagMetricLabel = flagCount > 0 ? `${flagCount} flag${flagCount === 1 ? '' : 's'}${confidenceSuffix}` : '';
+  const dangerMetricLabel = dangerTagCount > 0 ? `${dangerTagCount} danger tag${dangerTagCount === 1 ? '' : 's'}${confidenceSuffix}` : '';
+  const significanceTitle = `${[flagMetricLabel, dangerMetricLabel].filter(Boolean).join(', ')} within this branch`;
   // expandable when growable OR it has any display child in THIS arrival context (forward children, plus
   // reverse relationship edges bounded by the reverse-depth rules). When some children are hidden we fall back
   // to effectiveChildren (which drops hidden subtrees) so a parent whose only children are hidden shows no
@@ -121,8 +124,8 @@ const EntityRow: React.FC<EntityRowProps> = ({ nodeId, rowKey, path, depth, edge
     if (!hasHidden) {
       return hasContextualDisplayChildren(browser.index, nodeId, toDisplayCfg(browser.traversalConfig), viaReversed, reverseDepth);
     }
-    return (
-      effectiveChildren(nodeId, browser.index, graph, browser.traversalConfig, new Set([nodeId]), reverseDepth, viaReversed).length > 0
+    return effectiveChildren(nodeId, browser.index, graph, browser.traversalConfig, new Set([nodeId]), reverseDepth, viaReversed).some(
+      (c) => nodePassesMinConfidence(graph.data_map[c.edge.id], browser.minConfidence),
     );
   }, [isGrowable, hasHidden, browser.index, browser.traversalConfig, nodeId, graph, viaReversed, reverseDepth]);
 
@@ -279,7 +282,7 @@ const EntityRow: React.FC<EntityRowProps> = ({ nodeId, rowKey, path, depth, edge
               <ViaBadge title={`Reached through: ${breadcrumb.join(' › ')}`}>via {breadcrumb.join(' › ')}</ViaBadge>
             )}
             {(flagCount > 0 || dangerTagCount > 0) && (
-              <FlagBadge title={significanceTitle}>
+              <FlagBadge title={significanceTitle} aria-label={significanceTitle}>
                 {flagCount > 0 && (
                   <BadgeMetric>
                     <FaFlag size={9} aria-hidden /> {flagCount}
@@ -365,6 +368,13 @@ const EntityRow: React.FC<EntityRowProps> = ({ nodeId, rowKey, path, depth, edge
             </HideButton>
           </OverlayTipTop>
         </HideSlot>
+        <ExpandToggle
+          data-testid="entity-details-toggle"
+          aria-expanded={detailsExpanded}
+          onClick={() => setDetailsExpanded(!detailsExpanded)}
+        >
+          {detailsExpanded ? <FaAngleUp /> : <FaAngleDown />} details
+        </ExpandToggle>
       </HeaderTrail>
     </RowHeader>
   );
@@ -375,14 +385,7 @@ const EntityRow: React.FC<EntityRowProps> = ({ nodeId, rowKey, path, depth, edge
         {header}
         {/* pass the entity id for entity nodes so the box lazily fetches the full record (rich content the
             graph node omits); File/Repo/Tag nodes carry everything already, so no id → no fetch */}
-        {info && (
-          <MetadataBox
-            model={info}
-            entityId={node?.[TreeNodeKey.Entity]?.id}
-            expanded={detailsExpanded}
-            onExpandedChange={setDetailsExpanded}
-          />
-        )}
+        {info && <MetadataBox model={info} entityId={node?.[TreeNodeKey.Entity]?.id} expanded={detailsExpanded} />}
       </InfoBox>
       {childrenExpanded && (
         <EntityTreeLevel

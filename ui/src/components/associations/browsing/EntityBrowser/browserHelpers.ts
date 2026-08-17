@@ -612,6 +612,20 @@ function confidenceRank(confidence?: Confidence): number {
   }
 }
 
+/* Check if a TreeNode passes minimum confidence threshold; default to true if no confidence flag
+ * */
+export function nodePassesMinConfidence(node: TreeNode | undefined, minConfidence: Confidence): boolean {
+  const entity = node?.[TreeNodeKey.Entity];
+  //Confidence only exists on flag entities
+  if (entity?.kind !== Entities.Flag) return true;
+  //grab confidence from metadata. If does not exist - attempt to grab from tags.
+  const confidence =
+    (entity.metadata as { Flag?: { confidence?: Confidence } } | undefined)?.Flag?.confidence ??
+    (Object.keys(entity.tags?.FlagConfidence ?? {})[0] as Confidence | undefined);
+
+  return confidence ? confidenceRank(confidence) >= confidenceRank(minConfidence) : true;
+}
+
 /** Create a zeroed {@link FlagStat}. */
 function blankFlagStat(): FlagStat {
   return { flags: 0, suspicion: 0, confidence: 0, dangerTags: 0 };
@@ -735,7 +749,7 @@ function propagateFromSeed(
  * @param index - The tree index (for `parentsOf`/`childrenOf`).
  * @returns The flagged set and the per-node subtree flag stats.
  */
-export function computeFlagStats(graph: Graph, index: TreeIndex): FlagAggregation {
+export function computeFlagStats(graph: Graph, index: TreeIndex, minConfidence: Confidence = Confidence.Untrusted): FlagAggregation {
   const flagged = new Set<string>();
   const stats = new Map<string, FlagStat>();
   // collect Flag entities (with suspicion/confidence) and danger-tagged nodes (with their danger-tag count)
@@ -745,7 +759,11 @@ export function computeFlagStats(graph: Graph, index: TreeIndex): FlagAggregatio
     const entity = node[TreeNodeKey.Entity];
     if (entity?.kind === Entities.Flag) {
       const meta = (entity.metadata as { Flag?: { suspicion?: number; confidence?: Confidence } } | undefined)?.Flag;
-      flagSeeds.push({ id, suspicion: meta?.suspicion ?? 0, confidence: confidenceRank(meta?.confidence) });
+      const confidence = meta?.confidence;
+      const rank = confidenceRank(confidence);
+      if (!confidence || rank >= confidenceRank(minConfidence)) {
+        flagSeeds.push({ id, suspicion: meta?.suspicion ?? 0, confidence: rank });
+      }
     }
     const dangerCount = countDangerTags(getNodeTags(node));
     if (dangerCount > 0) dangerSeeds.push({ id, count: dangerCount });

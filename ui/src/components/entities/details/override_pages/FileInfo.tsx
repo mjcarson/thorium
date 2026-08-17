@@ -199,10 +199,11 @@ const FileInfo = ({ details, setDetails, groupDetails, setDeletionStatus, onNavi
       <FileActionsToolbar sha256={details.sha256!} onNavigateTab={onNavigateTab} />
       <Row className="mt-2 mb-4">
         <Col xs="auto" className="mt-3">
-          <p>Select submission:</p>
+          <label htmlFor="submission_select">Select submission:</label>
         </Col>
         <Col className="mt-1">
           <Form.Control
+            id="submission_select"
             className="form-select"
             as="select"
             name="submission"

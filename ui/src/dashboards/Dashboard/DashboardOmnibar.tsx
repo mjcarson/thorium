@@ -16,7 +16,7 @@ import {
 } from './styles';
 import TagsTile from './TagsTile';
 import { useEntityBrowser } from '@components/associations/browsing/EntityBrowser/EntityBrowserContext';
-import FlaggedOnlyToggle from '@components/associations/browsing/EntityBrowser/FlaggedOnlyToggle';
+import FlaggedOnlyToggle from '@components/associations/browsing/EntityBrowser/controls/FlaggedOnlyToggle';
 import { buildBrowserOmnibarOptions } from '@components/associations/browsing/EntityBrowser/omnibarOptions';
 import Collapsible, { TogglePosition } from '@components/shared/info/Collapsible';
 import Omnibar from '@components/shared/inputs/omnibar/Omnibar';

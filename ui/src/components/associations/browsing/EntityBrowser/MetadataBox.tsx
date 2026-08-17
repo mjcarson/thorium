@@ -1,15 +1,13 @@
 // spec: ./EntityBrowser.spec.md
-import React, { useRef, useState } from 'react';
-import { FaAngleDown, FaAngleUp } from 'react-icons/fa6';
 
 // project imports
-import { MetadataContent, MetadataSection, MetadataToggleRow } from './EntityBrowser.styled';
-import { ExpandToggle } from '@components/shared/buttons/ExpandToggle';
+import { MetadataContent, MetadataSection } from './EntityBrowser.styled';
 import LoadingSpinner from '@components/shared/fallback/LoadingSpinner';
 import EntitySummary, { SummaryVariant } from '@components/shared/info/EntitySummary';
 import { InfoModel, SummaryPart, treeNodeToInfo } from '@components/shared/info/info';
 import { getEntity } from '@thorpi/entities';
 import { TreeNodeKey } from '@models/trees';
+import { useQuery } from '@tanstack/react-query';
 
 interface MetadataBoxProps {
   /** The info model built from the graph/tree node — rendered immediately (and as the fetch fallback). */
@@ -24,8 +22,6 @@ interface MetadataBoxProps {
   /** Whether the details body is expanded. Controlled by the parent ({@link EntityRow}) so it can suppress the
    * header's hover preview while the details are open. */
   expanded: boolean;
-  /** Called with the requested next expanded state when the "details" caret is toggled. */
-  onExpandedChange: (next: boolean) => void;
 }
 
 /**
@@ -41,41 +37,22 @@ interface MetadataBoxProps {
  * so sigma-rule YAML / disassembly / decompiled source and every other field render in the body. The fetch
  * falls back to the graph-node `model` on failure; a spinner shows while it's in flight.
  */
-const MetadataBox: React.FC<MetadataBoxProps> = ({ model, entityId, expanded, onExpandedChange }) => {
-  // the richer model built from the lazily-fetched full entity (null until fetched); rendered in place of the
-  // graph-node `model` once available
-  const [fullModel, setFullModel] = useState<InfoModel | null>(null);
-  const [loading, setLoading] = useState(false);
-  // fetch the full entity at most once per row (survives collapse/re-expand while the row stays mounted)
-  const fetchedRef = useRef(false);
+const MetadataBox: React.FC<MetadataBoxProps> = ({ model, entityId, expanded }) => {
+  const { data: entity, isFetching } = useQuery({
+    queryKey: ['entity', entityId],
+    queryFn: () => getEntity(entityId!, () => {}),
+    enabled: expanded && !!entityId,
+    staleTime: 30 * 60 * 1000,
+  });
 
-  const onToggle = () => {
-    const next = !expanded;
-    onExpandedChange(next);
-    if (next && entityId && !fetchedRef.current) {
-      fetchedRef.current = true;
-      setLoading(true);
-      // pull the authoritative entity so its heavy content (rule/disassembly/decompilation) shows; on failure
-      // we simply keep the graph-node model (no error surface needed in this condensed affordance)
-      void getEntity(entityId, () => {})
-        .then((entity) => {
-          if (entity) setFullModel(treeNodeToInfo({ [TreeNodeKey.Entity]: entity }));
-        })
-        .finally(() => setLoading(false));
-    }
-  };
+  const fullModel = entity ? treeNodeToInfo({ [TreeNodeKey.Entity]: entity }) : null;
 
   return (
     <MetadataSection>
-      <MetadataToggleRow>
-        <ExpandToggle data-testid="entity-details-toggle" aria-expanded={expanded} onClick={onToggle}>
-          {expanded ? <FaAngleUp /> : <FaAngleDown />} details
-        </ExpandToggle>
-      </MetadataToggleRow>
       {expanded && (
         <MetadataContent>
           <EntitySummary model={fullModel ?? model} variant={SummaryVariant.Compact} exclude={[SummaryPart.Kind, SummaryPart.Title]} />
-          {loading && <LoadingSpinner loading={true} />}
+          {isFetching && <LoadingSpinner loading={true} />}
         </MetadataContent>
       )}
     </MetadataSection>

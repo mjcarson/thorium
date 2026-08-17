@@ -1,11 +1,10 @@
 // spec: ./EntityBrowser.spec.md
 import React from 'react';
-import { FaLayerGroup } from 'react-icons/fa6';
 
 // project imports
-import { useEntityBrowser } from './EntityBrowserContext';
-import { SortControls, SortLabel, SortSelect, ToggleChip } from './EntityBrowser.styled';
-import { SortMode } from './types';
+import { useEntityBrowser } from '../EntityBrowserContext';
+import { SortMode } from '../types';
+import { SelectChip, SortLabel, SortSelect } from './ControlsStyles';
 
 /** Sort-mode dropdown choices, in the order they appear in the selector. */
 const SORT_OPTIONS: readonly { value: SortMode; label: string }[] = [
@@ -15,18 +14,19 @@ const SORT_OPTIONS: readonly { value: SortMode; label: string }[] = [
 ];
 
 /**
- * Standalone sort/group controls for the entity browser, reading state from {@link useEntityBrowser}: a
+ * Standalone sort controls for the entity browser, reading state from {@link useEntityBrowser}: a
  * dropdown selecting the primary flag-stat sort field (Flags / Suspicion / Confidence — the unselected two act
- * as descending tiebreakers) and an on-by-default "Group by Type" toggle that groups each level by node kind
- * under {@link LayerHeader}s (off renders one flat, sorted list). Rendered in the browser's own header row
+ * as descending tiebreakers) .
+ * Rendered in the browser's own header row
  * (`BrowserHeader`) so it sits directly above the list, shared by the file-details tab and the dashboard.
  */
 const EntitySortControls: React.FC = () => {
-  const { sortMode, setSortMode, groupByResource, setGroupByResource } = useEntityBrowser();
+  const { sortMode, setSortMode } = useEntityBrowser();
   return (
-    <SortControls>
-      <SortLabel>Sort</SortLabel>
+    <SelectChip>
+      <SortLabel htmlFor="entity-sort-mode">Sort:</SortLabel>
       <SortSelect
+        id="entity-sort-mode"
         aria-label="Sort entities by"
         data-testid="entity-sort-mode"
         value={sortMode}
@@ -38,17 +38,7 @@ const EntitySortControls: React.FC = () => {
           </option>
         ))}
       </SortSelect>
-      <ToggleChip
-        type="button"
-        $active={groupByResource}
-        $tone="accent"
-        data-testid="entity-group-by-resource"
-        aria-pressed={groupByResource}
-        onClick={() => setGroupByResource(!groupByResource)}
-      >
-        <FaLayerGroup size={12} /> Group by Type
-      </ToggleChip>
-    </SortControls>
+    </SelectChip>
   );
 };
 

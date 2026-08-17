@@ -2,7 +2,10 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
    "checkJs": true,
-   "noEmit": true
+   "noEmit": true,
+   "plugins": [
+      { "name": "typescript-styled-plugin" },
+   ]
   },
   "include": ["src/**/*", "vite.config.ts"]
 }

@@ -3,7 +3,7 @@
   "description": "Web UI for Thorium 1.x",
   "type": "module",
   "private": true,
-  "version": "1.7.0",
+  "version": "1.8.0",
   "scripts": {
     "lint": "node_modules/eslint/bin/eslint.js src",
     "fix": "node_modules/eslint/bin/eslint.js src --fix",
@@ -38,6 +38,7 @@
     "@codemirror/view": "^6.43.1",
     "@headless-tree/core": "^1.7.0",
     "@headless-tree/react": "^1.7.0",
+    "@tanstack/react-query": "^5.103.1",
     "@visx/axis": "^4.0.0",
     "@visx/group": "^4.0.0",
     "@visx/scale": "^4.0.0",

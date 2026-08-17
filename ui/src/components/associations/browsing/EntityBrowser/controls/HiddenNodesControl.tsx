@@ -3,16 +3,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FaEyeSlash } from 'react-icons/fa6';
 
 // project imports
-import { useEntityBrowser } from './EntityBrowserContext';
-import {
-  HiddenControl,
-  HiddenMenu,
-  HiddenMenuAction,
-  HiddenMenuHeader,
-  HiddenMenuItem,
-  HiddenMenuLabel,
-  ToggleChip,
-} from './EntityBrowser.styled';
+import { useEntityBrowser } from '../EntityBrowserContext';
+import { ToggleChip } from '../EntityBrowser.styled';
+import { HiddenControl, HiddenMenu, HiddenMenuAction, HiddenMenuHeader, HiddenMenuItem, HiddenMenuLabel } from './ControlsStyles';
 
 /**
  * "Hidden (n)" chip with a dropdown listing each hidden node for per-item unhide plus a clear-all action.
