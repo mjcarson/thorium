@@ -69,7 +69,16 @@ impl OAuthedMaybeUser {
         // get this users name by alias if it exists
         match db::oauth::get_username_by_alias(provider, alias, shared).await? {
             // this user should already exist so get our user data
-            Some(username) => Ok(Self::User(User::force_get(&username, shared).await?)),
+            Some(username) => {
+                // get this users data
+                let user = User::force_get(&username, shared).await?;
+                // reject disabled users before handing back a live token
+                if user.role == UserRole::Disabled {
+                    // this user has been disabled so reject this request
+                    return unauthorized!("This user has been disabled".to_owned());
+                }
+                Ok(Self::User(user))
+            }
             None => {
                 // this is a new user or this user has not yet linked their account with this oauth provider
                 // create a new registration session
@@ -350,6 +359,11 @@ impl OAuthLinkParams {
             db::oauth::consume_link_token(&provider, &self.username, &self.token, shared).await?;
         // get the user we want to add an alias too
         let mut user = User::force_get(&self.username, shared).await?;
+        // reject disabled users so they cannot link aliases or verify their email
+        if user.role == UserRole::Disabled {
+            // this user has been disabled so reject this request
+            return unauthorized!("This user has been disabled".to_owned());
+        }
         // add this alias to this user
         user.aliases.insert(provider, alias);
         // save this users info

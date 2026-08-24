@@ -36,6 +36,8 @@ pub enum UserRole {
     },
     /// A user can upload files and run jobs
     User,
+    /// A disabled user that is rejected on any attempt to access Thorium
+    Disabled,
 }
 
 impl Default for UserRole {

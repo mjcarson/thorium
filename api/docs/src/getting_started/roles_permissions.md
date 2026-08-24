@@ -26,7 +26,7 @@ apply to resources within a specific group while `System` roles apply globally.
 anyone with a Thorium account can create their own groups, there is no practical way to limit certain actions using
 only `Group` roles. 
 
-A Thorium account will only have one `System` role at a time: `User`, `Developer`, or `Admin`. When you first register
+A Thorium account will only have one `System` role at a time: `User`, `Analyst`, `Developer`, `Admin`, or `Disabled`. When you first register
 for an account, you are granted the `User` system role by default. This will allow you to conduct analysis within
 Thorium, but does not allow you to create new analysis pipelines or give you any privileged access to data outside of
 your groups. If your interactions with Thorium require you to add or modify existing pipelines or tools (called
@@ -40,7 +40,12 @@ using the resources of that group. Each Thorium deployment should have at least 
 `Admins` help to curate the data hosted in Thorium and provide continuity when group members leave the hosting
 organization.
 
-The following table summarizes the abilities granted by Thorium's three `System` level roles and any limitations that
+The `Disabled` role allows an `Admin` to revoke a user's access to Thorium without deleting their account or any of
+the data they have uploaded. A disabled account receives a `401 Unauthorized` response on every request, including
+login, starting with the account's next request after the role is assigned. An `Admin` can re-enable a disabled
+account at any time by assigning it any other `System` role. Admins cannot disable their own account.
+
+The following table summarizes the abilities granted by Thorium's five `System` level roles and any limitations that
 apply to those granted abilities:
 
 | System Role | Abilities | Limited By |
@@ -49,6 +54,7 @@ apply to those granted abilities:
 | Analyst | Can create groups, and can add, modify, and run analysis pipelines and images.  Has global view into all data in Thorium. | None |
 | Developer | Can create groups, and can add, modify, and run analysis pipelines and images. | Must have sufficient group role and group membership |
 | Admin | Can access, view, and modify all resources, change group membership and update System and Group roles. | None |
+| Disabled | None. A disabled account receives a `401 Unauthorized` on every request, including login. | Cannot access Thorium at all until an `Admin` assigns another role |
 
 You can view your `System` role on the profile page, as shown below.
 

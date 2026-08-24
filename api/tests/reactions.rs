@@ -1,13 +1,13 @@
 //! Tests the Images routes in Thorium
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use thorium::models::{
     GenericJobArgsUpdate, ImageBan, ImageBanKind, ImageBanUpdate, ImageUpdate, PipelineBan,
     PipelineBanKind, PipelineBanUpdate, PipelineRequest, PipelineUpdate, ReactionCursorOpts,
-    ReactionRequest, ReactionStatus, ReactionUpdate, Resources,
+    ReactionRequest, ReactionStatus, ReactionUpdate, Resources, UserRole, UserUpdate,
 };
 use thorium::test_utilities::{self, generators};
-use thorium::{Error, fail, is, is_empty, is_in, is_not_in, vec_in_vec};
+use thorium::{Error, contains_key, fail, is, is_empty, is_in, is_not_in, vec_in_vec};
 use uuid::Uuid;
 
 #[tokio::test]
@@ -42,6 +42,76 @@ async fn create_bulk() -> Result<(), Error> {
     let (_, resp) = generators::reactions(&group, 20, None, &client).await?;
     // make sure no errors were returned
     is_empty!(resp.errors);
+    Ok(())
+}
+
+/// Build a user update that only sets a role
+///
+/// # Arguments
+///
+/// * `role` - The role to set in this update
+fn role_update(role: UserRole) -> UserUpdate {
+    UserUpdate {
+        password: None,
+        email: None,
+        role: Some(role),
+        settings: None,
+    }
+}
+
+#[tokio::test]
+async fn create_bulk_by_user_disabled() -> Result<(), Error> {
+    // get admin client
+    let admin = test_utilities::admin_client().await?;
+    // create a user that will be disabled and one that stays enabled
+    let disabled_client = generators::client(&admin).await?;
+    let enabled_client = generators::client(&admin).await?;
+    // get both users info
+    let disabled_info = disabled_client.users.info().await?;
+    let enabled_info = enabled_client.users.info().await?;
+    // create a group and pipeline owned by each user
+    let disabled_group = generators::groups(1, &disabled_client).await?.remove(0).name;
+    let enabled_group = generators::groups(1, &enabled_client).await?.remove(0).name;
+    let disabled_pipe_req = generators::pipelines(&disabled_group, 1, false, &disabled_client)
+        .await?
+        .remove(0);
+    let enabled_pipe_req = generators::pipelines(&enabled_group, 1, false, &enabled_client)
+        .await?
+        .remove(0);
+    // get the created pipelines
+    let disabled_pipe = disabled_client
+        .pipelines
+        .get(&disabled_group, &disabled_pipe_req.name)
+        .await?;
+    let enabled_pipe = enabled_client
+        .pipelines
+        .get(&enabled_group, &enabled_pipe_req.name)
+        .await?;
+    // build a reaction request for each user
+    let disabled_req = generators::gen_reaction(&disabled_group, &disabled_pipe, None);
+    let enabled_req = generators::gen_reaction(&enabled_group, &enabled_pipe, None);
+    // disable one of our users as an admin
+    admin
+        .users
+        .update(&disabled_info.username, role_update(UserRole::Disabled))
+        .await?;
+    // bulk create reactions for both users as the admin
+    let mut reqs = HashMap::default();
+    reqs.insert(disabled_info.username.clone(), vec![disabled_req]);
+    reqs.insert(enabled_info.username.clone(), vec![enabled_req]);
+    let creates = admin.reactions.create_bulk_by_user(&reqs).await?;
+    // make sure no reactions were created for our disabled user
+    let disabled_resp = &creates[&disabled_info.username];
+    is_empty!(disabled_resp.created);
+    // make sure our disabled users request got an indexed error entry
+    is!(disabled_resp.errors.len(), 1);
+    contains_key!(disabled_resp.errors, &0);
+    // make sure the error says this user was disabled
+    is!(disabled_resp.errors[&0].contains("has been disabled"), true);
+    // make sure our enabled users reaction was still created without errors
+    let enabled_resp = &creates[&enabled_info.username];
+    is_empty!(enabled_resp.errors);
+    is!(enabled_resp.created.len(), 1);
     Ok(())
 }
 
