@@ -432,6 +432,13 @@ impl AuthMethods {
                 .await
                 .map(AuthedUser::Full),
         }?;
+        // reject disabled users no matter how they authenticated; this runs
+        // after credential checks so unauthenticated callers never learn
+        // whether an account is disabled
+        if user.role == UserRole::Disabled {
+            // this user has been disabled so reject this request
+            return unauthorized!("This user has been disabled".to_owned());
+        }
         // make sure this user's email has been verified
         if verify_email && !user.verified {
             // our user has not been verified yet so reject this request
@@ -649,6 +656,10 @@ impl User {
         // make sure this isn't using any reserved usernames
         if req.username == "external" {
             return bad!("external is a reserved username".to_owned());
+        }
+        // creating an already disabled user makes no sense so reject it
+        if req.role == UserRole::Disabled {
+            return bad!("Users cannot be created with the Disabled role".to_owned());
         }
         // make sure this user doesn't already exist
         if User::exists(&req.username, shared).await? {
@@ -982,6 +993,8 @@ impl User {
             }
             // this user cannot develop images/pipelines
             UserRole::User => false,
+            // disabled users cannot do anything
+            UserRole::Disabled => false,
         }
     }
 
@@ -1025,6 +1038,8 @@ impl User {
             }
             // this user cannot develop images/pipelines
             UserRole::User => false,
+            // disabled users cannot do anything
+            UserRole::Disabled => false,
         }
     }
 
@@ -1079,6 +1094,10 @@ impl User {
         if update.role.is_some() {
             // only admins can update roles
             is_admin!(self);
+            // never allow a user to disable their own account
+            if matches!(update.role, Some(UserRole::Disabled)) {
+                return bad!("You cannot disable your own account".to_owned());
+            }
             // update our role
             crate::update!(self.role, update.role);
         }
@@ -1128,6 +1147,10 @@ impl User {
     ) -> Result<(), ApiError> {
         // only admins can update other users
         is_admin!(self);
+        // make sure admins cannot disable their own account through this route either
+        if username == self.username && matches!(update.role, Some(UserRole::Disabled)) {
+            return bad!("You cannot disable your own account".to_owned());
+        }
         // get info on the target user
         let mut target = User::force_get(username, shared).await?;
         // check if we are updating their password
@@ -1365,6 +1388,11 @@ impl ScopedTokenRole {
             }
             // Admins and Analysts can deploy tools to all clusters
             (ScopedTokenRole::Developer { .. }, UserRole::Admin | UserRole::Analyst) => Ok(()),
+            // disabled users cannot create scoped tokens
+            // this is unreachable in practice since disabled users fail auth first
+            (ScopedTokenRole::Developer { .. }, UserRole::Disabled) => {
+                unauthorized!("This user has been disabled".to_owned())
+            }
         }
     }
 }
@@ -1641,11 +1669,46 @@ fn b64_decode(encoded: &str) -> Result<String, ApiError> {
     Ok(decoded_string)
 }
 
-pub struct AuthReject;
+/// A rejection from the auth extractors
+///
+/// Optionally carries an [`ApiError`] so post-authentication failures (e.g. a
+/// disabled account) can surface their message in the 401 body. Credential
+/// failures and lookup errors stay a bare 401 so auth never leaks whether a
+/// user exists.
+pub struct AuthReject(Option<ApiError>);
+
+impl AuthReject {
+    /// Build a bare 401 rejection with no message
+    fn bare() -> Self {
+        AuthReject(None)
+    }
+
+    /// Build a rejection from an auth chain error
+    ///
+    /// Only 401 errors that carry a message are surfaced; any other error
+    /// (404s from user lookups, 500s, ...) is masked as a bare 401.
+    ///
+    /// # Arguments
+    ///
+    /// * `error` - The auth chain error to build a rejection from
+    fn from_error(error: ApiError) -> Self {
+        // only surface messages from post-credential 401s
+        if error.code == StatusCode::UNAUTHORIZED && error.msg.is_some() {
+            AuthReject(Some(error))
+        } else {
+            AuthReject(None)
+        }
+    }
+}
 
 impl IntoResponse for AuthReject {
+    /// Build a response for this auth rejection
     fn into_response(self) -> Response {
-        StatusCode::UNAUTHORIZED.into_response()
+        // surface the carried error body if we have one
+        match self.0 {
+            Some(error) => error.into_response(),
+            None => StatusCode::UNAUTHORIZED.into_response(),
+        }
     }
 }
 
@@ -1669,13 +1732,16 @@ where
             // try to cast our authorization header value to a str
             if let Ok(header_str) = header_val.to_str() {
                 // authenticate this user and make sure they have verified their email
-                if let Ok(user) = AuthedUser::auth(header_str, true, &state.shared).await {
-                    return Ok(user);
-                }
+                return match AuthedUser::auth(header_str, true, &state.shared).await {
+                    // this user authenticated successfully
+                    Ok(user) => Ok(user),
+                    // carry surfaceable auth errors into our rejection
+                    Err(error) => Err(AuthReject::from_error(error)),
+                };
             }
         }
         // we failed to extract our auth info from our headers
-        Err(AuthReject)
+        Err(AuthReject::bare())
     }
 }
 
@@ -1758,26 +1824,31 @@ where
             // try to cast our authorization header value to a str
             if let Ok(header_str) = header_val.to_str() {
                 // authenticate this user but don't require a verified email
-                if let Ok(authed) = AuthedUser::auth(header_str, false, &state.shared).await {
-                    // get the effective user for this authed user
-                    // for scoped users this carries the scoped tokens value/expiration
-                    let user = authed.into_user();
-                    // return the correct auth response based on if we have a verified email or not
-                    let resp = if user.verified {
-                        // this user has a verified email and has authenticated so return their token info
-                        AuthResponse::Authed {
-                            token: user.token,
-                            expires: user.token_expiration,
-                        }
-                    } else {
-                        // this user still needs to verify their email
-                        AuthResponse::VerifyEmail(user.email)
-                    };
-                    return Ok(resp);
-                }
+                return match AuthedUser::auth(header_str, false, &state.shared).await {
+                    // this user authenticated successfully
+                    Ok(authed) => {
+                        // get the effective user for this authed user
+                        // for scoped users this carries the scoped tokens value/expiration
+                        let user = authed.into_user();
+                        // return the correct auth response based on if we have a verified email or not
+                        let resp = if user.verified {
+                            // this user has a verified email and has authenticated so return their token info
+                            AuthResponse::Authed {
+                                token: user.token,
+                                expires: user.token_expiration,
+                            }
+                        } else {
+                            // this user still needs to verify their email
+                            AuthResponse::VerifyEmail(user.email)
+                        };
+                        Ok(resp)
+                    }
+                    // carry surfaceable auth errors into our rejection
+                    Err(error) => Err(AuthReject::from_error(error)),
+                };
             }
         }
         // we failed to extract our auth info from our headers
-        Err(AuthReject)
+        Err(AuthReject::bare())
     }
 }

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use thorium::models::{
     Event, EventData, EventTrigger, Repo, Sample, ScrubbedUser, TagType, TriggerPotential,
+    UserRole,
 };
 use thorium::{Error, Thorium};
 use tracing::{Level, event, instrument};
@@ -185,6 +186,9 @@ impl TriggerCache {
     }
 
     /// Filters a single event that does not meet at least some conditions for a trigger
+    ///
+    /// Events from disabled users are skipped and cleared since acting on
+    /// their behalf would only fail.
     fn check_event<'a>(&'a self, event: &Event, filtered: &mut FilteredEvents<'a>) {
         // skip any events that are at their max depth
         if event.depth >= self.max_depth {
@@ -193,6 +197,13 @@ impl TriggerCache {
         }
         // get this users info
         match self.users.get(&event.user) {
+            // skip events from disabled users since masquerading as them would only fail
+            Some(user) if user.role == UserRole::Disabled => {
+                // log that we are skipping this disabled users event
+                event!(Level::INFO, disabled_user = &event.user, skipped = true);
+                // add this event to the clear list so it gets popped from the queue
+                filtered.clears.push(event.id);
+            }
             // get all the potential triggers for this event
             Some(user) => self.check_event_helper(user, event, filtered),
             // this user isn't in our cache for some reason so ignore this event for now
@@ -399,5 +410,83 @@ impl DataCache {
         // empty our caches
         self.samples.clear();
         self.repos.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thorium::models::UserSettings;
+
+    /// Build a scrubbed user for testing trigger cache filtering
+    ///
+    /// # Arguments
+    ///
+    /// * `username` - The username for this test user
+    /// * `role` - The role for this test user
+    fn test_user(username: &str, role: UserRole) -> ScrubbedUser {
+        ScrubbedUser {
+            username: username.to_owned(),
+            role,
+            email: "fake@fake.gov".to_owned(),
+            groups: Vec::default(),
+            actual_groups: Vec::default(),
+            token: "token".to_owned(),
+            token_expiration: Utc::now(),
+            unix: None,
+            settings: UserSettings::default(),
+            local: true,
+            verified: true,
+            has_image: false,
+        }
+    }
+
+    /// Build a new sample event for a user
+    ///
+    /// # Arguments
+    ///
+    /// * `user` - The username this event should come from
+    fn test_event(user: &str) -> Event {
+        Event {
+            id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            parent: None,
+            user: user.to_owned(),
+            data: EventData::NewSample {
+                groups: Vec::default(),
+                sample: "sample".to_owned(),
+            },
+            depth: 0,
+        }
+    }
+
+    #[test]
+    fn check_event_skips_disabled_users() {
+        // build a cache with one enabled and one disabled user and no triggers
+        let mut users = HashMap::default();
+        users.insert("enabled".to_owned(), test_user("enabled", UserRole::User));
+        users.insert(
+            "disabled".to_owned(),
+            test_user("disabled", UserRole::Disabled),
+        );
+        let cache = TriggerCache {
+            users,
+            triggers: HashMap::default(),
+            max_depth: 5,
+        };
+        // check an event from our disabled user
+        let disabled_event = test_event("disabled");
+        let mut filtered = FilteredEvents::default();
+        cache.check_event(&disabled_event, &mut filtered);
+        // the disabled users event should be cleared and trigger nothing
+        assert_eq!(filtered.clears, vec![disabled_event.id]);
+        assert!(filtered.confirmed.is_empty());
+        assert!(filtered.potentials.is_empty());
+        // check an event from our enabled user
+        let enabled_event = test_event("enabled");
+        let mut filtered = FilteredEvents::default();
+        cache.check_event(&enabled_event, &mut filtered);
+        // the enabled users event should not be cleared by the disabled check
+        assert!(filtered.clears.is_empty());
     }
 }

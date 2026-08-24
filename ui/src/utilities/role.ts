@@ -7,7 +7,7 @@ import { Group, GroupRoleKey } from '@models/groups';
 // role identity and its display metadata (badges).
 
 /**
- * Resolve a user's Thorium role (Admin, Analyst, Developer, or User) from its serialized form.
+ * Resolve a user's Thorium role (Admin, Analyst, Developer, User, or Disabled) from its serialized form.
  *
  * The Developer role is serialized as an object (`{ Developer: {...} }`) while every other role is
  * its plain string name, so the Developer case is detected by key presence.
@@ -64,6 +64,7 @@ const THORIUM_ROLE_BADGES: Record<RoleKey, RoleBadgeMeta> = {
   [RoleKey.Analyst]: { label: 'Analyst', className: 'bg-goldenrod' },
   [RoleKey.Developer]: { label: 'Developer', className: 'bg-corn-flower' },
   [RoleKey.User]: { label: 'User', className: 'bg-cadet' },
+  [RoleKey.Disabled]: { label: 'Disabled', className: 'bg-grey' },
 };
 
 /**

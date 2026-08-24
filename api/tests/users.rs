@@ -1,7 +1,10 @@
 //! Tests the users routes in Thorium
 
 use chrono::{Duration, Utc};
-use thorium::models::{GroupRequest, ScopedTokenRequest, ScopedTokenUpdate, UserRole, UserUpdate};
+use thorium::client::{ClientSettings, Users};
+use thorium::models::{
+    GroupRequest, ScopedTokenRequest, ScopedTokenUpdate, UserCreate, UserRole, UserUpdate,
+};
 use thorium::test_utilities::{self, generators};
 use thorium::{Error, Thorium, fail, is, is_not};
 use uuid::Uuid;
@@ -353,6 +356,212 @@ async fn scoped_token_admin_demoted() -> Result<(), Error> {
     scoped_thorium.groups.get(&group).await?;
     // clean up our admins scoped token
     admin.users.delete_scoped_token("demoted").await?;
+    Ok(())
+}
+
+/// Build a user update that only sets a role
+///
+/// # Arguments
+///
+/// * `role` - The role to set in this update
+fn role_update(role: UserRole) -> UserUpdate {
+    UserUpdate {
+        password: None,
+        email: None,
+        role: Some(role),
+        settings: None,
+    }
+}
+
+#[tokio::test]
+async fn disabled_user_rejected() -> Result<(), Error> {
+    // get admin client
+    let admin = test_utilities::admin_client().await?;
+    // get a user client
+    let client = generators::client(&admin).await?;
+    // get our users info
+    let info = client.users.info().await?;
+    // create a group owned by this user so we can check group routes too
+    let group = create_group(&client).await?;
+    // disable this user as an admin
+    admin
+        .users
+        .update(&info.username, role_update(UserRole::Disabled))
+        .await?;
+    // make sure this users token is now rejected with a disabled error
+    fail!(client.users.info().await, 401, "has been disabled");
+    // make sure other routes are rejected with a disabled error too
+    fail!(client.groups.get(&group).await, 401, "has been disabled");
+    Ok(())
+}
+
+#[tokio::test]
+async fn disabled_user_cannot_login() -> Result<(), Error> {
+    // get admin client
+    let admin = test_utilities::admin_client().await?;
+    // generate a username and password we know
+    let username = generators::gen_string(24);
+    let password = generators::gen_string(64);
+    // build a user create blueprint
+    let bp = UserCreate::new(&username, &password, "fake@fake.gov").skip_verification();
+    // create this user in Thorium
+    Users::create(
+        &admin.host,
+        bp,
+        Some(&test_utilities::CONF.thorium.secret_key),
+        &ClientSettings::default(),
+    )
+    .await?;
+    // make sure this user can login before being disabled
+    let client = Thorium::build(&admin.host)
+        .basic_auth(username.clone(), password.clone())
+        .build()
+        .await?;
+    client.users.info().await?;
+    // disable this user as an admin
+    admin
+        .users
+        .update(&username, role_update(UserRole::Disabled))
+        .await?;
+    // make sure logging in with basic auth is rejected with a disabled error
+    // drop the client on success since Thorium does not implement Debug
+    let resp = Thorium::build(&admin.host)
+        .basic_auth(username.clone(), password.clone())
+        .build()
+        .await
+        .map(|_| ());
+    fail!(resp, 401, "has been disabled");
+    Ok(())
+}
+
+#[tokio::test]
+async fn disabled_user_scoped_token_rejected() -> Result<(), Error> {
+    // get admin client
+    let admin = test_utilities::admin_client().await?;
+    // get a user client
+    let client = generators::client(&admin).await?;
+    // get our users info
+    let info = client.users.info().await?;
+    // create a group owned by this user
+    let group = create_group(&client).await?;
+    // create a scoped token for this user
+    let req = ScopedTokenRequest::new("disabled-scoped").group(&group);
+    let scoped = client.users.create_scoped_token(&req).await?;
+    // build a client that authenticates with our scoped token
+    let scoped_thorium = scoped_client(&client, &scoped.token).await?;
+    // make sure our scoped token works before this user is disabled
+    scoped_thorium.users.info().await?;
+    // disable this user as an admin
+    admin
+        .users
+        .update(&info.username, role_update(UserRole::Disabled))
+        .await?;
+    // make sure our scoped token is rejected with a disabled error
+    fail!(scoped_thorium.users.info().await, 401, "has been disabled");
+    Ok(())
+}
+
+#[tokio::test]
+async fn disabled_user_reenable_restores_access() -> Result<(), Error> {
+    // get admin client
+    let admin = test_utilities::admin_client().await?;
+    // get a user client
+    let client = generators::client(&admin).await?;
+    // get our users info
+    let info = client.users.info().await?;
+    // disable this user as an admin
+    admin
+        .users
+        .update(&info.username, role_update(UserRole::Disabled))
+        .await?;
+    // make sure this user is rejected while disabled
+    fail!(client.users.info().await, 401, "has been disabled");
+    // re-enable this user with the user role
+    admin
+        .users
+        .update(&info.username, role_update(UserRole::User))
+        .await?;
+    // make sure the same client works again without re-authenticating
+    let info = client.users.info().await?;
+    // make sure this users role was set back to user
+    is!(info.role, UserRole::User);
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_disabled_user_rejected() -> Result<(), Error> {
+    // get admin client
+    let admin = test_utilities::admin_client().await?;
+    // build a user create blueprint with the disabled role
+    let bp = UserCreate::new(
+        generators::gen_string(24),
+        generators::gen_string(64),
+        "fake@fake.gov",
+    )
+    .skip_verification()
+    .role(UserRole::Disabled);
+    // make sure creating an already disabled user is rejected
+    let resp = Users::create(
+        &admin.host,
+        bp,
+        Some(&test_utilities::CONF.thorium.secret_key),
+        &ClientSettings::default(),
+    )
+    .await;
+    fail!(resp, 400, "cannot be created with the Disabled role");
+    Ok(())
+}
+
+#[tokio::test]
+async fn admin_cannot_disable_self() -> Result<(), Error> {
+    // get admin client
+    let admin = test_utilities::admin_client().await?;
+    // generate a username and password for a throwaway admin
+    // so we never disable the shared bootstrap admin
+    let username = generators::gen_string(24);
+    let password = generators::gen_string(64);
+    // build a user create blueprint for a throwaway admin
+    let bp = UserCreate::new(&username, &password, "fake@fake.gov")
+        .skip_verification()
+        .admin();
+    // create this admin in Thorium
+    Users::create(
+        &admin.host,
+        bp,
+        Some(&test_utilities::CONF.thorium.secret_key),
+        &ClientSettings::default(),
+    )
+    .await?;
+    // build a client for our throwaway admin
+    let throwaway = Thorium::build(&admin.host)
+        .basic_auth(username.clone(), password.clone())
+        .build()
+        .await?;
+    // make sure this admin cannot disable their own account
+    let resp = throwaway
+        .users
+        .update(&username, role_update(UserRole::Disabled))
+        .await;
+    fail!(resp, 400, "your own account");
+    // make sure our throwaway admin still has access
+    throwaway.users.info().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn disabled_role_roundtrip() -> Result<(), Error> {
+    // get admin client
+    let admin = test_utilities::admin_client().await?;
+    // create a random user
+    let users = generators::users(1, &admin).await?;
+    // disable this user as an admin
+    admin
+        .users
+        .update(&users[0], role_update(UserRole::Disabled))
+        .await?;
+    // make sure admins can still see this user and their disabled role
+    let info = admin.users.get(&users[0]).await?;
+    is!(info.role, UserRole::Disabled);
     Ok(())
 }
 

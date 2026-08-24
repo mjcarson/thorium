@@ -8,6 +8,8 @@ export enum RoleKey {
   Developer = 'Developer',
   /// A user can upload files and run jobs
   User = 'User',
+  /// A disabled user that is rejected on any attempt to access Thorium
+  Disabled = 'Disabled',
 }
 
 export enum ScopedTokenRoleKey {
@@ -25,6 +27,7 @@ export type Role = {
     Developer: ThoriumDeveloperRoleValue;
   };
   User: RoleKey.User;
+  Disabled: RoleKey.Disabled;
 };
 
 export type ThoriumRole = {
@@ -32,6 +35,7 @@ export type ThoriumRole = {
   Analyst?: RoleKey.Analyst;
   Developer?: ThoriumDeveloperRoleValue;
   User?: RoleKey.User;
+  Disabled?: RoleKey.Disabled;
 };
 
 /// The info to inject about this user on a Unix/Linux system
