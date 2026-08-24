@@ -8,7 +8,11 @@ import { RoleKey } from './users';
 // (which iterates Object.keys(RoleKey)). It must match the backend UserRole enum.
 describe('RoleKey', () => {
   it('matches the backend UserRole variants exactly', () => {
-    expect(Object.values(RoleKey).sort()).toEqual(['Admin', 'Analyst', 'Developer', 'User']);
+    expect(Object.values(RoleKey).sort()).toEqual(['Admin', 'Analyst', 'Developer', 'Disabled', 'User']);
+  });
+
+  it('includes the Disabled role', () => {
+    expect(RoleKey.Disabled).toBe('Disabled');
   });
 
   it('includes the Analyst role', () => {

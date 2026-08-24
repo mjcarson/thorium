@@ -18,7 +18,7 @@ use crate::models::{
     BulkReactionResponse, Group, GroupAllowAction, JobList, Pipeline, Reaction, ReactionCache,
     ReactionCacheUpdate, ReactionDetailsList, ReactionExpire, ReactionList, ReactionRequest,
     ReactionStatus, ReactionUpdate, Repo, RepoDependency, Sample, StageLogs, StageLogsAdd,
-    StatusUpdate, User,
+    StatusUpdate, User, UserRole,
 };
 use crate::utils::{ApiError, Shared, bounder};
 use crate::{
@@ -373,6 +373,11 @@ impl Reaction {
 
     /// Creates a new reactions in bulk for different users
     ///
+    /// Reactions are not created for disabled users; their requests are
+    /// rejected with per-user error entries instead of failing the whole
+    /// request so bulk callers like the event handler can keep creating
+    /// reactions for their other users.
+    ///
     /// # Arguments
     ///
     /// * `user` - The user that is creating these reactions for others
@@ -392,6 +397,22 @@ impl Reaction {
         for (username, reqs) in requests {
             // get this users info
             let other_user = User::force_get(&username, shared).await?;
+            // don't create reactions for disabled users
+            if other_user.role == UserRole::Disabled {
+                // build a response with an error entry for every rejected request
+                let mut user_resp = BulkReactionResponse::default();
+                // add an error for each reaction request we are rejecting
+                for index in 0..reqs.len() {
+                    // reuse the disabled auth message so callers can match on it
+                    user_resp
+                        .errors
+                        .insert(index, "This user has been disabled".to_owned());
+                }
+                // add this disabled users response
+                resp.insert(username, user_resp);
+                // move on to the next user without creating any reactions
+                continue;
+            }
             // create this users reactions
             let user_resp = Self::create_bulk(&other_user, reqs, shared).await?;
             // add the responses for creating this users reactions

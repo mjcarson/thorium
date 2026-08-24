@@ -6,8 +6,8 @@ use gxhash::GxHasher;
 use linearize::StaticMap;
 use papaya::HashMap as PapayaMap;
 use sigma_rust::Rule;
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use thorium::models::entities::rules::{SigmaActionToTake, SigmaAutoFlag};
 use thorium::models::{
     AssociationKind, AssociationRequest, AssociationTarget, Entity, EntityKinds, EntityListOpts,
     EntityMetadata, EntityMetadataRequest, EntityRequest, Event, EventData, EventType, OutputKey,
-    ScrubbedUser, SigmaRule, SigmaScannableResultsEvent, TreeNode, TreeOpts, TreeQuery,
+    ScrubbedUser, SigmaRule, SigmaScannableResultsEvent, TreeNode, TreeOpts, TreeQuery, UserRole,
 };
 use thorium::{Error, Thorium};
 use tracing::{Level, event, instrument};
@@ -817,12 +817,30 @@ impl EntityMap {
     }
 }
 
+/// Check if an error is a 401 caused by masquerading as a disabled user
+///
+/// # Arguments
+///
+/// * `error` - The error to inspect
+fn is_disabled_error(error: &Error) -> bool {
+    // this must be a 401 unauthorized error
+    if error.status() != Some(reqwest::StatusCode::UNAUTHORIZED) {
+        return false;
+    }
+    // check if the response body says this user has been disabled
+    error
+        .msg()
+        .is_some_and(|msg| msg.contains("has been disabled"))
+}
+
 /// A single sigma rule worker
 pub struct SigmaRuleWorker {
     /// The context for this sigma rule worker
     context: SigmaRuleContext,
     /// A map of Thorium clients for users in Thorium
     pub clients: PapayaMap<String, Thorium>,
+    /// The users that are currently disabled and whose events should be skipped
+    pub disabled: HashSet<String>,
     /// A client for Thorium that should only be used to create user clients
     thorium: Arc<Thorium>,
 }
@@ -830,17 +848,33 @@ pub struct SigmaRuleWorker {
 impl SigmaRuleWorker {
     /// Create a client for all of our users
     ///
+    /// Disabled users do not get a client since masquerading as them would
+    /// only fail; any stale client for a now disabled user is removed instead.
+    ///
     /// # Arguments
     ///
     /// * `users` - The users to create a client for
     pub fn create_user_clients(&mut self, users: HashMap<String, ScrubbedUser>) {
+        // get a pin to our client map
+        let pin = self.clients.pin();
         for (username, user) in users {
+            // skip disabled users since masquerading as them would only fail
+            if user.role == UserRole::Disabled {
+                // remove any stale client for this now disabled user
+                pin.remove(&username);
+                // track that this user is disabled so we can skip their events
+                self.disabled.insert(username);
+                // don't build a client for this user
+                continue;
+            }
+            // this user is enabled so make sure they are not tracked as disabled
+            self.disabled.remove(&username);
             // build a client for each user
             let mut user_client = self.thorium.deref().clone();
             // set this client to masquerade as this user
             user_client.masquerade(&user);
             // add a client for this user
-            self.clients.pin().insert(username, user_client);
+            pin.insert(username, user_client);
         }
     }
 
@@ -904,6 +938,13 @@ impl SigmaRuleWorker {
     /// * `event` - The event to scan
     #[instrument(name = "SigmaRuleWorker::scan_event", skip_all)]
     pub async fn scan_event(&self, event: Event) -> Result<SigmaRuleStats, Error> {
+        // skip events from disabled users since masquerading as them would only fail
+        if self.disabled.contains(&event.user) {
+            // log that we are skipping this disabled users event
+            event!(Level::INFO, disabled_user = &event.user, skipped = true);
+            // return empty stats since we did no work; this mirrors a successful scan
+            return Ok(SigmaRuleStats::default());
+        }
         // get a pin to our papaya map
         let pin = self.clients.pin_owned();
         // get this users thorium client
@@ -1014,6 +1055,7 @@ impl EventWorkerSupportCore for SigmaRuleWorker {
             context: cache.sigma.clone(),
             thorium: thorium.clone(),
             clients: PapayaMap::with_capacity(100),
+            disabled: HashSet::default(),
         };
         // populate our user clients
         worker.create_user_clients(cache.users.clone());
@@ -1092,8 +1134,28 @@ impl EventWorkerSupportCore for SigmaRuleWorker {
 impl EventWorkerSupport for SigmaRuleWorker {
     /// The method to call to handle or process a single event
     async fn process(&self, event: Event, stats: &Arc<Mutex<SigmaRuleStats>>) -> Result<(), Error> {
+        // keep this events user so we can log skips after the event is consumed
+        let username = event.user.clone();
         // scan this event
-        let local_stats = self.scan_event(event).await?;
+        let local_stats = match self.scan_event(event).await {
+            // this event was scanned successfully
+            Ok(local_stats) => local_stats,
+            // this user was disabled after our user cache was built so their
+            // masqueraded calls 401; skip instead of poisoning the retry loop
+            Err(error) if is_disabled_error(&error) => {
+                // log that we skipped a stale disabled users event
+                event!(
+                    Level::INFO,
+                    disabled_user = &username,
+                    skipped = true,
+                    stale = true,
+                );
+                // skip this event with empty stats like a successful no-op scan
+                SigmaRuleStats::default()
+            }
+            // all other errors still bubble up so the event is retried later
+            Err(error) => return Err(error),
+        };
         // get a lock to our shared stats so we can update them
         let mut lock = stats.lock().await;
         // add our total

@@ -85,6 +85,7 @@ pub fn role_label(role: &UserRole) -> &'static str {
         UserRole::Analyst => "analyst",
         UserRole::Developer { .. } => "developer",
         UserRole::User => "user",
+        UserRole::Disabled => "disabled",
     }
 }
 
