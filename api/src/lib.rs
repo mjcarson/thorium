@@ -62,7 +62,7 @@ async fn initial_settings_consistency_scan(
     let settings = match crate::models::backends::db::system::get_settings(&shared).await {
         Ok(settings) => settings,
         Err(err) => {
-            if err.code == axum::http::StatusCode::NOT_FOUND {
+            if err.status() == axum::http::StatusCode::NOT_FOUND {
                 // we got a 404, so assume this is first
                 // run and just use default settings
                 let default_settings = crate::models::SystemSettings::default();
@@ -79,20 +79,20 @@ async fn initial_settings_consistency_scan(
                     .await
                     .map_err(|err| {
                         utils::ApiError::new(
-                            err.code,
+                            err.status(),
                             Some(format!(
                                 "Failed to set default system settings: {}",
-                                err.msg.unwrap_or("An unknown error occurred".to_string())
+                                err.msg().unwrap_or("An unknown error occurred".to_string())
                             )),
                         )
                     })?;
                 default_settings
             } else {
                 return Err(utils::ApiError::new(
-                    err.code,
+                    err.status(),
                     Some(format!(
                         "An error occured retrieving system settings: {}",
-                        err.msg.unwrap_or("An unknown error occurred".to_string())
+                        err.msg().unwrap_or("An unknown error occurred".to_string())
                     )),
                 ));
             }

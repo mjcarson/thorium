@@ -14,7 +14,7 @@ use crate::models::{
     Event, FullTagRow, TagDeleteRequest, TagMap, TagRequest, TagRow, TagSearchEvent, TagType, User,
 };
 use crate::utils::{ApiError, Shared, helpers};
-use crate::{bad, conn, internal_err, log_scylla_err};
+use crate::{bad, conn, log_scylla_err};
 
 /// Save new tags into scylla
 ///
@@ -132,11 +132,10 @@ pub async fn create<T: TagSupport>(
         // create a search event that we modified tags
         let search_event = TagSearchEvent::modified::<T>(key, req.groups);
         if let Err(err) = super::search::events::create(search_event, shared).await {
-            return internal_err!(format!(
-                "Failed to create result search event! {}",
-                err.msg
-                    .unwrap_or_else(|| "An unknown error occurred".to_string())
-            ));
+            // log that we failed to create this search event
+            event!(Level::ERROR, msg = "Failed to create tag search event!");
+            // propagate the original error so internal info stays hidden
+            return Err(err);
         }
     }
     Ok(())
@@ -268,11 +267,10 @@ pub async fn create_owned<T: TagSupport>(
         let search_event = TagSearchEvent::modified::<T>(key, req.groups);
         // save our search event
         if let Err(err) = super::search::events::create(search_event, shared).await {
-            return internal_err!(format!(
-                "Failed to create result search event! {}",
-                err.msg
-                    .unwrap_or_else(|| "An unknown error occurred".to_string())
-            ));
+            // log that we failed to create this search event
+            event!(Level::ERROR, msg = "Failed to create tag search event!");
+            // propagate the original error so internal info stays hidden
+            return Err(err);
         }
     }
     Ok(())
@@ -474,11 +472,10 @@ pub async fn delete<T: TagSupport>(
         );
         // save our search event
         if let Err(err) = super::search::events::create(search_event, shared).await {
-            return internal_err!(format!(
-                "Failed to create tag search event! {}",
-                err.msg
-                    .unwrap_or_else(|| "An unknown error occurred".to_string())
-            ));
+            // log that we failed to create this search event
+            event!(Level::ERROR, msg = "Failed to create tag search event!");
+            // propagate the original error so internal info stays hidden
+            return Err(err);
         }
     }
     // TODO: remove any buckets with no data; delete lowercase buckets as well if needed

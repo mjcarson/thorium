@@ -321,7 +321,7 @@ async fn get_updated_repo(
         Err(err) => {
             // if we get a NOT FOUND error retrieving the repo,
             // assume it hasn't been saved to the db yet and create it manually
-            if err.code == StatusCode::NOT_FOUND {
+            if err.status() == StatusCode::NOT_FOUND {
                 Ok(Repo {
                     provider: url_components.provider,
                     user: url_components.user,
@@ -447,7 +447,9 @@ async fn get_base(
                         // add this new submission to this timestamps list
                         match RepoSubmission::try_from((sub, user)) {
                             Ok(sub) => entry.push(sub),
-                            Err(error) => event!(Level::ERROR, msg = &error.msg),
+                            Err(error) => {
+                                event!(Level::ERROR, kind = error.kind(), msg = error.msg());
+                            }
                         }
                     }
                 });
@@ -476,7 +478,9 @@ async fn get_base(
                     // add this new submission to this timestamps list
                     match RepoSubmission::try_from((sub, user)) {
                         Ok(sub) => entry.push(sub),
-                        Err(error) => event!(Level::ERROR, msg = &error.msg),
+                        Err(error) => {
+                            event!(Level::ERROR, kind = error.kind(), msg = error.msg());
+                        }
                     }
                 }
             });

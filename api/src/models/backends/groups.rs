@@ -581,7 +581,7 @@ impl Group {
             Ok(group) => group,
             Err(error) => {
                 // log that this group doesn't exist
-                event!(Level::ERROR, error = error.msg);
+                event!(Level::ERROR, error = error.msg());
                 // return our error
                 return Err(error);
             }

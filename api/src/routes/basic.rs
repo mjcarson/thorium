@@ -1,6 +1,6 @@
 use crate::models::Version;
 use crate::models::backends::system;
-use crate::utils::{ApiError, AppState};
+use crate::utils::{ApiError, ApiErrorResponse, AppState};
 use axum::Router;
 use axum::extract::{Json, State};
 use axum::http::StatusCode;
@@ -102,7 +102,7 @@ pub async fn version() -> Result<Json<Version>, ApiError> {
 #[derive(OpenApi)]
 #[openapi(
     paths(identify, banner, health, version),
-    components(schemas(Version, ApiError)),
+    components(schemas(Version, ApiErrorResponse)),
     modifiers(&OpenApiSecurity),
 )]
 pub struct BasicApiDocs;
