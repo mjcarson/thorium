@@ -869,10 +869,13 @@ async fn comment_attachment_prune() -> Result<(), thorium::Error> {
     match attachment_resp {
         Ok(_) => return Err(thorium::Error::new("Comment attachment was not deleted")),
         Err(err) => {
-            // Check for correct code and message
-            is!(err.code, 400);
+            // internal S3 errors are abstracted to a 500 with no public message
+            is!(err.status(), 500);
+            is!(err.kind(), "S3");
+            is!(err.public_msg().is_none(), true);
+            // the full error info is still available internally for tracing
             let msg = err
-                .msg
+                .msg()
                 .expect("S3 get_object error message is empty but it shouldn't be");
             starts_with!(msg, "Failed to get object from s3");
         }

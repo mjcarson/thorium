@@ -297,7 +297,7 @@ mod tests {
         let res = parse_bracket_segments("metadata[key]extra_bad_stuff");
         let err = res.expect_err("Should be an error");
         assert!(
-            err.msg
+            err.msg()
                 .is_some_and(|msg| msg.contains("extra characters after brackets"))
         );
     }
@@ -307,7 +307,7 @@ mod tests {
         let res = parse_bracket_segments("metadata[key][value");
         let err = res.expect_err("Should be an error");
         assert!(
-            err.msg
+            err.msg()
                 .is_some_and(|msg| msg.contains("missing closing bracket"))
         );
     }
