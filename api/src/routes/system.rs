@@ -2,7 +2,7 @@ use axum::Router;
 use axum::extract::{Json, Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, patch, post};
-use tracing::{Level, instrument, span};
+use tracing::{Level, event, instrument, span};
 use utoipa::OpenApi;
 
 use super::OpenApiSecurity;
@@ -304,10 +304,10 @@ async fn consistency_scan(
         .consistency_scan(&user, &state.shared)
         .await
         .map_err(|err| {
-            ApiError::new(
-                err.code,
-                Some(format!("An error occurred while scanning: {err}")),
-            )
+            // log that an error occurred while scanning
+            event!(Level::ERROR, msg = "An error occurred while scanning");
+            // propagate the original error so internal info stays hidden
+            err
         })?;
     // reset the scaler's cache after the scan
     SystemInfo::reset_cache(&user, &state.shared).await?;

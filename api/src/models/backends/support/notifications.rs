@@ -7,12 +7,11 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "api")] {
         use axum::extract::FromRequestParts;
         use axum::http::request::Parts;
-        use tracing::instrument;
+        use tracing::{Level, event, instrument};
         use futures::stream;
         use futures::{StreamExt, TryStreamExt};
         use uuid::Uuid;
 
-        use crate::internal_err;
         use crate::models::backends::db;
         use crate::models::bans::Ban;
         use crate::utils::{ApiError, Shared};
@@ -143,12 +142,10 @@ pub trait NotificationSupport: KeySupport + Sized {
             match db::notifications::get_all(key, shared).await {
                 Ok(notifications) => notifications,
                 Err(err) => {
-                    return internal_err!(format!(
-                        "Error while updating notifications: {}",
-                        err.msg.unwrap_or_else(|| {
-                            "an unknown error occurred retrieving notifications".to_string()
-                        })
-                    ));
+                    // log that we could not retrieve this entity's notifications
+                    event!(Level::ERROR, msg = "Error while updating notifications");
+                    // propagate the original error so internal info stays hidden
+                    return Err(err);
                 }
             };
         // create a notification for each added ban

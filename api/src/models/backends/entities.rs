@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::str::FromStr;
-use tracing::instrument;
+use tracing::{Level, event, instrument};
 use uuid::Uuid;
 
 use super::db;
@@ -1411,10 +1411,10 @@ impl EntityUpdateForm {
         if !db::groups::exists(&self.add_groups, shared)
             .await
             .map_err(|err| {
-                ApiError::new(
-                    err.code,
-                    Some(format!("Unable to verify that added groups exist: {err}")),
-                )
+                // log that we could not verify these added groups exist
+                event!(Level::ERROR, msg = "Unable to verify that added groups exist");
+                // propagate the original error so internal info stays hidden
+                err
             })?
         {
             return not_found!(format!(

@@ -430,7 +430,7 @@ pub async fn claim(
                 Ok(reaction) => break (reaction, job),
                 // if this is a 404 then remove this job from queues and try again
                 Err(error) => {
-                    if error.code == StatusCode::NOT_FOUND {
+                    if error.status() == StatusCode::NOT_FOUND {
                     // log that we found a job that is missing data
                     event!(Level::ERROR, msg = "Missing reaction data", job = job.id.to_string());
                         // prune this dangling job
@@ -890,7 +890,7 @@ pub async fn list_details(
             // we failed to get this jobs details
             Err(error) => {
                 // log that we failed to get this jobs details and ignore it
-                event!(Level::ERROR, msg = error.msg);
+                event!(Level::ERROR, kind = error.kind(), msg = error.msg());
             }
         }
     }

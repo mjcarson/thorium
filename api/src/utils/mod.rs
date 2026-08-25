@@ -9,7 +9,7 @@ mod utils_api_reexport {
     pub mod s3;
     pub mod shared;
     pub use self::s3::StandardHashes;
-    pub use errors::ApiError;
+    pub use errors::{ApiError, ApiErrorResponse};
     pub use shared::{AppState, Shared};
 }
 

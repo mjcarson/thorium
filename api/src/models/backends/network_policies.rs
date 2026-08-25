@@ -49,10 +49,10 @@ impl NetworkPolicy {
         if !db::groups::exists(&req.groups, shared)
             .await
             .map_err(|err| {
-                ApiError::new(
-                    err.code,
-                    Some(format!("Unable to verify that groups exist: {err}")),
-                )
+                // log that we could not verify these groups exist
+                event!(Level::ERROR, msg = "Unable to verify that groups exist");
+                // propagate the original error so internal info stays hidden
+                err
             })?
         {
             return not_found!(format!(
@@ -185,14 +185,10 @@ impl NetworkPolicy {
         .collect::<Result<Vec<(String, bool)>, ApiError>>()
         // propagate any error
         .map_err(|err: ApiError| {
-            ApiError::new(
-                err.code,
-                Some(format!(
-                    "Unable to verify network policies: {}",
-                    err.msg
-                        .unwrap_or("an unknown Scylla error occurred".to_string())
-                )),
-            )
+            // log that we could not verify these network policies
+            event!(Level::ERROR, msg = "Unable to verify network policies");
+            // propagate the original error so internal info stays hidden
+            err
         })?
         .into_iter()
         // return the policy if it doesn't exist
@@ -657,10 +653,10 @@ impl NetworkPolicyUpdate {
         if !db::groups::exists(&self.add_groups, shared)
             .await
             .map_err(|err| {
-                ApiError::new(
-                    err.code,
-                    Some(format!("Unable to verify that added groups exist: {err}")),
-                )
+                // log that we could not verify these added groups exist
+                event!(Level::ERROR, msg = "Unable to verify that added groups exist");
+                // propagate the original error so internal info stays hidden
+                err
             })?
         {
             return not_found!(format!(

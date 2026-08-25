@@ -1692,8 +1692,9 @@ impl AuthReject {
     ///
     /// * `error` - The auth chain error to build a rejection from
     fn from_error(error: ApiError) -> Self {
-        // only surface messages from post-credential 401s
-        if error.code == StatusCode::UNAUTHORIZED && error.msg.is_some() {
+        // only surface public messages from post-credential 401s so internal
+        // auth errors like OAuth failures stay masked
+        if error.status() == StatusCode::UNAUTHORIZED && error.public_msg().is_some() {
             AuthReject(Some(error))
         } else {
             AuthReject(None)
