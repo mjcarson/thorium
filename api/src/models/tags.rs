@@ -484,21 +484,6 @@ impl<T: TagSupport + 'static + Send> super::CensusSupport for TagRequest<T> {
         row.bucket
     }
 
-    /// Build the count key for this partition
-    fn count_key_from_row(namespace: &str, row: &Self::Row, grouping: i32) -> String {
-        // build the key for this row
-        format!(
-            "{namespace}:census:tags:counts:{kind}:{group}:{key}:{value}:{year}:{grouping}",
-            namespace = namespace,
-            kind = row.kind,
-            group = row.group,
-            key = row.key,
-            value = row.value,
-            year = row.year,
-            grouping = grouping,
-        )
-    }
-
     /// Build the sorted set key for this census operation
     fn stream_key_from_row(namespace: &str, row: &Self::Row) -> String {
         format!(
@@ -565,21 +550,6 @@ impl<T: TagSupport + 'static + Send> super::CensusSupport for TagCensusCaseInsen
     /// Get the bucket for this partition
     fn get_bucket(row: &TagCensusCaseInsensitiveRow) -> i32 {
         row.bucket
-    }
-
-    /// Build the count key for this partition
-    fn count_key_from_row(namespace: &str, row: &Self::Row, grouping: i32) -> String {
-        // build the key for this row
-        format!(
-            "{namespace}:census:tags_case_insensitive:counts:{kind}:{group}:{key}:{value}:{year}:{grouping}",
-            namespace = namespace,
-            kind = row.kind,
-            group = row.group,
-            key = row.key_lower,
-            value = row.value_lower,
-            year = row.year,
-            grouping = grouping,
-        )
     }
 
     /// Build the sorted set key for this census operation

@@ -7,7 +7,7 @@ pub mod vendors;
 
 pub use vendors::VendorKeys;
 
-/// Build the keys for this items cursor/census caches
+/// Build the keys for this entities cursor/census caches
 ///
 /// # Arguments
 ///
@@ -26,14 +26,6 @@ pub fn census_keys(
 ) {
     // for each group build our key
     for group in groups {
-        // build the count key for this row
-        let count = format!(
-            "{namespace}:census:entities:counts:{group}:{year}:{grouping}",
-            namespace = shared.config.thorium.namespace,
-            group = group,
-            year = year,
-            grouping = grouping,
-        );
         // build the stream key for this row
         let stream = format!(
             "{namespace}:census:entities:stream:{group}:{year}",
@@ -42,11 +34,7 @@ pub fn census_keys(
             year = year,
         );
         // build our census key object
-        let key = CensusKeys {
-            count,
-            stream,
-            bucket,
-        };
+        let key = CensusKeys { stream, bucket };
         // add our key
         keys.push(key);
     }

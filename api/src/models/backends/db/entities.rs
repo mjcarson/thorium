@@ -427,22 +427,6 @@ pub async fn update(
         super::keys::entities::census_keys(&mut keys, add_groups, year, bucket, grouping, shared);
         super::census::incr_cache(keys, shared).await?;
     }
-    // update census info for any removed groups
-    if !remove_groups.is_empty() {
-        // decrement the census where we've removed groups
-        let mut keys = Vec::with_capacity(entity.groups.len());
-        // get the bucket grouping for this census info
-        let grouping = bucket / 10_000;
-        super::keys::entities::census_keys(
-            &mut keys,
-            remove_groups,
-            year,
-            bucket,
-            grouping,
-            shared,
-        );
-        super::census::decr_cache(keys, shared).await?;
-    }
     // build the key for this entity
     let entity_key = Entity::build_key(entity.id.to_string(), &());
     // add tags if we have any
@@ -549,7 +533,5 @@ pub async fn delete(user: &User, entity: &Entity, shared: &Shared) -> Result<(),
     let grouping = bucket / 10_000;
     // build the keys for this items census cache
     super::keys::entities::census_keys(&mut keys, &entity.groups, year, bucket, grouping, shared);
-    // update this samples census cache info
-    super::census::decr_cache(keys, shared).await?;
     Ok(())
 }

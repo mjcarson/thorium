@@ -505,20 +505,6 @@ impl crate::models::CensusSupport for Commitish {
         row.bucket
     }
 
-    /// Build the count key for this partition
-    fn count_key_from_row(namespace: &str, row: &Self::Row, grouping: i32) -> String {
-        // build the key for this row
-        format!(
-            "{namespace}:census:commitish:counts:{kind}:{group}:{repo}:{year}:{grouping}",
-            namespace = namespace,
-            kind = row.kind,
-            group = row.group,
-            repo = row.repo,
-            year = row.year,
-            grouping = grouping,
-        )
-    }
-
     /// Build the sorted set key for this census operation
     fn stream_key_from_row(namespace: &str, row: &Self::Row) -> String {
         format!(

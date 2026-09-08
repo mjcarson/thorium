@@ -640,11 +640,6 @@ pub async fn delete_submission(
             super::s3::delete(S3Objects::File, s3_id, shared).await?;
         }
     }
-    // build the census count cache keys for these submissions
-    // There is no extra info for samples to pass so we just pass in an &()
-    let keys = super::keys::samples::census_keys(groups, year, bucket, shared);
-    // update this samples census cache info
-    super::census::decr_cache(keys, shared).await?;
     Ok(())
 }
 
