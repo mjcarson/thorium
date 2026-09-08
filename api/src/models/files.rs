@@ -3518,18 +3518,6 @@ impl super::CensusSupport for Sample {
         row.bucket
     }
 
-    /// Build the count key for this partition
-    fn count_key_from_row(namespace: &str, row: &Self::Row, grouping: i32) -> String {
-        // build the key for this row
-        format!(
-            "{namespace}:census:samples:counts:{group}:{year}:{grouping}",
-            namespace = namespace,
-            group = row.group,
-            year = row.year,
-            grouping = grouping,
-        )
-    }
-
     /// Build the sorted set key for this census operation
     fn stream_key_from_row(namespace: &str, row: &Self::Row) -> String {
         // build the stream key for this row

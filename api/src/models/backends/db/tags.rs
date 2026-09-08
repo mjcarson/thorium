@@ -69,31 +69,12 @@ pub async fn create<T: TagSupport>(
                                 ),
                             )
                             .await?;
-                        // build the keys for this tags census info
-                        let count_key = tags::census_count(
-                            T::tag_kind(),
-                            group,
-                            tag_key,
-                            tag_value,
-                            year,
-                            bucket,
-                            shared,
-                        );
                         let stream_key = tags::census_stream(
                             T::tag_kind(),
                             group,
                             tag_key,
                             tag_value,
                             year,
-                            shared,
-                        );
-                        let count_key_case_insensitive = tags::census_count_case_insensitive(
-                            T::tag_kind(),
-                            group,
-                            tag_key,
-                            tag_value,
-                            year,
-                            bucket,
                             shared,
                         );
                         let stream_key_case_insensitive = tags::census_stream_case_insensitive(
@@ -105,9 +86,7 @@ pub async fn create<T: TagSupport>(
                             shared,
                         );
                         // add data into redis
-                        pipe.cmd("hincrby").arg(count_key).arg(bucket).arg(1)
-                            .cmd("hincrby").arg(count_key_case_insensitive).arg(bucket).arg(1)
-                            .cmd("zadd").arg(stream_key_case_insensitive).arg(bucket).arg(bucket)
+                        pipe.cmd("zadd").arg(stream_key_case_insensitive).arg(bucket).arg(bucket)
                             .cmd("zadd").arg(stream_key).arg(bucket).arg(bucket);
                     }
                 }
@@ -204,30 +183,12 @@ pub async fn create_owned<T: TagSupport>(
                             )
                             .await?;
                         // build the keys for this tags census info
-                        let count_key = tags::census_count(
-                            T::tag_kind(),
-                            group,
-                            tag_key,
-                            tag_value,
-                            year,
-                            bucket,
-                            shared,
-                        );
                         let stream_key = tags::census_stream(
                             T::tag_kind(),
                             group,
                             tag_key,
                             tag_value,
                             year,
-                            shared,
-                        );
-                        let count_key_case_insensitive = tags::census_count_case_insensitive(
-                            T::tag_kind(),
-                            group,
-                            tag_key,
-                            tag_value,
-                            year,
-                            bucket,
                             shared,
                         );
                         let stream_key_case_insensitive = tags::census_stream_case_insensitive(
@@ -239,9 +200,7 @@ pub async fn create_owned<T: TagSupport>(
                             shared,
                         );
                         // add data into redis
-                        pipe.cmd("hincrby").arg(count_key).arg(bucket).arg(1)
-                            .cmd("hincrby").arg(count_key_case_insensitive).arg(bucket).arg(1)
-                            .cmd("zadd").arg(stream_key_case_insensitive).arg(bucket).arg(bucket)
+                        pipe.cmd("zadd").arg(stream_key_case_insensitive).arg(bucket).arg(bucket)
                             .cmd("zadd").arg(stream_key).arg(bucket).arg(bucket);
                     }
                 }
@@ -389,8 +348,6 @@ pub async fn delete<T: TagSupport>(
     let tag_rows = get_tag_rows(kind, &req.groups, key, shared).await?;
     // build our delete map
     let tag_map = build_tag_delete_map(tag_rows);
-    // build a redis pipeline to decrement this tags counts
-    let mut pipe = redis::pipe();
     // track which groups had tags deleted
     let mut groups_deleted: HashSet<&String> = HashSet::new();
     // crawl over the tags we want to delete and delete them
@@ -430,28 +387,6 @@ pub async fn delete<T: TagSupport>(
                                         ),
                                     )
                                     .await?;
-                                // build the key for this tags census count
-                                let count_key = tags::census_count(
-                                    T::tag_kind(),
-                                    group,
-                                    tag_key,
-                                    value,
-                                    *year,
-                                    *bucket,
-                                    shared,
-                                );
-                                let count_key_lower = tags::census_count_case_insensitive(
-                                    T::tag_kind(),
-                                    group,
-                                    tag_key,
-                                    value,
-                                    *year,
-                                    *bucket,
-                                    shared,
-                                );
-                                // decrement the tag's count in Redis
-                                pipe.cmd("hincrby").arg(count_key).arg(bucket).arg(-1)
-                                    .cmd("hincrby").arg(count_key_lower).arg(bucket).arg(-1);
                                 // mark that we deleted at least one tag in this group
                                 groups_deleted.insert(group);
                             }
@@ -461,8 +396,6 @@ pub async fn delete<T: TagSupport>(
             }
         }
     }
-    // execute our redis pipeline
-    let _: () = pipe.query_async(conn!(shared)).await?;
     // create a search event if this tag type supports it
     if kind.supports_search_events() && !groups_deleted.is_empty() {
         // if we deleted tags from at least one group, create a search event that we edited tags

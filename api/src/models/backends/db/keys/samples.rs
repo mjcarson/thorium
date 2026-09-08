@@ -3,30 +3,6 @@
 use crate::models::CensusKeys;
 use crate::utils::Shared;
 
-/// Build the count key for this partition
-///
-/// # Arguments
-///
-/// * `group` - The group to look for census info for
-/// * `year` - The year this sample is in
-/// * `grouping` - The grouping for this bucket
-/// * `shared` - Shared Thorium objects
-pub fn census_count<T: std::fmt::Display>(
-    group: &T,
-    year: i32,
-    grouping: i32,
-    shared: &Shared,
-) -> String {
-    // build the key for this row
-    format!(
-        "{namespace}:census:samples:counts:{group}:{year}:{grouping}",
-        namespace = shared.config.thorium.namespace,
-        group = group,
-        year = year,
-        grouping = grouping,
-    )
-}
-
 /// Build the sorted set key for this census operation
 ///
 /// # Arguments
@@ -59,20 +35,12 @@ pub fn census_keys(
 ) -> Vec<CensusKeys> {
     // have a list of keys
     let mut keys = Vec::with_capacity(groups.len());
-    // calculate the grouping for this form
-    let grouping = bucket / 10_000;
     // for each group build our key
     for group in groups {
-        // build the count key for this row
-        let count = census_count(group, year, grouping, shared);
         // build the stream key for this row
         let stream = census_stream(group, year, shared);
         // build our census key object
-        let key = CensusKeys {
-            count,
-            stream,
-            bucket,
-        };
+        let key = CensusKeys { stream, bucket };
         // add our key
         keys.push(key);
     }

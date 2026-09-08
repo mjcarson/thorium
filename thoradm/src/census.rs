@@ -123,15 +123,15 @@ impl<T: CensusSupport> CensusWorker<T> {
                 // skip building a pipeline if this is a dry run
                 if !self.dry_run {
                     // group this partitions count, bucket, and count grouping
-                    let count = T::get_count(&typed_row);
+                    //let count = T::get_count(&typed_row);
                     let bucket = T::get_bucket(&typed_row);
-                    let grouping = bucket / 10_000;
+                    //let grouping = bucket / 10_000;
                     // build the key to this parititons counts/stream
-                    let count_key = T::count_key_from_row(&self.namespace, &typed_row, grouping);
+                    //let count_key = T::count_key_from_row(&self.namespace, &typed_row, grouping);
                     let stream_key = T::stream_key_from_row(&self.namespace, &typed_row);
                     // add data into redis
-                    pipe.cmd("hset").arg(count_key).arg(bucket).arg(count)
-                        .cmd("zadd").arg(stream_key).arg(bucket).arg(bucket);
+                    pipe.cmd("zadd").arg(stream_key).arg(bucket).arg(bucket);
+                        //.cmd("hset").arg(count_key).arg(bucket).arg(count)
                 }
             }
                 // skip saving things to redis if this is a dry run
