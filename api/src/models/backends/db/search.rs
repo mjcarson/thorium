@@ -1,6 +1,6 @@
 //! Handles searches, including creating/retrieving cursors in the db and sending requests to Elastic
 
-use tracing::instrument;
+use tracing::{Level, event, instrument};
 
 use super::ElasticCursor;
 use crate::models::{ApiCursor, ElasticDoc, ElasticSearchParams};
@@ -19,6 +19,16 @@ pub async fn search(
     params: ElasticSearchParams,
     shared: &Shared,
 ) -> Result<ApiCursor<ElasticDoc>, ApiError> {
+    // if are searching no groups just shortcircuit and return nothing
+    if params.groups.is_empty() {
+        // log that this user has no groups
+        event!(Level::WARN, msg = "User has no groups");
+        // return an empty cursor
+        return Ok(ApiCursor {
+            cursor: None,
+            data: Vec::default(),
+        });
+    }
     // get our cursor or build a new one
     let mut cursor = ElasticCursor::from_params(params, shared).await?;
     //  get the next page of data

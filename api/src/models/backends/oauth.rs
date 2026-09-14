@@ -276,6 +276,8 @@ impl OAuthUserCreate {
     /// * `provider` - The provider to create a new registration session with
     /// * `shared` - Shared Thorium objects
     pub async fn register(self, provider: &str, shared: &Shared) -> Result<User, ApiError> {
+        // ensure username is alphanumeric
+        bounder::string_lower(&self.username, "username", 1, 50)?;
         // make sure this is a valid provider
         if !shared.oauth.contains_key(provider) {
             // return unauthorized as this is not a valid OAuth provider

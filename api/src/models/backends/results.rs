@@ -84,7 +84,9 @@ impl<O: OutputSupport> OutputFormBuilder<O> {
         }
         // validate our file name for this field if we have one
         // if we don't then just use a random uuid
-        let file_name = bounder::multipart_path(&field, "Result File")?;
+        let file_name = bounder::multipart_path(&field, "Result File", false)?
+            // we don't have a file name so just use a random uuid
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         // result files cannot start with __thorium_ as those are protected names
         if file_name.starts_with(THORIUM_PREFIX) {
             // raise an error since this result file uses a protected prefix

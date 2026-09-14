@@ -180,7 +180,7 @@ export async function confirmOAuthLink(
 ): Promise<OAuthLinkConfirmStatus> {
   const url = `/oauth/${encodeURIComponent(provider)}/link`;
   return client
-    .get(url, { params: { username, token } })
+    .post(url, { params: { username, token } })
     .then((res) => (res?.status == 204 ? OAuthLinkConfirmStatus.Linked : OAuthLinkConfirmStatus.Error))
     .catch((error: unknown) => {
       // 401 = invalid/expired/used token (uniform anti-enumeration answer); an expected outcome.

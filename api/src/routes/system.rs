@@ -12,20 +12,21 @@ use crate::models::pipelines::BannedImageBan;
 use crate::models::{
     ActiveJob, ApiCursor, ArgStrategy, AutoTag, AutoTagLogic, Backup, ChildFilters,
     ChildFiltersUpdate, ChildrenDependencySettings, Cleanup, ConfigMap, Dependencies,
-    DependencyPassStrategy, EphemeralDependencySettings, EventTrigger, FileSystemDependencySettings,
-    FilesHandler, Group,
-    GroupAllowed, GroupStats, GroupUsers, HostPath, HostPathTypes, HostPathWhitelistUpdate, Image,
-    ImageArgs, ImageBan, ImageBanKind, ImageBanUpdate, ImageLifetime, ImageScaler, ImageVersion,
-    Kvm, KwargDependency, NFS, Node, NodeGetParams, NodeHealth, NodeListLine, NodeListParams,
-    NodeRegistration, NodeUpdate, OutputCollection, OutputDisplayType, OutputHandler, Pipeline,
-    PipelineBan, PipelineBanKind, PipelineBanUpdate, PipelineStats, Pools, Reaction,
-    RepoDependencySettings, Resources, ResultDependencySettings, SampleDependencySettings,
-    ScalerStats, Secret, SecurityContext, SpawnLimits, StageStats, SystemInfo, SystemInfoParams,
-    SystemSettings, SystemSettingsResetParams, SystemSettingsUpdate, SystemSettingsUpdateParams,
-    SystemStats, TagDependencySettings, TagType, Theme, UnixInfo, User, UserRole, UserSettings,
-    Volume, VolumeTypes, Worker, WorkerDelete, WorkerDeleteMap, WorkerRegistration,
-    WorkerRegistrationList, WorkerStatus, WorkerUpdate,
+    DependencyPassStrategy, EphemeralDependencySettings, EventTrigger,
+    FileSystemDependencySettings, FilesHandler, Group, GroupAllowed, GroupStats, GroupUsers,
+    HostPath, HostPathTypes, HostPathWhitelistUpdate, Image, ImageArgs, ImageBan, ImageBanKind,
+    ImageBanUpdate, ImageLifetime, ImageScaler, ImageVersion, Kvm, KwargDependency, NFS, Node,
+    NodeGetParams, NodeHealth, NodeListLine, NodeListParams, NodeRegistration, NodeUpdate,
+    OutputCollection, OutputDisplayType, OutputHandler, Pipeline, PipelineBan, PipelineBanKind,
+    PipelineBanUpdate, PipelineStats, Pools, Reaction, RepoDependencySettings, Resources,
+    ResultDependencySettings, SampleDependencySettings, ScalerStats, Secret, SecurityContext,
+    SpawnLimits, StageStats, SystemInfo, SystemInfoParams, SystemSettings,
+    SystemSettingsResetParams, SystemSettingsUpdate, SystemSettingsUpdateParams, SystemStats,
+    TagDependencySettings, TagType, Theme, UnixInfo, User, UserRole, UserSettings, Volume,
+    VolumeTypes, Worker, WorkerDelete, WorkerDeleteMap, WorkerRegistration, WorkerRegistrationList,
+    WorkerStatus, WorkerUpdate,
 };
+use crate::unauthorized;
 use crate::utils::{ApiError, AppState};
 
 /// Initializes the current backend's system info
@@ -640,6 +641,11 @@ async fn register_worker(
     State(state): State<AppState>,
     Json(workers): Json<WorkerRegistrationList>,
 ) -> Result<StatusCode, ApiError> {
+    // only the Thorium user/admins should be able to register workers
+    if !user.is_admin() {
+        // reject any other user creating workers
+        return unauthorized!();
+    }
     // add this new worker to our workers table
     workers.register(&user, scaler, &state.shared).await?;
     Ok(StatusCode::NO_CONTENT)

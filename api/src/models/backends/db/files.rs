@@ -361,6 +361,10 @@ pub async fn authorize(
                 return Ok(());
             }
         }
+        // if we have not found all of our sha256s then we do not have access
+        if authed.len() != sha256s.len() {
+            return unauthorized!();
+        }
     }
     // we have access to this sample
     Ok(())

@@ -376,7 +376,10 @@ impl MountGen {
     fn thorium() -> Result<VolumeMount, serde_json::Error> {
         serde_json::from_value(json!({
             "name": "thorium",
-            "mountPath": "/opt/thorium"
+            "mountPath": "/opt/thorium",
+            "read_only": true,
+            "read_only_recursive": "Enabled"
+
         }))
     }
 

@@ -26,7 +26,7 @@ use crate::models::{
     TagListRow, TagMap, TagType, TreeRelationships, TreeSupport, UnhashedTreeBranch, User,
     ZipDownloadParams,
 };
-use crate::utils::{ApiError, Shared};
+use crate::utils::{ApiError, Shared, bounder};
 use crate::{
     bad, can_create_all, can_modify, deserialize, disjoint, for_groups, not_found, serialize,
     unauthorized, update_opt,
@@ -198,8 +198,8 @@ impl Sample {
                 if data_field.content_type().is_none() {
                     return bad!("A content type must be set for the data form entry!".to_owned());
                 }
-                // try to get the name for this file
-                file_opt = data_field.file_name().map(|name| name.to_owned());
+                // make sure our file name does not cannot contain bad paths
+                file_opt = bounder::multipart_path(&data_field, "File name", false)?;
                 // cart and stream this file into s3
                 let hashes = shared
                     .s3
@@ -212,13 +212,13 @@ impl Sample {
         }
         // return an error if we didn't get any data to hash
         let Some(hashes) = hashes_opt else {
-            return bad!(format!("Data entry must be set!"));
+            return bad!("Data entry must be set!".to_string());
         };
         // make sure we actually have groups
         if form.groups.is_empty() {
-            return bad!(format!(
-                "No groups provided! Sample must be uploaded to at least one group."
-            ));
+            return bad!(
+                "No groups provided! Sample must be uploaded to at least one group.".to_string()
+            );
         }
         // make sure we actually have access to all requested groups
         let _ = Group::authorize_check_allow_all(
@@ -230,6 +230,7 @@ impl Sample {
             shared,
         )
         .await?;
+        // validate this file name does not have any
         // set our file name if one was found
         form.file_name = file_opt;
         // determine if this file already exists in s3

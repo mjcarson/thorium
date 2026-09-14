@@ -146,14 +146,19 @@ pub fn file_name(input: &str, name: &'static str, min: usize, max: usize) -> Res
 ///
 /// * `field` - The field to get the file name from
 /// * `name` - The name fo the field to use in error messages
-pub fn multipart_path(field: &Field<'_>, name: &str) -> Result<String, ApiError> {
+/// * `allow_absolute` - Whether to allow absolute paths or not
+pub fn multipart_path(
+    field: &Field<'_>,
+    name: &str,
+    allow_absolute: bool,
+) -> Result<Option<String>, ApiError> {
     // try to get the name for this file
     match field.file_name() {
         Some(file_name) => {
             // convert our file name to a path to validate it
             let path = PathBuf::from_str(file_name)?;
             // validate this file name is not an absolute path
-            if path.is_absolute() {
+            if !allow_absolute && path.is_absolute() {
                 return bad!(format!("{name} paths cannot be an absolute: {path:?}"));
             }
             // make sure this path not contain a component with just '.'s
@@ -173,10 +178,10 @@ pub fn multipart_path(field: &Field<'_>, name: &str) -> Result<String, ApiError>
                 }
             }
             // return our validated file name
-            Ok(file_name.to_owned())
+            Ok(Some(file_name.to_owned()))
         }
-        // use a uuid as file name since we don't have one
-        None => Ok(Uuid::new_v4().to_string()),
+        // we don't have a filename to validate/return
+        None => Ok(None),
     }
 }
 

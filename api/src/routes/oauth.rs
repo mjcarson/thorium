@@ -159,7 +159,7 @@ async fn register(
 /// * `provider` - The name of the provider to link against
 /// * `state` - Shared Thorium objects
 #[utoipa::path(
-    get,
+    post,
     path = "/api/oauth/{provider}/link",
     params(
         ("params" = OAuthLinkParams, description = "Query params for linking an existing user to a new OAuth alias"),
