@@ -2339,6 +2339,7 @@ fn default_namespace_blacklist() -> HashSet<String> {
         "elastic-system".to_string(),
         "jaeger".to_string(),
         "quickwit".to_string(),
+        "kube-system".to_string(),
     ]
     .into_iter()
     .collect()

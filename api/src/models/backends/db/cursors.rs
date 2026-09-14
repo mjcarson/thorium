@@ -3080,6 +3080,12 @@ impl ElasticCursor {
     /// * `shared` - Shared Thorium objects
     #[instrument(name = "ElasticCursor::next", skip_all, fields(query = self.retain.query), err(Debug))]
     pub async fn next(&mut self, shared: &Shared) -> Result<(), ApiError> {
+        // if we have no groups then short circuit and do nothing
+        if self.retain.groups.is_empty() {
+            // log that this user has no groups
+            event!(Level::WARN, msg = "User has no groups");
+            return Ok(());
+        }
         // build the group filters
         let group_filters = self
             .retain

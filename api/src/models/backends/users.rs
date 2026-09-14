@@ -20,8 +20,8 @@ use std::str;
 use tracing::{Level, Span, event, instrument};
 
 use super::db;
-use crate::models::backends::GraphicSupport;
 use crate::conf::Ldap;
+use crate::models::backends::GraphicSupport;
 use crate::models::{
     AiEndpoint, AiEndpointUpdate, AiSettings, AiSettingsUpdate, AuthResponse, AuthedUser, Group,
     ImageScaler, Key, ScopedToken, ScopedTokenRequest, ScopedTokenRole, ScopedTokenUpdate,
@@ -302,6 +302,15 @@ async fn password_auth(username: &str, password: &str, shared: &Shared) -> Resul
         user = &possible.username,
         msg = "Attempting authentication",
     );
+    // reject any empty passwords
+    if password.is_empty() {
+        // log an event that this user is trying to authenticate with an empty password
+        event!(
+            Level::WARN,
+            msg = "Trying to authenticate with empty password"
+        );
+        return unauthorized!();
+    }
     // try to authenticate against redis or ldap based on if a password is set
     if let Some(password_hash) = &possible.password {
         // a password is set use basic auth
@@ -666,7 +675,11 @@ impl User {
             return conflict!(format!("User {} already exists", req.username));
         }
         // only allow users with the secret key to create admins with this route
-        if req.role == UserRole::Admin || req.local {
+        if req.role == UserRole::Admin
+            || req.role == UserRole::Analyst
+            || req.local
+            || req.skip_verification
+        {
             // bounce users without the key
             if let Some(key) = key {
                 // return unauthorized for users with invalid keys
