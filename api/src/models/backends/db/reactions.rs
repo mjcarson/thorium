@@ -778,13 +778,13 @@ macro_rules! add_expire {
 /// * `dest` - The destination group status set this is being moved to
 /// * `shared` - Shared Thorium objects
 #[rustfmt::skip]
-fn build_expire<'a>(
+async fn build_expire<'a>(
     pipe: &'a mut redis::Pipeline,
     reaction: &Reaction,
     keys: &ReactionKeys,
     dest: &str,
     shared: &Shared,
-) -> &'a mut redis::Pipeline {
+) -> Result<(), ApiError> {
     // get time when we should expire things out of reaction status list
     let expiration =
         chrono::Utc::now() + chrono::Duration::seconds(shared.config.thorium.retention.data as i64);
@@ -830,7 +830,26 @@ fn build_expire<'a>(
         .cmd("expire").arg(&sub_reacts.created).arg(shared.config.thorium.retention.data)
         .cmd("expire").arg(&sub_reacts.started).arg(shared.config.thorium.retention.data)
         .cmd("expire").arg(&sub_reacts.completed).arg(shared.config.thorium.retention.data)
-        .cmd("expire").arg(&sub_reacts.failed).arg(shared.config.thorium.retention.data)
+        .cmd("expire").arg(&sub_reacts.failed).arg(shared.config.thorium.retention.data);
+    // crawl over the jobs for this reaction and expire all of their data
+    let mut cursor = 0;
+    loop {
+        // 200 jobs to expire at at time
+        let jobs = list_jobs(&reaction, cursor, 200, shared).await?;
+        // expire all the data for these jobs
+        for id in jobs.names.iter(){
+            let key = JobKeys::data(id, shared);
+            pipe.cmd("expire").arg(key).arg(shared.config.thorium.retention.data);
+        }
+        // check if we have expired all jobs
+        if jobs.cursor.is_none() {
+            break;
+        }
+        // if we haven't expired all jobs then set new cursor
+        cursor = jobs.cursor.unwrap();
+    }
+    Ok(())
+
 }
 
 /// Completes a [`Reaction`]
@@ -860,7 +879,7 @@ pub async fn complete(
     // build key to pipeline reaction dest status set
     let dest = ReactionKeys::status(&reaction.group, &reaction.pipeline, &reaction.status, shared);
     // push in our expire orders
-    let pipe = build_expire(pipe, &reaction, &keys, &dest, shared);
+    build_expire(pipe, &reaction, &keys, &dest, shared).await?;
     // get the timestamp for this reactions sla
     let timestamp = reaction.sla.timestamp();
     // get our reaction id as a string
@@ -876,23 +895,6 @@ pub async fn complete(
             .arg(&reaction_id)
         .cmd("zadd").arg(ReactionKeys::group_set(&reaction.group, &reaction.status, shared))
             .arg(timestamp).arg(&reaction_id); 
-    // crawl over the jobs for this reaction and expire all of their data
-    let mut cursor = 0;
-    loop {
-        // 200 jobs to expire at at time
-        let jobs = list_jobs(&reaction, cursor, 200, shared).await?;
-        // expire all the data for these jobs
-        for id in jobs.names.iter(){
-            let key = JobKeys::data(id, shared);
-            pipe.cmd("expire").arg(key).arg(shared.config.thorium.retention.data);
-        }
-        // check if we have expired all jobs
-        if jobs.cursor.is_none() {
-            break;
-        }
-        // if we haven't expired all jobs then set new cursor
-        cursor = jobs.cursor.unwrap();
-    }
     // handle parent reaction incrementing if we have a parent
     incr_parent(&reaction, pipe, shared);
     // try to delete any ephemeral files
@@ -1129,7 +1131,7 @@ pub async fn fail(
     // start build redis pipeline for failing this reaction
     let mut pipe = redis::pipe();
     // add expire commands for this failed reaction 
-    let pipe = build_expire(&mut pipe, &reaction, &keys, &dest, shared);
+    build_expire(&mut pipe, &reaction, &keys, &dest, shared).await?;
     // get our reaction id as a string
     let reaction_id = reaction.id.to_string();
     // get the timestamp for this reactions sla
@@ -1149,9 +1151,9 @@ pub async fn fail(
         StatusRequest::from_reaction(&reaction, ReactionActions::Failed),
         None,
     );
-    super::logs::build(pipe, &[update_cast], shared)?;
+    super::logs::build(&mut pipe, &[update_cast], shared)?;
     // handle parent reaction incrementing if we have a parent
-    incr_parent(&reaction, pipe, shared);
+    incr_parent(&reaction, &mut pipe, shared);
     // execute redis pipeline
     let progress: Vec<u64> = pipe.atomic().query_async(conn!(shared)).await?;
     // proceed with our parent reactions

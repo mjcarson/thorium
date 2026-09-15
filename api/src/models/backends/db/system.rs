@@ -2,17 +2,17 @@ use bb8_redis::redis::cmd;
 use chrono::prelude::*;
 use futures::stream::{self, StreamExt};
 use std::collections::{HashMap, HashSet};
-use tracing::{event, instrument, Level};
+use tracing::{Level, event, instrument};
 use uuid::Uuid;
 
 use super::keys::{self, StreamKeys, SystemKeys, UserKeys};
-use super::{helpers, SimpleScyllaCursor};
+use super::{SimpleScyllaCursor, helpers};
 use crate::models::system::{
-    WorkerStatus, BARE_METAL_CACHE_KEY, DEFAULT_IFF, EXTERNAL_CACHE_KEY, K8S_CACHE_KEY,
-    KVM_CACHE_KEY, WINDOWS_CACHE_KEY,
+    BARE_METAL_CACHE_KEY, DEFAULT_IFF, EXTERNAL_CACHE_KEY, K8S_CACHE_KEY, KVM_CACHE_KEY,
+    WINDOWS_CACHE_KEY, WorkerStatus,
 };
 use crate::models::{
-    ApiCursor, GroupStats, ImageScaler, Node, NodeGetParams, NodeHealth, NodeListLine,
+    ActiveJob, ApiCursor, GroupStats, ImageScaler, Node, NodeGetParams, NodeHealth, NodeListLine,
     NodeListParams, NodeRegistration, NodeRow, NodeUpdate, ScalerStats, SystemInfo, SystemSettings,
     SystemStats, User, Worker, WorkerDeleteMap, WorkerRegistrationList, WorkerUpdate,
 };
@@ -725,13 +725,14 @@ pub async fn update_worker_job(
     let heart_beat = Utc::now();
     // get a redis pipeline
     let mut pipe = redis::pipe();
+    // build the active job object for this worker
+    let active = ActiveJob{ reaction: *reaction, job: *job};
     // set this pipeline to be atomic
     pipe.atomic();
     // update this workers status
     let _: () = pipe.cmd("hset").arg(&data).arg("status").arg(serialize!(&WorkerStatus::Running))
         .cmd("hset").arg(&data).arg("heart_beat").arg(serialize!(&heart_beat))
-        .cmd("hset").arg(&data).arg("reaction").arg(reaction.to_string())
-        .cmd("hset").arg(&data).arg("job").arg(job.to_string())
+        .cmd("hset").arg(&data).arg("active").arg(serialize!(&active))
         .query_async(conn!(shared)).await?;
     Ok(())
 }
@@ -762,7 +763,7 @@ pub async fn can_delete_workers(
             // add each worker in this chunk to our redis pipeline
             for worker in chunk {
                 // get the key for this workers data
-                let data = keys::system::worker_data(&worker, shared);
+                let data = keys::system::worker_data(worker, shared);
                 // get this workers owner
                 pipe.cmd("hget").arg(data).arg("user");
             }

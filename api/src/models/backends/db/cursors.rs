@@ -627,6 +627,8 @@ where
     pub mapped: usize,
     /// whether this cursor has been exhausted or not
     pub buckets_exhausted: bool,
+    /// Whether this is a new cursor or it already existed and is being continued
+    pub new: bool,
 }
 
 /// lowercase our tags if needed
@@ -765,6 +767,7 @@ where
                 sorted: BTreeMap::default(),
                 mapped: 0,
                 buckets_exhausted: false,
+                new: true,
             };
             Ok(cursor)
         }
@@ -846,6 +849,7 @@ where
                 sorted: BTreeMap::default(),
                 mapped: 0,
                 buckets_exhausted: false,
+                new: true,
             };
             Ok(cursor)
         }
@@ -908,6 +912,7 @@ where
                     sorted: BTreeMap::default(),
                     mapped: 0,
                     buckets_exhausted: false,
+                    new: false,
                 };
                 Ok(cursor)
             }
@@ -1660,12 +1665,11 @@ where
         let data = serialize!(&self.retain);
         // build the key to save this cursor data too
         let key = cursors::data(CursorKind::Scylla, &self.id, shared);
+        // if this is a new cursor only hold onto it for 8 hours
+        // if its an existing cursor that is being paged then hold onto it for 7 days
+        let ttl = if self.new { 28_800 } else { 604_800 };
         // save this cursors data to redis
-        let _: () = query!(
-            cmd("set").arg(key).arg(data).arg("EX").arg(2_628_000),
-            shared
-        )
-        .await?;
+        let _: () = query!(cmd("set").arg(key).arg(data).arg("EX").arg(604_800), shared).await?;
         Ok(())
     }
 }
@@ -2129,6 +2133,8 @@ where
     pub in_redis: bool,
     /// The data this cursor has retrieved
     pub data: Vec<D>,
+    /// Whether this is a new cursor or it already existed and is being continued
+    pub new: bool,
 }
 
 impl<D> GroupedScyllaCursor<D>
@@ -2177,6 +2183,7 @@ where
                 limit: D::get_limit(&params)?,
                 in_redis: false,
                 data: Vec::default(),
+                new: true,
             };
             Ok(cursor)
         }
@@ -2221,6 +2228,7 @@ where
                 limit: D::get_limit(&params)?,
                 in_redis: false,
                 data: Vec::default(),
+                new: true,
             };
             Ok(cursor)
         }
@@ -2257,6 +2265,7 @@ where
                     limit: D::get_limit(&params)?,
                     in_redis: true,
                     data: Vec::default(),
+                    new: false,
                 };
                 Ok(cursor)
             }
@@ -2536,12 +2545,11 @@ where
             let data = serialize!(&self.retain);
             // build the key to save this cursor data too
             let key = cursors::data(CursorKind::GroupedScylla, &self.id, shared);
+            // if this is a new cursor only hold onto it for 8 hours
+            // if its an existing cursor that is being paged then hold onto it for 7 days
+            let ttl = if self.new { 28_800 } else { 604_800 };
             // save this cursors data to redis
-            let _: () = query!(
-                cmd("set").arg(key).arg(data).arg("EX").arg(2_628_000),
-                shared
-            )
-            .await?;
+            let _: () = query!(cmd("set").arg(key).arg(data).arg("EX").arg(ttl), shared).await?;
         }
         Ok(())
     }
@@ -2834,6 +2842,8 @@ pub struct ScyllaTagCountCursor<D: TagCountCursorSupport + Send> {
     pub retain: TagCountCursorRetain,
     /// The cursor backing our counts
     backing: ScyllaCursor<D>,
+    /// Whether this is a new cursor or it already existed and is being continued
+    pub new: bool,
 }
 
 impl<D: TagCountCursorSupport + Send> ScyllaTagCountCursor<D> {
@@ -2851,7 +2861,7 @@ impl<D: TagCountCursorSupport + Send> ScyllaTagCountCursor<D> {
         shared: &Shared,
     ) -> Result<Self, ApiError> {
         // get our cursor id if we have one
-        let (id, retain) = match <D as CursorCore>::get_id(&params) {
+        let (id, retain, new) = match <D as CursorCore>::get_id(&params) {
             Some(id) => {
                 // build the key to our cursor data in redis
                 let key = cursors::data(CursorKind::TagsCount, &id, shared);
@@ -2860,12 +2870,16 @@ impl<D: TagCountCursorSupport + Send> ScyllaTagCountCursor<D> {
                 // if we didn't get any data then return a 404
                 match data {
                     // deserialize our cursor data
-                    Some(data) => (id, deserialize!(&data)),
+                    Some(data) => (id, deserialize!(&data), false),
                     // this cursor data is missing so return an error
                     None => return not_found!(format!("Cursor {id} not found!")),
                 }
             }
-            None => (Uuid::new_v4(), TagCountCursorRetain::with_capacity(1000)),
+            None => (
+                Uuid::new_v4(),
+                TagCountCursorRetain::with_capacity(1000),
+                true,
+            ),
         };
         // get our backing cursor
         let mut backing = D::backing_cursor(params, extra, shared).await?;
@@ -2876,6 +2890,7 @@ impl<D: TagCountCursorSupport + Send> ScyllaTagCountCursor<D> {
             id,
             retain,
             backing,
+            new,
         };
         Ok(internal)
     }
@@ -2915,9 +2930,12 @@ impl<D: TagCountCursorSupport + Send> ScyllaTagCountCursor<D> {
         let serialized = serialize!(&self.retain);
         // build the key to save this cursor data too
         let key = cursors::data(CursorKind::TagsCount, &self.id, shared);
+        // if this is a new cursor only hold onto it for 8 hours
+        // if its an existing cursor that is being paged then hold onto it for 7 days
+        let ttl = if self.new { 28_800 } else { 604_800 };
         // save this cursors data to redis
         let _: () = query!(
-            cmd("set").arg(key).arg(serialized).arg("EX").arg(2_628_000),
+            cmd("set").arg(key).arg(serialized).arg("EX").arg(ttl),
             shared
         )
         .await?;
@@ -2980,6 +2998,8 @@ pub struct ElasticCursor {
     pub limit: i64,
     /// The data this cursor has retrieved
     pub data: Vec<ElasticDoc>,
+    /// Whether this is a new cursor or it already existed and is being continued
+    pub new: bool,
 }
 
 impl ElasticCursor {
@@ -3034,6 +3054,7 @@ impl ElasticCursor {
             retain,
             limit: i64::from(params.limit),
             data: Vec::default(),
+            new: true,
         };
         Ok(cursor)
     }
@@ -3066,6 +3087,7 @@ impl ElasticCursor {
                     retain,
                     limit: params.limit.into(),
                     data: Vec::default(),
+                    new: false,
                 };
                 Ok(cursor)
             }
@@ -3193,12 +3215,11 @@ impl ElasticCursor {
         let data = serialize!(&self.retain);
         // build the key to save this cursor data too
         let key = cursors::data(CursorKind::Elastic, &self.id, shared);
+        // if this is a new cursor only hold onto it for 8 hours
+        // if its an existing cursor that is being paged then hold onto it for 7 days
+        let ttl = if self.new { 28_800 } else { 604_800 };
         // save this cursors data to redis
-        let _: () = query!(
-            cmd("set").arg(key).arg(data).arg("EX").arg(2_628_000),
-            shared
-        )
-        .await?;
+        let _: () = query!(cmd("set").arg(key).arg(data).arg("EX").arg(ttl), shared).await?;
         Ok(())
     }
 }
@@ -3387,6 +3408,8 @@ where
     pub limit: usize,
     /// Whether this cursor has been saved to redis before
     in_redis: bool,
+    /// Whether this is a new cursor or it already existed and is being continued
+    pub new: bool,
 }
 
 impl<D: RedisCursorSupport> RedisCursor<D> {
@@ -3413,6 +3436,7 @@ impl<D: RedisCursorSupport> RedisCursor<D> {
                     params,
                     limit,
                     in_redis: false,
+                    new: true,
                 };
                 Ok(cursor)
             }
@@ -3448,6 +3472,7 @@ impl<D: RedisCursorSupport> RedisCursor<D> {
                     limit: D::get_limit(&params),
                     params,
                     in_redis: true,
+                    new: false,
                 };
                 Ok(cursor)
             }
@@ -3571,12 +3596,11 @@ impl<D: RedisCursorSupport> RedisCursor<D> {
         } else {
             // serialize our retained data
             let data = serialize!(&self.retain);
+            // if this is a new cursor only hold onto it for 8 hours
+            // if its an existing cursor that is being paged then hold onto it for 7 days
+            let ttl = if self.new { 28_800 } else { 604_800 };
             // save this cursors data to redis
-            let _: () = query!(
-                cmd("set").arg(key).arg(data).arg("EX").arg(2_628_000),
-                shared
-            )
-            .await?;
+            let _: () = query!(cmd("set").arg(key).arg(data).arg("EX").arg(ttl), shared).await?;
         }
         Ok(())
     }
